@@ -1,0 +1,14 @@
+[package]
+name = "nexum-table"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Nexum table engine: typed tables over the authoritative storage engine, with derived indexes."
+
+[dependencies]
+nexum-core.workspace = true
+nexum-storage.workspace = true
+
+[lints]
+workspace = true

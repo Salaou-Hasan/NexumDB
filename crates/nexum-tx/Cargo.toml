@@ -1,0 +1,15 @@
+[package]
+name = "nexum-tx"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Nexum transaction engine: read/write sets, OCC validation, commit and abort."
+
+[dependencies]
+nexum-core.workspace = true
+nexum-storage.workspace = true
+nexum-table.workspace = true
+
+[lints]
+workspace = true

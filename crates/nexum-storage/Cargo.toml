@@ -1,0 +1,13 @@
+[package]
+name = "nexum-storage"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Nexum storage engine: in-memory table state, WAL, snapshots, recovery."
+
+[dependencies]
+nexum-core.workspace = true
+
+[lints]
+workspace = true

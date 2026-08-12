@@ -1,0 +1,25 @@
+[package]
+name = "nexum-wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Nexum WASM reducer runtime: sandboxed execution of untrusted reducer modules."
+
+[dependencies]
+nexum-core.workspace = true
+nexum-table.workspace = true
+nexum-tx.workspace = true
+nexum-reducer.workspace = true
+wasmi = "0.38"
+
+[dev-dependencies]
+nexum-core.workspace = true
+nexum-reducer.workspace = true
+nexum-table.workspace = true
+nexum-tx.workspace = true
+nexum-wal.workspace = true
+wat = "1.256"
+
+[lints]
+workspace = true

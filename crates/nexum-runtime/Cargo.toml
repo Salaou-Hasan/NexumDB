@@ -1,0 +1,30 @@
+[package]
+name = "nexum-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Nexum runtime: the single-process coordinator of worlds, workers, ticks, durability, and observation (Phase 10)."
+
+[dependencies]
+nexum-core.workspace = true
+nexum-storage.workspace = true
+nexum-table.workspace = true
+nexum-wal.workspace = true
+nexum-subscription.workspace = true
+nexum-simulation.workspace = true
+nexum-reducer.workspace = true
+
+[dev-dependencies]
+nexum-core.workspace = true
+nexum-reducer.workspace = true
+nexum-table.workspace = true
+nexum-tx.workspace = true
+nexum-wal.workspace = true
+nexum-subscription.workspace = true
+nexum-simulation.workspace = true
+nexum-wasm.workspace = true
+wat = "1.256"
+
+[lints]
+workspace = true

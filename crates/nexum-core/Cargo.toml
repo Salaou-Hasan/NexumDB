@@ -1,0 +1,12 @@
+[package]
+name = "nexum-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Nexum core: ids, versions, timestamps, errors, and the foundational state interfaces."
+
+[dependencies]
+
+[lints]
+workspace = true

@@ -1,0 +1,18 @@
+[package]
+name = "nexum-wal"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Nexum durability: write-ahead log, snapshots, and recovery (Phase 5)."
+
+[dependencies]
+nexum-core.workspace = true
+nexum-storage.workspace = true
+nexum-table.workspace = true
+
+[dev-dependencies]
+nexum-tx.workspace = true
+
+[lints]
+workspace = true

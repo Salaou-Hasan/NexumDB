@@ -1,0 +1,25 @@
+[package]
+name = "nexum-sdk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Nexum client SDK (Phase 13): the poll-driven client adapter around the canonical realtime protocol."
+
+[dependencies]
+nexum-core.workspace = true
+nexum-storage.workspace = true
+nexum-reducer.workspace = true
+nexum-subscription.workspace = true
+nexum-simulation.workspace = true
+nexum-network.workspace = true
+
+[dev-dependencies]
+nexum-table.workspace = true
+nexum-wal.workspace = true
+nexum-runtime.workspace = true
+nexum-wasm.workspace = true
+wat = "1.256"
+
+[lints]
+workspace = true

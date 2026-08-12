@@ -1,0 +1,19 @@
+[package]
+name = "nexum-reducer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Nexum reducer runtime: reducer API, host functions, WASM sandbox and limits."
+
+[dependencies]
+nexum-core.workspace = true
+nexum-storage.workspace = true
+nexum-table.workspace = true
+nexum-tx.workspace = true
+
+[dev-dependencies]
+nexum-wal.workspace = true
+
+[lints]
+workspace = true

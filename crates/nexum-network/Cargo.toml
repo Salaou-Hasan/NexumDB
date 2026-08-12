@@ -1,0 +1,28 @@
+[package]
+name = "nexum-network"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Nexum networking: the realtime protocol and control-plane adapter around the runtime (Phase 11)."
+
+[dependencies]
+nexum-core.workspace = true
+nexum-storage.workspace = true
+nexum-table.workspace = true
+nexum-reducer.workspace = true
+nexum-subscription.workspace = true
+nexum-simulation.workspace = true
+nexum-runtime.workspace = true
+
+[dev-dependencies]
+nexum-core.workspace = true
+nexum-storage.workspace = true
+nexum-table.workspace = true
+nexum-wal.workspace = true
+nexum-subscription.workspace = true
+nexum-simulation.workspace = true
+nexum-runtime.workspace = true
+
+[lints]
+workspace = true

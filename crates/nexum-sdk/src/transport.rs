@@ -1,0 +1,131 @@
+//! The transport abstraction ([`ClientTransport`], ADR-013 D4).
+//!
+//! The SDK depends only on the bounded, non-blocking
+//! [`Connection`](nexum_network::transport::Connection) trait from the
+//! network crate, so transports can be swapped without touching SDK
+//! semantics. Two constructors ship:
+//!
+//! - [`ClientTransport::memory_pair`] — an in-process deterministic link
+//!   used by tests and benchmarks (the server end is registered with the
+//!   gateway).
+//! - [`ClientTransport::tcp_connect`] — the dependency-free nonblocking TCP
+//!   transport.
+//!
+//! No QUIC/WebSocket/TLS transports yet (later phases); the abstraction is
+//! ready for them.
+
+use std::net::ToSocketAddrs;
+
+use nexum_network::transport::{
+    Connection, MemoryConnection, MemoryTransport, TcpConnection, TransportError,
+};
+
+use crate::error::SdkError;
+
+/// A client-side transport: a bounded, non-blocking frame queue.
+///
+/// Both directions are bounded by the underlying transport; a full outbound
+/// queue returns [`SdkError::TransportFull`] (never blocks, never grows
+/// without limit).
+pub struct ClientTransport {
+    inner: Box<dyn Connection>,
+    closed: bool,
+}
+
+impl std::fmt::Debug for ClientTransport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClientTransport")
+            .field("peer", &self.peer())
+            .field("closed", &self.closed)
+            .finish()
+    }
+}
+
+impl ClientTransport {
+    /// Wraps any `Connection` as a client transport.
+    pub fn new(inner: Box<dyn Connection>) -> Self {
+        Self {
+            inner,
+            closed: false,
+        }
+    }
+
+    /// Opens an in-process client/server pair. The first value is the
+    /// **client-side** transport (drive the [`Client`](crate::Client) with
+    /// it); the second is the server-side end to register with the gateway.
+    /// `inbound_cap` bounds client→server frames, `outbound_cap` bounds
+    /// server→client frames.
+    pub fn memory_pair(inbound_cap: usize, outbound_cap: usize) -> (Self, MemoryConnection) {
+        let (server, client) = MemoryTransport::connect(inbound_cap, outbound_cap);
+        (Self::new(Box::new(client)), server)
+    }
+
+    /// Connects to a TCP endpoint (blocking connect, then nonblocking I/O).
+    /// `outbound_cap` bounds the client→server queue; `max_payload` bounds
+    /// the frame size enforced at this transport.
+    pub fn tcp_connect(
+        addr: impl ToSocketAddrs,
+        outbound_cap: usize,
+        max_payload: u32,
+    ) -> Result<Self, SdkError> {
+        let connection = TcpConnection::connect(addr, outbound_cap, max_payload)
+            .map_err(|error| SdkError::Internal(error.to_string()))?;
+        Ok(Self::new(Box::new(connection)))
+    }
+
+    /// Returns the peer label.
+    pub fn peer(&self) -> &str {
+        self.inner.peer()
+    }
+
+    /// Returns the next buffered inbound frame, or `None` when none is
+    /// ready. `Err(SdkError::TransportClosed)` means the link is gone.
+    pub fn recv_frame(&mut self) -> Result<Option<Vec<u8>>, SdkError> {
+        if self.closed {
+            return Ok(None);
+        }
+        match self.inner.try_recv_frame() {
+            Ok(Some(frame)) => Ok(Some(frame)),
+            Ok(None) => Ok(None),
+            Err(TransportError::Closed) => {
+                self.closed = true;
+                Err(SdkError::TransportClosed)
+            }
+            Err(error) => Err(SdkError::Transport(error)),
+        }
+    }
+
+    /// Buffers one outbound frame. Returns `SdkError::TransportFull` when
+    /// the bounded queue is at capacity.
+    pub fn send_frame(&mut self, frame: Vec<u8>) -> Result<(), SdkError> {
+        if self.closed {
+            return Err(SdkError::TransportClosed);
+        }
+        match self.inner.try_send_frame(frame) {
+            Ok(()) => Ok(()),
+            Err(TransportError::Full) => Err(SdkError::TransportFull),
+            Err(TransportError::Closed) => {
+                self.closed = true;
+                Err(SdkError::TransportClosed)
+            }
+            Err(error) => Err(SdkError::Transport(error)),
+        }
+    }
+
+    /// Closes the transport (idempotent).
+    pub fn close(&mut self) {
+        self.closed = true;
+        self.inner.close();
+    }
+
+    /// Returns `true` once the transport has closed.
+    pub fn is_closed(&self) -> bool {
+        self.closed
+    }
+
+    /// Consumes the transport, returning the underlying `Connection` (e.g.
+    /// to hand it to [`Client::connect`](crate::Client::connect)).
+    pub fn into_inner(self) -> Box<dyn Connection> {
+        self.inner
+    }
+}

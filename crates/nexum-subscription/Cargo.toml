@@ -1,0 +1,24 @@
+[package]
+name = "nexum-subscription"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Nexum subscription engine: registry, query compilation, matching, deltas, delivery."
+
+[dependencies]
+nexum-core.workspace = true
+nexum-table.workspace = true
+nexum-storage.workspace = true
+
+[dev-dependencies]
+nexum-core.workspace = true
+nexum-reducer.workspace = true
+nexum-table.workspace = true
+nexum-tx.workspace = true
+nexum-wal.workspace = true
+nexum-wasm.workspace = true
+wat = "1.256"
+
+[lints]
+workspace = true

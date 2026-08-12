@@ -1,0 +1,13 @@
+[package]
+name = "nexum-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Nexum server binary: wires the runtime, reducers, subscriptions, and networking together."
+
+[dependencies]
+nexum-core.workspace = true
+
+[lints]
+workspace = true

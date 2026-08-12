@@ -1,0 +1,41 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/nexum-core",
+    "crates/nexum-table",
+    "crates/nexum-tx",
+    "crates/nexum-storage",
+    "crates/nexum-wal",
+    "crates/nexum-reducer",
+    "crates/nexum-wasm",
+    "crates/nexum-subscription",
+    "crates/nexum-simulation",
+    "crates/nexum-runtime",
+    "crates/nexum-network",
+    "crates/nexum-sdk",
+    "crates/nexum-server",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/Salaou-Hasan/NexumDB"
+description = "Nexum: an authoritative state engine for realtime multiplayer and simulation backends."
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.dependencies]
+nexum-core = { path = "crates/nexum-core", version = "0.1.0" }
+nexum-storage = { path = "crates/nexum-storage", version = "0.1.0" }
+nexum-table = { path = "crates/nexum-table", version = "0.1.0" }
+nexum-tx = { path = "crates/nexum-tx", version = "0.1.0" }
+nexum-wal = { path = "crates/nexum-wal", version = "0.1.0" }
+nexum-reducer = { path = "crates/nexum-reducer", version = "0.1.0" }
+nexum-wasm = { path = "crates/nexum-wasm", version = "0.1.0" }
+nexum-subscription = { path = "crates/nexum-subscription", version = "0.1.0" }
+nexum-simulation = { path = "crates/nexum-simulation", version = "0.1.0" }
+nexum-runtime = { path = "crates/nexum-runtime", version = "0.1.0" }
+nexum-network = { path = "crates/nexum-network", version = "0.1.0" }
+nexum-sdk = { path = "crates/nexum-sdk", version = "0.1.0" }
