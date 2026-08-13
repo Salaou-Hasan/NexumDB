@@ -27,9 +27,16 @@ use crate::config::{NetworkConfig, NetworkEvent, OutboundOverflowPolicy};
 use crate::control::ControlPlane;
 use crate::error::NetworkError;
 use crate::metrics::NetworkMetrics;
+use crate::policy::{AllowAllPolicy, GamePolicy};
 use crate::protocol::{self, ClientMessage, DeltaKind, PROTOCOL_VERSION, ServerMessage};
 use crate::session::Session;
 use crate::transport::{Connection, TransportError};
+
+/// The top bit of a reducer-call request id is reserved for
+/// server-originated calls (ADR-014 D3). Client-supplied request ids with
+/// this bit set are rejected, so `GameServer::invoke_reducer` can never
+/// collide with a client's pending call on the same world.
+pub const SERVER_REQUEST_MSB: u64 = 1 << 63;
 
 /// One registered connection and its operational state.
 pub(crate) struct ConnectionEntry {
@@ -96,6 +103,9 @@ pub struct NetworkGateway {
     runtime: Runtime,
     config: NetworkConfig,
     authenticator: Arc<dyn Authenticator>,
+    /// Authorization hook (ADR-014 D2). Defaults to [`AllowAllPolicy`]
+    /// (Phase 13 semantics); a host may install a game-aware policy.
+    policy: Box<dyn GamePolicy>,
     server_name: String,
     connections: BTreeMap<ConnectionId, ConnectionEntry>,
     next_connection: u64,
@@ -127,6 +137,7 @@ impl NetworkGateway {
             runtime,
             config,
             authenticator,
+            policy: Box::new(AllowAllPolicy),
             server_name: "nexum".to_string(),
             connections: BTreeMap::new(),
             next_connection: 0,
@@ -166,6 +177,13 @@ impl NetworkGateway {
     /// Returns a typed control-plane handle over the runtime (ADR-011 D7).
     pub fn control(&mut self) -> ControlPlane<'_> {
         ControlPlane::new(&mut self.runtime)
+    }
+
+    /// Installs the authorization policy consulted before executing client
+    /// attach / input / reducer operations (ADR-014 D2). Replaces the
+    /// default [`AllowAllPolicy`].
+    pub fn set_policy(&mut self, policy: Box<dyn GamePolicy>) {
+        self.policy = policy;
     }
 
     // --------------------------------------------------------- connections
@@ -392,6 +410,18 @@ impl NetworkGateway {
                     );
                     return;
                 }
+                if !self.policy.authorize_attach(session.principal(), world) {
+                    self.metrics.policy_rejections += 1;
+                    let _ = self.send(
+                        connection,
+                        &ServerMessage::AttachResult {
+                            ok: false,
+                            world: None,
+                            error: Some("not authorized to attach to this world".to_string()),
+                        },
+                    );
+                    return;
+                }
                 session.attach(world);
                 Self::push_event(
                     &mut self.events,
@@ -514,6 +544,14 @@ impl NetworkGateway {
         reducer: String,
         args: ReducerArgs,
     ) {
+        // The top bit of a request id is reserved for server-originated
+        // calls (ADR-014 D3): a client claiming it would make correlation
+        // ambiguous with `GameServer::invoke_reducer`, so it is rejected.
+        if request_id & SERVER_REQUEST_MSB != 0 {
+            let _ = self.send_reducer_error(connection, request_id, "request id reserved for server use");
+            self.metrics.reducer_calls_rejected += 1;
+            return;
+        }
         let Some(session) = self
             .connections
             .get(&connection)
@@ -552,6 +590,12 @@ impl NetworkGateway {
         if self.pending_calls.contains_key(&(world, request_id)) {
             let _ = self.send_reducer_error(connection, request_id, "request id already pending");
             self.metrics.reducer_calls_rejected += 1;
+            return;
+        }
+        if !self.policy.authorize_reducer(session.principal(), world, &reducer) {
+            self.metrics.policy_rejections += 1;
+            self.metrics.reducer_calls_rejected += 1;
+            let _ = self.send_reducer_error(connection, request_id, "not authorized by game policy");
             return;
         }
         match self.runtime.submit_reducer_call(world, request_id, reducer, args) {
@@ -630,7 +674,13 @@ impl NetworkGateway {
                 };
             stamped.push(command);
         }
-    match self.runtime.submit_input(world, stamped) {
+        if !self.policy.authorize_input(session.principal(), world, &stamped) {
+            self.metrics.policy_rejections += 1;
+            self.metrics.inputs_rejected += 1;
+            let _ = self.send_error(connection, 18, "not authorized by game policy");
+            return;
+        }
+        match self.runtime.submit_input(world, stamped) {
         Ok(()) => self.metrics.inputs_accepted += 1,
         Err(error) => {
             self.metrics.inputs_rejected += 1;
@@ -737,8 +787,23 @@ impl NetworkGateway {
     /// never hang.
     pub fn step_worlds(&mut self) -> Result<StepReport, NetworkError> {
         let results = self.runtime.step_detailed()?;
+        let report = self.fan_out_results(&results);
+        let _ = self.flush_outbound();
+        Ok(report)
+    }
+
+    /// Fans the results of one `step_detailed` pass out to clients: per
+    /// successful world, a `TickUpdate` broadcast to every attached session,
+    /// subscription drains, and reducer-call result routing; then answers
+    /// pending calls whose world can no longer produce a result. Deterministic
+    /// (connections ascending, subscriptions ascending, call order). This is
+    /// the fan-out half of [`step_worlds`](Self::step_worlds); composition
+    /// layers (like the game server, ADR-014) call it directly after their
+    /// own `step_detailed` so they can observe the committed results too.
+    pub fn fan_out_results(&mut self, results: &[(WorldId, nexum_simulation::TickResult)]) -> StepReport {
         let mut report = StepReport::default();
         for (world, result) in results {
+            let world = *world;
             report.worlds += 1;
             let message = ServerMessage::TickUpdate {
                 world,
@@ -850,8 +915,7 @@ impl NetworkGateway {
                 self.metrics.reducer_results_sent += 1;
             }
         }
-        let _ = self.flush_outbound();
-        Ok(report)
+        report
     }
 
     /// Drains every network subscription (used after subscribe/resync when

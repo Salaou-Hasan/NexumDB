@@ -130,6 +130,17 @@ define_id! {
     SessionId
 }
 
+define_id! {
+    /// Identifies a game instance (one authoritative running game, ADR-014).
+    GameInstanceId
+}
+
+define_id! {
+    /// Identifies a player (a stable, server-derived identity equal to the
+    /// authenticated principal id, ADR-014 D3).
+    PlayerId
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -155,6 +166,8 @@ mod tests {
         assert_id(TickId::from_u64(17), 17);
         assert_id(ConnectionId::from_u64(9), 9);
         assert_id(SessionId::from_u64(11), 11);
+        assert_id(GameInstanceId::from_u64(5), 5);
+        assert_id(PlayerId::from_u64(6), 6);
     }
 
     #[test]

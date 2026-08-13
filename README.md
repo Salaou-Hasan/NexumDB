@@ -41,7 +41,7 @@ The build follows a strict order: correctness first, distribution last.
 | 11 | Concurrency & parallel tick execution | ✅ Done |
 | 12 | Multi-partition simulation (deterministic message bus) | ✅ Done |
 | 13 | Networking + client SDKs (realtime gateway, reducer calls, `nexum-sdk`) | ✅ Done |
-| 14 | Game server layer | ⬜ |
+| 14 | Game server layer (games, players, exposure, command routing) | ✅ Done |
 | 15 | Performance & benchmarking | ⬜ |
 | 16 | Production hardening & release | ⬜ |
 
@@ -61,6 +61,7 @@ crates/
 ├── nexum-runtime/      # Runtime + partitions (Phases 10/12): world lifecycle, ownership, input routing, WAL+subscription coordination, recovery, the partition registry and deterministic message bus
 ├── nexum-network/      # Realtime networking + control plane (Phase 13): versioned binary protocol, sessions/auth, gateway, transports, reducer-call routing, typed operator API (originally implemented ahead of the roadmap; now the canonical Phase 13 foundation)
 ├── nexum-sdk/          # Client SDK (Phase 13): poll-driven `Client`, canonical protocol codec, sessions, correlated reducer calls, derived subscription views, reconnect/resync
+├── nexum-game-server/  # Game server layer (Phase 14): game instances, players, join/leave/reconnect, deny-by-default reducer exposure, per-world command buffering, failure observation — orchestration metadata only; gameplay state stays in the simulation
 └── nexum-server/       # Server binary
 tests/                  # Workspace-level test harnesses (organized by area)
 benchmarks/             # Benchmark harnesses

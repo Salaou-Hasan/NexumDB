@@ -13,6 +13,7 @@ members = [
     "crates/nexum-runtime",
     "crates/nexum-network",
     "crates/nexum-sdk",
+    "crates/nexum-game-server",
     "crates/nexum-server",
 ]
 

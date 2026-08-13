@@ -31,8 +31,8 @@ pub mod value;
 
 pub use errors::{Error, Result};
 pub use ids::{
-    ColumnId, ConnectionId, PartitionId, ReducerId, RowId, SessionId, SubscriptionId, SystemId,
-    TableId, TickId, TransactionId, WorkerId, WorldId,
+    ColumnId, ConnectionId, GameInstanceId, PartitionId, PlayerId, ReducerId, RowId, SessionId,
+    SubscriptionId, SystemId, TableId, TickId, TransactionId, WorkerId, WorldId,
 };
 pub use row::Row;
 pub use schema::{ColumnDef, IndexDef, TableSchema};

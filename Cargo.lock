@@ -116,6 +116,23 @@ name = "nexum-core"
 version = "0.1.0"
 
 [[package]]
+name = "nexum-game-server"
+version = "0.1.0"
+dependencies = [
+ "nexum-core",
+ "nexum-network",
+ "nexum-reducer",
+ "nexum-runtime",
+ "nexum-sdk",
+ "nexum-simulation",
+ "nexum-subscription",
+ "nexum-table",
+ "nexum-wal",
+ "nexum-wasm",
+ "wat",
+]
+
+[[package]]
 name = "nexum-network"
 version = "0.1.0"
 dependencies = [

@@ -18,7 +18,8 @@ use nexum_reducer::{ReducerArgs, ReducerContext, ReducerDefinition};
 use crate::auth::{Principal, TokenAuthenticator};
 use crate::config::{NetworkConfig, OutboundOverflowPolicy};
 use crate::error::{NetworkError, ProtocolError};
-use crate::gateway::NetworkGateway;
+use crate::gateway::{NetworkGateway, SERVER_REQUEST_MSB};
+use crate::policy::GamePolicy;
 use crate::protocol::{self, ClientMessage, DeltaKind, ServerMessage, HEADER_LEN, PROTOCOL_MAGIC, PROTOCOL_VERSION};
 use crate::transport::{Connection, MemoryConnection, MemoryTransport};
 
@@ -1530,4 +1531,222 @@ fn metrics_count_connections_sessions_and_frames() {
     // response was already consumed by the handshake helper).
     let msg = recv_server(&mut client2, max);
     assert!(matches!(msg, ServerMessage::Pong { nonce: 1 }));
+}
+
+// ------------------------------------------------------- authorization policy
+
+/// A policy that denies every attach (ADR-014 D2 hook).
+#[derive(Debug, Clone, Copy)]
+struct DenyAttachPolicy;
+
+impl GamePolicy for DenyAttachPolicy {
+    fn authorize_attach(&self, _principal: &Principal, _world: WorldId) -> bool {
+        false
+    }
+}
+
+/// A policy that denies every input frame.
+#[derive(Debug, Clone, Copy)]
+struct DenyInputPolicy;
+
+impl GamePolicy for DenyInputPolicy {
+    fn authorize_input(&self, _principal: &Principal, _world: WorldId, _frame: &InputFrame) -> bool {
+        false
+    }
+}
+
+/// A policy that denies every reducer call.
+#[derive(Debug, Clone, Copy)]
+struct DenyReducerPolicy;
+
+impl GamePolicy for DenyReducerPolicy {
+    fn authorize_reducer(&self, _principal: &Principal, _world: WorldId, _reducer: &str) -> bool {
+        false
+    }
+}
+
+fn input_frame(tick: u64, kind: &str, payload: Option<Value>) -> InputFrame {
+    let mut frame = InputFrame::new(TickId::from_u64(tick));
+    frame
+        .push(InputCommand::new(1, kind, payload).unwrap());
+    frame
+}
+
+/// The default pass-through policy preserves the exact Phase 13 behavior.
+#[test]
+fn default_policy_preserves_phase_13_behavior() {
+    let mut gateway = gateway_with(input_factory(), NetworkConfig::new());
+    create_world(&mut gateway, 0);
+    let max = gateway.config().max_frame_payload();
+    let (_id, mut client) = connect_client(&mut gateway);
+    handshake(&mut gateway, &mut client, max);
+    authenticate(&mut gateway, &mut client, max, "alice-token");
+    attach(&mut gateway, &mut client, max, WorldId::from_u64(0));
+
+    // Input flows without a custom policy.
+    send_client(
+        &mut client,
+        &ClientMessage::InputFrame { frame: input_frame(0, "spawn", Some(Value::U64(1))) },
+        max,
+    );
+    gateway.process_inbound();
+    assert_eq!(gateway.metrics().inputs_accepted, 1);
+    // Reducer calls route into the world queue untouched by the policy; the
+    // unknown name fails at execution (Phase 13 semantics) and the error
+    // result is correlated back.
+    send_client(
+        &mut client,
+        &ClientMessage::CallReducer {
+            request_id: 1,
+            reducer: "nope".into(),
+            args: ReducerArgs::new(),
+        },
+        max,
+    );
+    gateway.process_inbound();
+    assert_eq!(gateway.metrics().policy_rejections, 0);
+    assert_eq!(gateway.metrics().reducer_calls_accepted, 1);
+    gateway.step_worlds().unwrap();
+    // The attached session receives the TickUpdate broadcast first, then the
+    // correlated ReducerResult error.
+    let msg = recv_server(&mut client, max);
+    assert!(matches!(msg, ServerMessage::TickUpdate { .. }));
+    let msg = recv_server(&mut client, max);
+    assert!(matches!(
+        msg,
+        ServerMessage::ReducerResult {
+            request_id: 1,
+            ok: false,
+            error: Some(ref e),
+            ..
+        } if e.contains("registered")
+    ));
+}
+
+/// An installed policy can deny world attachment before any runtime access.
+#[test]
+fn policy_can_deny_attach() {
+    let mut gateway = gateway_with(input_factory(), NetworkConfig::new());
+    gateway.set_policy(Box::new(DenyAttachPolicy));
+    create_world(&mut gateway, 0);
+    let max = gateway.config().max_frame_payload();
+    let (_id, mut client) = connect_client(&mut gateway);
+    handshake(&mut gateway, &mut client, max);
+    authenticate(&mut gateway, &mut client, max, "alice-token");
+
+    send_client(&mut client, &ClientMessage::AttachWorld { world: WorldId::from_u64(0) }, max);
+    gateway.process_inbound();
+    let msg = recv_server(&mut client, max);
+    assert!(matches!(
+        msg,
+        ServerMessage::AttachResult {
+            ok: false,
+            error: Some(ref e),
+            ..
+        } if e.contains("not authorized")
+    ));
+    assert_eq!(gateway.metrics().policy_rejections, 1);
+    assert_eq!(gateway.session_of(_id).unwrap().attached_world(), None);
+}
+
+/// An installed policy can deny input submission without touching the runtime.
+#[test]
+fn policy_can_deny_input() {
+    let mut gateway = gateway_with(input_factory(), NetworkConfig::new());
+    gateway.set_policy(Box::new(DenyInputPolicy));
+    create_world(&mut gateway, 0);
+    let max = gateway.config().max_frame_payload();
+    let (_id, mut client) = connect_client(&mut gateway);
+    handshake(&mut gateway, &mut client, max);
+    authenticate(&mut gateway, &mut client, max, "alice-token");
+    attach(&mut gateway, &mut client, max, WorldId::from_u64(0));
+
+    send_client(
+        &mut client,
+        &ClientMessage::InputFrame { frame: input_frame(0, "spawn", Some(Value::U64(1))) },
+        max,
+    );
+    gateway.process_inbound();
+    let msg = recv_server(&mut client, max);
+    assert!(matches!(msg, ServerMessage::Error { code: 18, .. }));
+    assert_eq!(gateway.metrics().inputs_accepted, 0);
+    assert_eq!(gateway.metrics().policy_rejections, 1);
+}
+
+/// A denied reducer call receives a correlated `ReducerResult` (request id
+/// echoed) and is never submitted to the runtime.
+#[test]
+fn policy_denial_echoes_request_id() {
+    let mut gateway = gateway_with(input_factory(), NetworkConfig::new());
+    gateway.set_policy(Box::new(DenyReducerPolicy));
+    create_world(&mut gateway, 0);
+    let max = gateway.config().max_frame_payload();
+    let (_id, mut client) = connect_client(&mut gateway);
+    handshake(&mut gateway, &mut client, max);
+    authenticate(&mut gateway, &mut client, max, "alice-token");
+    attach(&mut gateway, &mut client, max, WorldId::from_u64(0));
+
+    send_client(
+        &mut client,
+        &ClientMessage::CallReducer {
+            request_id: 77,
+            reducer: "bump".into(),
+            args: ReducerArgs::new(),
+        },
+        max,
+    );
+    gateway.process_inbound();
+    let msg = recv_server(&mut client, max);
+    assert!(matches!(
+        msg,
+        ServerMessage::ReducerResult {
+            request_id: 77,
+            ok: false,
+            error: Some(ref e),
+            ..
+        } if e.contains("game policy")
+    ));
+    assert_eq!(gateway.metrics().policy_rejections, 1);
+    assert_eq!(gateway.metrics().reducer_calls_accepted, 0);
+}
+
+// ------------------------------------------------------ regression (review)
+
+/// Request ids with the server-reserved bit are rejected at the gateway
+/// (ADR-014 D3): a client can never occupy the namespace used by
+/// `GameServer::invoke_reducer`, so server results cannot be misrouted.
+#[test]
+fn server_reserved_request_ids_are_rejected_from_clients() {
+    let config = NetworkConfig::new();
+    let mut gateway = gateway_with(reducer_factory(), config);
+    create_world(&mut gateway, 0);
+    let (_, mut client) = connect_client(&mut gateway);
+    let max = gateway.config().max_frame_payload();
+
+    handshake(&mut gateway, &mut client, max);
+    authenticate(&mut gateway, &mut client, max, "alice-token");
+    attach(&mut gateway, &mut client, max, WorldId::from_u64(0));
+
+    send_client(
+        &mut client,
+        &ClientMessage::CallReducer {
+            request_id: SERVER_REQUEST_MSB | 5,
+            reducer: "bump".into(),
+            args: ReducerArgs::new(),
+        },
+        max,
+    );
+    gateway.process_inbound();
+    let msg = recv_server(&mut client, max);
+    assert!(matches!(
+        msg,
+        ServerMessage::ReducerResult {
+            request_id,
+            ok: false,
+            error: Some(ref e),
+            ..
+        } if request_id == SERVER_REQUEST_MSB | 5 && e.contains("reserved for server")
+    ));
+    assert_eq!(gateway.metrics().reducer_calls_accepted, 0);
+    assert_eq!(gateway.metrics().reducer_calls_rejected, 1);
 }

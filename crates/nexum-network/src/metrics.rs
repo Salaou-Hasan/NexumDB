@@ -45,6 +45,8 @@ pub struct NetworkMetrics {
     pub reducer_calls_accepted: u64,
     /// Reducer calls rejected (session, attachment, bounds, runtime).
     pub reducer_calls_rejected: u64,
+    /// Client operations denied by the authorization policy (ADR-014 D2).
+    pub policy_rejections: u64,
     /// Reducer results routed to clients.
     pub reducer_results_sent: u64,
     /// TickUpdate broadcasts sent.
@@ -73,6 +75,7 @@ impl NetworkMetrics {
             inputs_rejected: 0,
             reducer_calls_accepted: 0,
             reducer_calls_rejected: 0,
+            policy_rejections: 0,
             reducer_results_sent: 0,
             tick_updates_sent: 0,
             subscription_messages_sent: 0,

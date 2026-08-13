@@ -51,6 +51,15 @@ is implemented.
   pending-call lifecycle), server events on `TickUpdate`, request
   correlation ids, the `nexum-sdk` client crate (derived views only), and
   the finalized queue/budget/lifecycle semantics.
+- [14-game-server.md](14-game-server.md) — Game server layer (canonical
+  Phase 14): the orchestration/product layer that composes Runtime,
+  partitions, networking, and the SDK. Player/game-instance/session
+  identity (orchestration metadata only — gameplay state stays in the
+  simulation), deterministic join/leave/reconnect, deny-by-default reducer
+  exposure with server-trusted invocation, per-world command buffering
+  (one frame per world per tick), the reserved server request-id
+  namespace, failure observation through game events, and the idempotent
+  rejoin contract for recovery.
 
 ## Frozen early implementation
 
@@ -65,6 +74,5 @@ is implemented.
 
 ## Planned topics
 
-- Game server layer (Phase 14)
 - Performance & benchmarking (Phase 15)
 - Production hardening & release (Phase 16)

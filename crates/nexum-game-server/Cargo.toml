@@ -1,0 +1,27 @@
+[package]
+name = "nexum-game-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Nexum game server layer: game instances, players, reducer exposure, and server authority (Phase 14)."
+
+[dependencies]
+nexum-core.workspace = true
+nexum-network.workspace = true
+nexum-reducer.workspace = true
+nexum-runtime.workspace = true
+nexum-simulation.workspace = true
+nexum-subscription.workspace = true
+nexum-wal.workspace = true
+
+[dev-dependencies]
+nexum-reducer.workspace = true
+nexum-sdk.workspace = true
+nexum-simulation.workspace = true
+nexum-table.workspace = true
+nexum-wasm.workspace = true
+wat = "1.256"
+
+[lints]
+workspace = true
