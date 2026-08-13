@@ -556,3 +556,52 @@ fn events_are_bounded() {
         vec![ServerEvent::Pong { nonce: 2 }, ServerEvent::Pong { nonce: 3 }]
     );
 }
+
+#[test]
+fn send_frame_flushes_the_outbound_transport() {
+    // `ClientTransport::send_frame` must push buffered bytes to the
+    // transport immediately (TCP correctness): queue transports flush
+    // trivially, so a recording connection proves the flush is invoked.
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    struct Recording {
+        flushes: Rc<RefCell<usize>>,
+        queue: std::collections::VecDeque<Vec<u8>>,
+    }
+    impl Connection for Recording {
+        fn peer(&self) -> &str {
+            "recording"
+        }
+        fn try_recv_frame(&mut self) -> Result<Option<Vec<u8>>, TransportError> {
+            Ok(self.queue.pop_front())
+        }
+        fn try_send_frame(&mut self, frame: Vec<u8>) -> Result<(), TransportError> {
+            self.queue.push_back(frame);
+            Ok(())
+        }
+        fn flush_outbound(&mut self) -> Result<(), TransportError> {
+            *self.flushes.borrow_mut() += 1;
+            Ok(())
+        }
+        fn close(&mut self) {}
+    }
+
+    let flushes = Rc::new(RefCell::new(0usize));
+    let mut transport = ClientTransport::new(Box::new(Recording {
+        flushes: Rc::clone(&flushes),
+        queue: std::collections::VecDeque::new(),
+    }));
+    transport.send_frame(vec![1, 2, 3]).unwrap();
+    assert_eq!(
+        *flushes.borrow(),
+        1,
+        "send_frame flushed the buffered frame to the transport"
+    );
+    transport.send_frame(vec![4, 5]).unwrap();
+    assert_eq!(
+        *flushes.borrow(),
+        2,
+        "every send flushes; a stream transport never holds bytes back"
+    );
+}

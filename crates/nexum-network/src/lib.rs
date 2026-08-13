@@ -53,7 +53,7 @@ pub use auth::{Authenticator, Principal, TokenAuthenticator};
 pub use config::{NetworkConfig, NetworkEvent, OutboundOverflowPolicy};
 pub use control::{ControlPlane, HealthReport};
 pub use error::{AuthError, NetworkError, ProtocolError};
-pub use gateway::{NetworkGateway, ProcessReport, StepReport, SERVER_REQUEST_MSB};
+pub use gateway::{NetworkGateway, ProcessReport, StepReport, CALLER_SOURCE_ARG, SERVER_REQUEST_MSB};
 pub use policy::{AllowAllPolicy, GamePolicy};
 pub use metrics::NetworkMetrics;
 pub use protocol::{DeltaKind, PROTOCOL_VERSION};

@@ -1,23 +1,27 @@
 [package]
-name = "nexum-server"
+name = "game-server"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Nexum server binary: a runnable demo wiring the runtime, reducers, subscriptions, simulation, networking, the game server layer, and the client SDK together."
+description = "Nexum: the actual playable multiplayer arena game built on the authoritative stack (server + terminal client)."
 
 [dependencies]
 nexum-core.workspace = true
 nexum-table.workspace = true
 nexum-reducer.workspace = true
 nexum-simulation.workspace = true
-nexum-subscription.workspace = true
 nexum-runtime.workspace = true
 nexum-network.workspace = true
 nexum-game-server.workspace = true
 nexum-sdk.workspace = true
+nexum-subscription.workspace = true
 nexum-wasm.workspace = true
 wat = "1.256"
+
+[[bin]]
+name = "game-server"
+path = "src/bin/main.rs"
 
 [lints]
 workspace = true

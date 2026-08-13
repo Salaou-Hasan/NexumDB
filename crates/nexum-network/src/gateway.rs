@@ -38,6 +38,17 @@ use crate::transport::{Connection, TransportError};
 /// collide with a client's pending call on the same world.
 pub const SERVER_REQUEST_MSB: u64 = 1 << 63;
 
+/// The reserved reducer-argument key under which the gateway stamps the
+/// authenticated caller's principal id on every client reducer call
+/// (ADR-013 D3 / ADR-014 D8).
+///
+/// Reducers that act on behalf of a player must read the caller from this
+/// key and must **never** trust a client-supplied identity argument: the
+/// gateway overwrites any client value before the call is queued, so
+/// identity cannot be forged. Server-originated calls (the game server's
+/// own invocations) stamp the same key with the player id they act for.
+pub const CALLER_SOURCE_ARG: &str = "__caller";
+
 /// One registered connection and its operational state.
 pub(crate) struct ConnectionEntry {
     connection: Box<dyn Connection>,
@@ -598,6 +609,10 @@ impl NetworkGateway {
             let _ = self.send_reducer_error(connection, request_id, "not authorized by game policy");
             return;
         }
+        // Stamp the caller's authoritative identity into a reserved argument
+        // (ADR-013 D3 / ADR-014 D8): a client-supplied value for the key is
+        // overwritten, so identity can never be forged through `args`.
+        let args = args.insert(CALLER_SOURCE_ARG, nexum_core::Value::U64(session.principal().id()));
         match self.runtime.submit_reducer_call(world, request_id, reducer, args) {
             Ok(()) => {
                 self.pending_calls.insert((world, request_id), connection);

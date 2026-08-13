@@ -18,7 +18,7 @@ use nexum_reducer::{ReducerArgs, ReducerContext, ReducerDefinition};
 use crate::auth::{Principal, TokenAuthenticator};
 use crate::config::{NetworkConfig, OutboundOverflowPolicy};
 use crate::error::{NetworkError, ProtocolError};
-use crate::gateway::{NetworkGateway, SERVER_REQUEST_MSB};
+use crate::gateway::{CALLER_SOURCE_ARG, NetworkGateway, SERVER_REQUEST_MSB};
 use crate::policy::GamePolicy;
 use crate::protocol::{self, ClientMessage, DeltaKind, ServerMessage, HEADER_LEN, PROTOCOL_MAGIC, PROTOCOL_VERSION};
 use crate::transport::{Connection, MemoryConnection, MemoryTransport};
@@ -110,6 +110,15 @@ fn bump(ctx: &mut ReducerContext, args: &ReducerArgs) -> Result<Value> {
 }
 
 /// A world with the `bump` reducer registered (no per-tick system).
+/// `whoami`: returns the caller-identity argument stamped by the gateway
+/// (ADR-013 D3 / ADR-014 D8). Used to prove the caller cannot be forged.
+fn whoami(_ctx: &mut ReducerContext, args: &ReducerArgs) -> Result<Value> {
+    Ok(args
+        .get(CALLER_SOURCE_ARG)
+        .cloned()
+        .unwrap_or(Value::U64(0)))
+}
+
 fn reducer_factory() -> WorldFactory {
     Box::new(|id: WorldId, mut store: TableStore, sim: SimulationConfig| {
         ensure_players(&mut store);
@@ -118,6 +127,12 @@ fn reducer_factory() -> WorldFactory {
             .native_mut()
             .register(
                 ReducerDefinition::new(ReducerId::from_u64(1), "bump", bump).unwrap(),
+            )
+            .unwrap();
+        world
+            .native_mut()
+            .register(
+                ReducerDefinition::new(ReducerId::from_u64(2), "whoami", whoami).unwrap(),
             )
             .unwrap();
         Ok(world)
@@ -1749,4 +1764,52 @@ fn server_reserved_request_ids_are_rejected_from_clients() {
     ));
     assert_eq!(gateway.metrics().reducer_calls_accepted, 0);
     assert_eq!(gateway.metrics().reducer_calls_rejected, 1);
+}
+
+#[test]
+fn reducer_calls_stamp_the_authenticated_caller_identity() {
+    let mut gateway = gateway_with(reducer_factory(), NetworkConfig::new());
+    create_world(&mut gateway, 0);
+    let (_, mut client) = connect_client(&mut gateway);
+    let max = gateway.config().max_frame_payload();
+    join_world0(&mut gateway, &mut client, max, "alice-token");
+
+    // The client attempts to forge identity through a reserved `__caller`
+    // argument; the gateway must overwrite it with the authenticated
+    // principal id before the call is queued (ADR-013 D3 / ADR-014 D8).
+    let request = 77;
+    send_client(
+        &mut client,
+        &ClientMessage::CallReducer {
+            request_id: request,
+            reducer: "whoami".into(),
+            args: ReducerArgs::new()
+                .insert("__caller", 999u64)
+                .insert("x", 1u64),
+        },
+        max,
+    );
+    gateway.process_inbound();
+    assert_eq!(gateway.metrics().reducer_calls_accepted, 1);
+    gateway.step_worlds().unwrap();
+    let msg = recv_server(&mut client, max);
+    assert!(matches!(msg, ServerMessage::TickUpdate { .. }));
+    let msg = recv_server(&mut client, max);
+    match msg {
+        ServerMessage::ReducerResult {
+            request_id,
+            ok: true,
+            value,
+            ..
+        } => {
+            assert_eq!(request_id, request);
+            assert_eq!(
+                value,
+                Some(Value::U64(1)),
+                "the reducer sees the authenticated caller, never the forged arg"
+            );
+        }
+        other => panic!("expected a successful ReducerResult, got {other:?}"),
+    }
+    assert_eq!(gateway.metrics().reducer_calls_rejected, 0);
 }

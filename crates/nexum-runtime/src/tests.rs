@@ -600,6 +600,57 @@ fn failed_ticks_produce_zero_subscription_updates() {
     assert_eq!(updates.len(), 1);
 }
 
+/// A factory whose writer system commits one row on **every other tick**
+/// (the in-between ticks commit zero changes).
+fn every_other_factory() -> WorldFactory {
+    Box::new(|id: WorldId, mut store: TableStore, sim: SimulationConfig| {
+        ensure_players(&mut store);
+        let mut world = World::new(id, store, sim)?;
+        world.add_system(
+            SystemDefinition::new(SystemId::from_u64(0), "every-other-writer", 0, |ctx, _| {
+                if ctx.tick().as_u64() % 2 == 0 {
+                    ctx.insert("players", row![ctx.tick().as_u64(), 10u64, 100i32])?;
+                }
+                Ok(())
+            })
+            .unwrap(),
+        )?;
+        Ok(world)
+    })
+}
+
+#[test]
+fn empty_change_ticks_do_not_break_subscription_sequences() {
+    // Regression (playable-game demo): a tick that commits **zero changes**
+    // must not consume a subscription sequence number. Feeding the registry
+    // an empty change set assigns a phantom sequence that no subscription can
+    // observe; the next real delta then looks like a gap to every client view
+    // and is dropped as a `ViewGap` — losing real committed updates.
+    let mut runtime = Runtime::new(RuntimeConfig::new(every_other_factory())).unwrap();
+    start_worlds(&mut runtime, &[0]);
+    let sub = runtime
+        .subscribe(WorldId::from_u64(0), Query::builder("players").build().unwrap())
+        .unwrap();
+    runtime.drain(WorldId::from_u64(0), sub).unwrap(); // Initial
+
+    // Ticks 0,1,2,3: rows commit on 0 and 2, nothing on 1 and 3.
+    for _ in 0..4 {
+        runtime.step().unwrap();
+    }
+    let updates = runtime.drain(WorldId::from_u64(0), sub).unwrap();
+    // Two commits, two deltas, with **contiguous** sequences (0, 1) — the
+    // empty ticks produced no phantom sequences.
+    assert_eq!(updates.len(), 2, "only the two change commits emit deltas");
+    let seqs: Vec<u64> = updates
+        .iter()
+        .map(|update| match update {
+            SubscriptionUpdate::Insert { seq, .. } => *seq,
+            other => panic!("expected Insert, got {other:?}"),
+        })
+        .collect();
+    assert_eq!(seqs, vec![0, 1], "contiguous sequences, no phantom gap");
+}
+
 // --------------------------------------------------------- reducer calls
 
 /// The `echo` reducer: returns its `v` argument (used to observe per-call

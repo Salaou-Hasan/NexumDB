@@ -62,7 +62,8 @@ crates/
 ├── nexum-network/      # Realtime networking + control plane (Phase 13): versioned binary protocol, sessions/auth, gateway, transports, reducer-call routing, typed operator API (originally implemented ahead of the roadmap; now the canonical Phase 13 foundation)
 ├── nexum-sdk/          # Client SDK (Phase 13): poll-driven `Client`, canonical protocol codec, sessions, correlated reducer calls, derived subscription views, reconnect/resync
 ├── nexum-game-server/  # Game server layer (Phase 14): game instances, players, join/leave/reconnect, deny-by-default reducer exposure, per-world command buffering, failure observation — orchestration metadata only; gameplay state stays in the simulation
-└── nexum-server/       # Server binary
+├── nexum-server/       # Server binary — reference demo of the full stack (no gameplay)
+└── game-server/        # The actual playable multiplayer arena game — real gameplay reducers (native + WASM), a TCP game server, and a terminal client over the real SDK (see below)
 tests/                  # Workspace-level test harnesses (organized by area)
 benchmarks/             # Benchmark harnesses
 docs/
@@ -80,6 +81,62 @@ architecture map.
 cargo build --workspace
 cargo test  --workspace
 cargo clippy --workspace --all-targets
+```
+
+## Running the demo server
+
+The `nexum-server` binary is a runnable demo of the full authoritative stack
+(GameServer → Runtime → World → Transaction/OCC → `Vec<Change>` → WAL →
+SubscriptionRegistry → network → SDK). It creates a two-partition game, joins
+players, drives server-side commands and reducers (native **and** WASM), and
+connects a real SDK client over an in-process transport that authenticates,
+joins, attaches, subscribes, and observes committed changes as a derived view
+— including a denied call to a server-only reducer (deny-by-default exposure).
+
+```bash
+cargo run -p nexum-server                # in-memory, 8 ticks
+cargo run -p nexum-server -- --ticks 20  # more simulation
+cargo run -p nexum-server -- --persist data  # WAL-durable run into ./data
+```
+
+## Playing the actual game
+
+Three distinct layers (per the roadmap):
+
+- `nexum-game-server` — the **reusable game-server framework** (game
+  instances, players, exposure, routing). Contains no game mechanics.
+- `nexum-server` — the **reference Nexum stack demo** (no gameplay).
+- `game-server` — the **actual playable multiplayer arena game** built on
+  Nexum: authoritative gameplay reducers (native `move_player`/`player_join`/
+  `respawn_player`/… and a **WASM `fire_weapon`** reducer), a TCP game
+  server, and a terminal client over the real SDK/network boundary.
+
+The simulation is authoritative. The client sends **intents** (`move_player`
+with a direction, `fire_weapon` with no target — the WASM reducer scans the
+arena, validates facing/cooldown/ammo, resolves the hit and damage) and the
+server decides the result. The client never sends positions, health, or
+identity.
+
+```bash
+# Terminal 1 — the authoritative game server (1 partition, 20 ticks/s):
+cargo run -p game-server -- server
+
+# Terminals 2 and 3 — two real clients (each its own SDK + TCP connection):
+cargo run -p game-server -- client --name alice
+cargo run -p game-server -- client --name bob
+```
+
+Registered names: `alice`, `bob`, `carol`, `dave`. Use `--port` to change the
+default `9337` and `--auto SECONDS` for a deterministic scripted player
+(proves multiplayer without a keyboard).
+
+**Controls (interactive client):** `w/a/s/d` move, `f` fire, `r` reload,
+`x` respawn, `q` quit. Each render frame shows the arena, your player, other
+players, health, ammo, cooldown, and the authoritative tick.
+
+```bash
+cargo run -p game-server -- server --help        # server options
+cargo run -p game-server -- client --help        # client options
 ```
 
 ## License

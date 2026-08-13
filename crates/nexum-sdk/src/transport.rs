@@ -97,19 +97,34 @@ impl ClientTransport {
 
     /// Buffers one outbound frame. Returns `SdkError::TransportFull` when
     /// the bounded queue is at capacity.
+    ///
+    /// For stream transports (TCP) the buffered frame is pushed to the
+    /// socket immediately, non-blocking — the SDK's poll-driven host never
+    /// needs a separate flush step. Queue transports flush trivially.
     pub fn send_frame(&mut self, frame: Vec<u8>) -> Result<(), SdkError> {
         if self.closed {
             return Err(SdkError::TransportClosed);
         }
         match self.inner.try_send_frame(frame) {
-            Ok(()) => Ok(()),
-            Err(TransportError::Full) => Err(SdkError::TransportFull),
+            Ok(()) => {}
+            Err(TransportError::Full) => return Err(SdkError::TransportFull),
             Err(TransportError::Closed) => {
                 self.closed = true;
-                Err(SdkError::TransportClosed)
+                return Err(SdkError::TransportClosed);
             }
-            Err(error) => Err(SdkError::Transport(error)),
+            Err(error) => return Err(SdkError::Transport(error)),
         }
+        // Write buffered bytes to the transport now (non-blocking); a
+        // failed flush means the link broke, not that the frame is queued.
+        self.inner
+            .flush_outbound()
+            .map_err(|error| match error {
+                TransportError::Closed => {
+                    self.closed = true;
+                    SdkError::TransportClosed
+                }
+                other => SdkError::Transport(other),
+            })
     }
 
     /// Closes the transport (idempotent).

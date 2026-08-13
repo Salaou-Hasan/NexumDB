@@ -1050,8 +1050,15 @@ impl Runtime {
             }
         }
 
-        // Observation second (ADR-010 D4): only durable changes.
-        let _ = entry.subscriptions.apply_changes(entry.world.store(), result.changes());
+        // Observation second (ADR-010 D4): only durable changes. A tick that
+        // committed zero changes is skipped entirely: the registry assigns one
+        // sequence number per `apply_changes` call (ADR-008 D7), so feeding it
+        // an empty change set would create a phantom sequence that no
+        // subscription can observe — the next real delta would look like a gap
+        // to every client view and be dropped as a `ViewGap`.
+        if !result.changes().is_empty() {
+            let _ = entry.subscriptions.apply_changes(entry.world.store(), result.changes());
+        }
 
         // Outbound message enqueue (ADR-012 D3): committed messages are
         // queued to the destinations for their next tick. Bounded and

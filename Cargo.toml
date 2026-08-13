@@ -15,6 +15,7 @@ members = [
     "crates/nexum-sdk",
     "crates/nexum-game-server",
     "crates/nexum-server",
+    "crates/game-server",
 ]
 
 [workspace.package]
@@ -40,3 +41,4 @@ nexum-simulation = { path = "crates/nexum-simulation", version = "0.1.0" }
 nexum-runtime = { path = "crates/nexum-runtime", version = "0.1.0" }
 nexum-network = { path = "crates/nexum-network", version = "0.1.0" }
 nexum-sdk = { path = "crates/nexum-sdk", version = "0.1.0" }
+nexum-game-server = { path = "crates/nexum-game-server", version = "0.1.0" }
