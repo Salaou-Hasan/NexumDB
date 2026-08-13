@@ -42,7 +42,7 @@ The build follows a strict order: correctness first, distribution last.
 | 12 | Multi-partition simulation (deterministic message bus) | ✅ Done |
 | 13 | Networking + client SDKs (realtime gateway, reducer calls, `nexum-sdk`) | ✅ Done |
 | 14 | Game server layer (games, players, exposure, command routing) | ✅ Done |
-| 15 | Performance & benchmarking | ⬜ |
+| 15 | Performance & benchmarking (100K→10M rows, bottleneck fixes, report) | ✅ Done |
 | 16 | Production hardening & release | ⬜ |
 
 ## Repository layout
@@ -62,6 +62,11 @@ crates/
 ├── nexum-network/      # Realtime networking + control plane (Phase 13): versioned binary protocol, sessions/auth, gateway, transports, reducer-call routing, typed operator API (originally implemented ahead of the roadmap; now the canonical Phase 13 foundation)
 ├── nexum-sdk/          # Client SDK (Phase 13): poll-driven `Client`, canonical protocol codec, sessions, correlated reducer calls, derived subscription views, reconnect/resync
 ├── nexum-game-server/  # Game server layer (Phase 14): game instances, players, join/leave/reconnect, deny-by-default reducer exposure, per-world command buffering, failure observation — orchestration metadata only; gameplay state stays in the simulation
+```
+
+```
+benchmarks/
+└── nexum-bench/        # Phase 15 benchmark crate (release-mode): micro + scale (100K/1M/5M/10M rows) + large-state tick; run `cargo run --release -p nexum-bench -- --micro storage tx reducer wasm sub sim runtime wal` or `--scale 1_000_000`
 ├── nexum-server/       # Server binary — reference demo of the full stack (no gameplay)
 └── game-server/        # The actual playable multiplayer arena game — real gameplay reducers (native + WASM), a TCP game server, and a terminal client over the real SDK (see below)
 tests/                  # Workspace-level test harnesses (organized by area)

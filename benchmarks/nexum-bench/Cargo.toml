@@ -1,0 +1,23 @@
+[package]
+name = "nexum-bench"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Nexum Phase 15 performance benchmarks: micro + system/scale workloads (100K–10M rows)."
+
+[dependencies]
+nexum-core.workspace = true
+nexum-table.workspace = true
+nexum-tx.workspace = true
+nexum-storage.workspace = true
+nexum-wal.workspace = true
+nexum-reducer.workspace = true
+nexum-wasm.workspace = true
+nexum-subscription.workspace = true
+nexum-simulation.workspace = true
+nexum-runtime.workspace = true
+wat = "1.256"
+
+[lints]
+workspace = true

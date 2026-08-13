@@ -7,9 +7,12 @@
 //! map (ADR-002 D5).
 //!
 //! - unique indexes map a key to at most one `RowId`
-//! - non-unique indexes map a key to a list of `RowId`s in insertion order
+//! - non-unique indexes map a key to a set of `RowId`s in ascending `RowId`
+//!   order (ADR-015 D5: a `BTreeSet` keeps removal O(log n) — a linear
+//!   `retain` over a key's whole row list made zone-moving updates scale
+//!   with rows-per-key)
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use nexum_core::{Error, Result, RowId, Value};
 
@@ -24,11 +27,11 @@ pub(crate) enum Index {
         columns: Vec<usize>,
         entries: HashMap<Vec<Value>, RowId>,
     },
-    /// A key maps to many rows, in insertion order.
+    /// A key maps to many rows, in ascending `RowId` order.
     NonUnique {
         name: String,
         columns: Vec<usize>,
-        entries: HashMap<Vec<Value>, Vec<RowId>>,
+        entries: HashMap<Vec<Value>, BTreeSet<RowId>>,
     },
 }
 
@@ -118,7 +121,7 @@ impl Index {
                 entries.insert(key, row_id);
             }
             Self::NonUnique { entries, .. } => {
-                entries.entry(key).or_default().push(row_id);
+                entries.entry(key).or_default().insert(row_id);
             }
         }
     }
@@ -131,7 +134,7 @@ impl Index {
             }
             Self::NonUnique { entries, .. } => {
                 if let Some(ids) = entries.get_mut(key) {
-                    ids.retain(|&id| id != row_id);
+                    ids.remove(&row_id);
                     if ids.is_empty() {
                         entries.remove(key);
                     }
@@ -141,11 +144,15 @@ impl Index {
     }
 
     /// Looks up the row ids matching `key`. For unique indexes this returns
-    /// zero or one id; for non-unique indexes, ids in insertion order.
+    /// zero or one id; for non-unique indexes, ids in ascending `RowId`
+    /// order (deterministic).
     pub(crate) fn lookup(&self, key: &[Value]) -> Vec<RowId> {
         match self {
             Self::Unique { entries, .. } => entries.get(key).copied().into_iter().collect(),
-            Self::NonUnique { entries, .. } => entries.get(key).cloned().unwrap_or_default(),
+            Self::NonUnique { entries, .. } => entries
+                .get(key)
+                .map(|ids| ids.iter().copied().collect())
+                .unwrap_or_default(),
         }
     }
 

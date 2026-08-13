@@ -23,6 +23,7 @@
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
+use std::ops::Bound;
 
 use nexum_core::{ChangeKind, Row, RowId, TableId, Value};
 use nexum_storage::Change;
@@ -89,6 +90,14 @@ pub struct Subscription {
     window_cap: usize,
     /// Every matching row, sorted by the query ordering.
     window: BTreeMap<Key, Row>,
+    /// `row_id → key` mirror of `window` (ADR-015 D5): turns the per-change
+    /// membership lookups from O(window) scans into O(log N) lookups while
+    /// keeping the authoritative window structure unchanged.
+    row_keys: BTreeMap<RowId, Key>,
+    /// The exact top-`window_cap` keys of `window` — the delivered
+    /// membership maintained incrementally across commits (ADR-015 D5), so a
+    /// single-row change never rebuilds the whole cap.
+    visible_keys: BTreeSet<Key>,
     /// The delivered membership: the top-`window_cap` rows of `window`.
     visible_ids: BTreeSet<RowId>,
     buffer: Vec<SubscriptionUpdate>,
@@ -113,6 +122,8 @@ impl Subscription {
             cursor: 0,
             window_cap,
             window: BTreeMap::new(),
+            row_keys: BTreeMap::new(),
+            visible_keys: BTreeSet::new(),
             visible_ids: BTreeSet::new(),
             buffer: Vec::new(),
             max_buffered,
@@ -164,25 +175,31 @@ impl Subscription {
     /// Establishes the view from a full authoritative scan: filters, orders,
     /// applies the window cap, projects, and records the derived state.
     /// Returns the delivered rows in query order.
+    ///
+    /// Each scanned row is moved into the window exactly once (no second
+    /// clone — ADR-015 D5); the `row_keys` mirror is built in the same pass.
     pub(crate) fn rebuild(&mut self, rows: Vec<(RowId, Row)>) -> Vec<DeliveredRow> {
         self.window.clear();
+        self.row_keys.clear();
+        self.visible_keys.clear();
         self.visible_ids.clear();
         let mut ordered: Vec<(Key, Row)> = rows
             .into_iter()
             .map(|(row_id, row)| (self.key_of(&row, row_id), row))
             .collect();
         ordered.sort_by(|a, b| a.0.cmp(&b.0));
-        for (key, row) in &ordered {
-            self.window.insert(key.clone(), row.clone());
+        let mut delivered = Vec::with_capacity(self.window_cap.min(ordered.len()));
+        for (key, row) in ordered {
+            self.row_keys.insert(key.row_id, key.clone());
+            self.window.insert(key, row);
         }
         for key in self.window.keys().take(self.window_cap) {
             self.visible_ids.insert(key.row_id);
+            self.visible_keys.insert(key.clone());
+            let row = self.window.get(key).expect("key iterated from the window");
+            delivered.push(DeliveredRow::new(key.row_id, self.compiled.project(row)));
         }
-        ordered.truncate(self.window_cap);
-        ordered
-            .into_iter()
-            .map(|(key, row)| DeliveredRow::new(key.row_id, self.compiled.project(&row)))
-            .collect()
+        delivered
     }
 
     /// Installs the initial snapshot: records the cursor and delivers the
@@ -238,15 +255,13 @@ impl Subscription {
                 let was_visible = self.is_visible(row_id);
                 if self.compiled.matches(new_row) {
                     self.upsert(row_id, new_row, seq, was_visible);
-                } else if self.find_key(row_id).is_some() {
-                    self.remove(row_id);
-                    self.sync_window(seq, None);
+                } else if let Some(old) = self.remove(row_id) {
+                    self.sync_window(seq, None, Some(old), None);
                 }
             }
             ChangeKind::Delete => {
-                if self.find_key(row_id).is_some() {
-                    self.remove(row_id);
-                    self.sync_window(seq, None);
+                if let Some(old) = self.remove(row_id) {
+                    self.sync_window(seq, None, Some(old), None);
                 }
             }
         }
@@ -266,22 +281,12 @@ impl Subscription {
         }
     }
 
-    /// Locates the window entry for `row_id`, if any.
-    fn find_key(&self, row_id: RowId) -> Option<Key> {
-        self.window
-            .iter()
-            .find(|(key, _)| key.row_id == row_id)
-            .map(|(key, _)| key.clone())
-    }
-
-    /// Removes `row_id` from the window, returning whether it was present.
-    fn remove(&mut self, row_id: RowId) -> bool {
-        if let Some(key) = self.find_key(row_id) {
-            self.window.remove(&key);
-            true
-        } else {
-            false
-        }
+    /// Removes `row_id` from the window, returning its key if it was
+    /// present. O(log N) via the `row_keys` mirror (ADR-015 D5).
+    fn remove(&mut self, row_id: RowId) -> Option<Key> {
+        let key = self.row_keys.remove(&row_id)?;
+        self.window.remove(&key);
+        Some(key)
     }
 
     /// Inserts or replaces `row_id`'s window entry (it now matches) and
@@ -289,55 +294,167 @@ impl Subscription {
     /// when the row was visible before the change, an `Update` is emitted if
     /// it remains visible.
     fn upsert(&mut self, row_id: RowId, row: &Row, seq: u64, was_visible: bool) {
-        self.remove(row_id);
+        let old = self.remove(row_id);
         let key = self.key_of(row, row_id);
-        self.window.insert(key, row.clone());
+        self.row_keys.insert(row_id, key.clone());
+        self.window.insert(key.clone(), row.clone());
         let update = was_visible.then(|| DeliveredRow::new(row_id, self.compiled.project(row)));
-        self.sync_window(seq, update);
+        self.sync_window(seq, update, old, Some(key));
     }
 
     /// Re-synchronizes the delivered view to the exact top-`window_cap`
     /// rows of `window` and emits the membership changes. Emission order per
     /// commit: the changed row's `Update` first (when it stays visible),
     /// then `Delete`s for rows that left the window, then `Insert`s for rows
-    /// that entered — each group in ascending `RowId` order.
-    fn sync_window(&mut self, seq: u64, update: Option<DeliveredRow>) {
-        let mut new_visible = BTreeSet::new();
-        for key in self.window.keys().take(self.window_cap) {
-            new_visible.insert(key.row_id);
-        }
-        let left: Vec<RowId> = self
-            .visible_ids
-            .difference(&new_visible)
-            .copied()
-            .collect();
-        let entered: Vec<RowId> = new_visible
-            .difference(&self.visible_ids)
-            .copied()
-            .collect();
-        self.visible_ids = new_visible;
-
-        if let Some(update) = update.filter(|update| self.is_visible(update.row_id())) {
-            self.push(SubscriptionUpdate::Update { seq, row: update }, seq);
-        }
-        for row_id in left {
-            self.push(SubscriptionUpdate::Delete { seq, row_id }, seq);
-        }
-        for row_id in entered {
-            let row = self
-                .window
-                .iter()
-                .find(|(key, _)| key.row_id == row_id)
-                .map(|(_, row)| row.clone())
-                .expect("entered rows come from the window");
-            self.push(
-                SubscriptionUpdate::Insert {
+    /// that entered.
+    ///
+    /// Incremental (ADR-015 D5): one changed row's key can move across the
+    /// window boundary at most once, so the visible set is adjusted locally
+    /// — O(log N) plus the number of emitted deltas — instead of rebuilding
+    /// the top-`window_cap` on every commit. `ko` is the row's key before
+    /// the change (None if it was not in the window); `kn` is its key after
+    /// (None for a removal). The caller already updated `window`/`row_keys`.
+    fn sync_window(
+        &mut self,
+        seq: u64,
+        update: Option<DeliveredRow>,
+        ko: Option<Key>,
+        kn: Option<Key>,
+    ) {
+        let was_visible = ko
+            .as_ref()
+            .is_some_and(|old| self.visible_keys.remove(old));
+        let Some(kn) = kn else {
+            // Removal path: the row is gone from the window.
+            if was_visible {
+                let row_id = ko.expect("was_visible implies an old key").row_id;
+                self.visible_ids.remove(&row_id);
+                self.push(SubscriptionUpdate::Delete { seq, row_id }, seq);
+                self.backfill(seq);
+            }
+            #[cfg(debug_assertions)]
+            self.debug_check_invariants();
+            return;
+        };
+        let row_id = kn.row_id;
+        if was_visible {
+            // The row was in the top-cap. It remains visible iff its new key
+            // is still within the cap: it ranks at or above the smallest key
+            // the remaining visible rows leave open.
+            let still_visible = match self.visible_keys.last() {
+                None => true, // cap == 1 and it was the only visible row
+                Some(max) => self
+                    .window
+                    .range((Bound::Excluded(max.clone()), Bound::Unbounded))
+                    .next()
+                    .is_none_or(|(next, _)| &kn <= next),
+            };
+            // No key above the remaining visible set means `kn` ranks within
+            // it (or the window is under capacity), so the row stays visible.
+            if still_visible {
+                self.visible_keys.insert(kn);
+                if let Some(upd) = update {
+                    self.push(SubscriptionUpdate::Update { seq, row: upd }, seq);
+                }
+            } else {
+                // Demoted: Delete, then the next-best row backfills.
+                self.visible_ids.remove(&row_id);
+                self.push(SubscriptionUpdate::Delete { seq, row_id }, seq);
+                self.backfill(seq);
+            }
+        } else {
+            // The row was not visible. It enters iff it ranks within the cap
+            // (or the window is under capacity).
+            let enters = self.visible_keys.len() < self.window_cap
+                || self.visible_keys.last().is_none_or(|worst| &kn <= worst);
+            if enters {
+                self.visible_keys.insert(kn.clone());
+                self.visible_ids.insert(row_id);
+                let evicted = if self.visible_keys.len() > self.window_cap {
+                    self.visible_keys.pop_last()
+                } else {
+                    None
+                };
+                // Delete the evicted row first, then Insert the new row
+                // (matches the historical per-commit order).
+                if let Some(evicted) = &evicted {
+                    self.visible_ids.remove(&evicted.row_id);
+                    self.push(SubscriptionUpdate::Delete { seq, row_id: evicted.row_id }, seq);
+                }
+                let row = self.deliverable(row_id);
+                self.push(
+                    SubscriptionUpdate::Insert {
+                        seq,
+                        row: DeliveredRow::new(row_id, self.compiled.project(&row)),
+                    },
                     seq,
-                    row: DeliveredRow::new(row_id, self.compiled.project(&row)),
-                },
-                seq,
-            );
+                );
+            }
+            // else: stays invisible; nothing changes.
         }
+        #[cfg(debug_assertions)]
+        self.debug_check_invariants();
+    }
+
+    /// Promotes the next-best window row into the visible set after a row
+    /// left it. No-op when the window is under capacity (nothing to promote).
+    fn backfill(&mut self, seq: u64) {
+        let Some(entered) = self.next_after_visible() else {
+            return;
+        };
+        self.visible_ids.insert(entered.row_id);
+        self.visible_keys.insert(entered.clone());
+        let row = self.deliverable(entered.row_id);
+        self.push(
+            SubscriptionUpdate::Insert {
+                seq,
+                row: DeliveredRow::new(entered.row_id, self.compiled.project(&row)),
+            },
+            seq,
+        );
+    }
+
+    /// The smallest window key above the current visible set: the next row
+    /// to promote when the window is at capacity, or the smallest window key
+    /// when the visible set is empty.
+    fn next_after_visible(&self) -> Option<Key> {
+        match self.visible_keys.last() {
+            Some(max) => self
+                .window
+                .range((Bound::Excluded(max.clone()), Bound::Unbounded))
+                .next()
+                .map(|(key, _)| key.clone()),
+            None => self.window.iter().next().map(|(key, _)| key.clone()),
+        }
+    }
+
+    /// The current window row for `row_id` (cloned for delivery).
+    fn deliverable(&self, row_id: RowId) -> Row {
+        let key = self
+            .row_keys
+            .get(&row_id)
+            .expect("delivered rows come from the window");
+        self.window.get(key).expect("row_keys mirrors the window").clone()
+    }
+
+    /// Debug-only: the incremental visible set must equal the exact top-cap
+    /// of the window at every committed point (the Phase 8 contract).
+    #[cfg(debug_assertions)]
+    fn debug_check_invariants(&self) {
+        let mut expected_ids = BTreeSet::new();
+        let mut expected_keys = BTreeSet::new();
+        for key in self.window.keys().take(self.window_cap) {
+            expected_ids.insert(key.row_id);
+            expected_keys.insert(key.clone());
+        }
+        debug_assert_eq!(
+            self.visible_ids, expected_ids,
+            "visible_ids must be the exact top-cap"
+        );
+        debug_assert_eq!(
+            self.visible_keys, expected_keys,
+            "visible_keys must be the exact top-cap"
+        );
     }
 
     /// Buffers one update, marking the subscription stale on overflow.

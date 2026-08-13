@@ -72,7 +72,15 @@ is implemented.
   backpressure), the typed operator control plane, and the recovery
   no-replay contract.
 
+## Completed (Phase 15)
+
+- [15-performance.md](15-performance.md) — Performance & benchmarking
+  (canonical Phase 15): the measure-first methodology, workload/dataset
+  definitions (100K → 10M rows), and the bottleneck fixes justified by
+  measurement — incremental subscription deltas, O(log n) non-unique index
+  removal, and the bench-harness no-op-update correction. Results and
+  scaling analysis: [reports/15-performance.md](../reports/15-performance.md).
+
 ## Planned topics
 
-- Performance & benchmarking (Phase 15)
 - Production hardening & release (Phase 16)

@@ -16,6 +16,7 @@ members = [
     "crates/nexum-game-server",
     "crates/nexum-server",
     "crates/game-server",
+    "benchmarks/nexum-bench",
 ]
 
 [workspace.package]
