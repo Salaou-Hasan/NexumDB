@@ -144,6 +144,31 @@ cargo run -p game-server -- server --help        # server options
 cargo run -p game-server -- client --help        # client options
 ```
 
+## Benchmarks
+
+Phase 15 (see the [full report](docs/reports/15-performance.md) and the
+[benchmark crate](benchmarks/nexum-bench)): Nexum was measured as
+authoritative state grows from 100K → 1M → 5M → 10M rows, in release mode,
+on an Intel i7-14650HX / 16 GB. Headline numbers (MEASURED):
+
+| Metric | 100K rows | 10M rows |
+|---|---|---|
+| PK lookup | 46 ns | 45 ns |
+| UPDATE exactly one row (tx + OCC + commit) | 0.97 µs | 0.95 µs |
+| single-row subscription delta | 1.3 µs | 1.4 µs |
+| subscription initial snapshot (10K delivered) | 33 ms | 3.7 s |
+| tick with 100 active entities in a 10M-row store | — | 214 ns |
+
+**The critical scale result:** a one-row update behaves the same at 10M
+rows as at 100K rows — cost scales with the *changed set*, not the table.
+Tick cost scales with the *active entity set*, not total rows.
+
+```bash
+cargo run --release -p nexum-bench -- --micro storage tx reducer wasm sub sim runtime wal
+cargo run --release -p nexum-bench -- --scale 1_000_000
+cargo run --release -p nexum-bench -- --large-tick 10_000_000 100
+```
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
