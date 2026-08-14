@@ -47,6 +47,8 @@ pub struct NetworkMetrics {
     pub reducer_calls_rejected: u64,
     /// Client operations denied by the authorization policy (ADR-014 D2).
     pub policy_rejections: u64,
+    /// Client operations rejected by a per-connection rate limit (ADR-016 D1).
+    pub rate_limited: u64,
     /// Reducer results routed to clients.
     pub reducer_results_sent: u64,
     /// TickUpdate broadcasts sent.
@@ -56,7 +58,8 @@ pub struct NetworkMetrics {
 }
 
 impl NetworkMetrics {
-    pub(crate) fn empty() -> Self {
+    /// A zeroed metrics snapshot (before any operation).
+    pub fn empty() -> Self {
         Self {
             connections: 0,
             sessions: 0,
@@ -76,6 +79,7 @@ impl NetworkMetrics {
             reducer_calls_accepted: 0,
             reducer_calls_rejected: 0,
             policy_rejections: 0,
+            rate_limited: 0,
             reducer_results_sent: 0,
             tick_updates_sent: 0,
             subscription_messages_sent: 0,

@@ -28,6 +28,7 @@ use crate::control::ControlPlane;
 use crate::error::NetworkError;
 use crate::metrics::NetworkMetrics;
 use crate::policy::{AllowAllPolicy, GamePolicy};
+use crate::rate::{RateBucket, RateLimitConfig, RateLimiter};
 use crate::protocol::{self, ClientMessage, DeltaKind, PROTOCOL_VERSION, ServerMessage};
 use crate::session::Session;
 use crate::transport::{Connection, TransportError};
@@ -62,16 +63,19 @@ pub(crate) struct ConnectionEntry {
     /// Encoded `StaleNotification`s queued while the outbound queue was
     /// full; flushed as soon as the queue has room.
     pending_stale: VecDeque<Vec<u8>>,
+    /// Per-connection operational rate limits (ADR-016 D1).
+    rate: RateLimiter,
 }
 
 impl ConnectionEntry {
-    fn new(connection: Box<dyn Connection>) -> Self {
+    fn new(connection: Box<dyn Connection>, rate_limits: &RateLimitConfig) -> Self {
         Self {
             connection,
             session: None,
             subscriptions: BTreeMap::new(),
             stale: false,
             pending_stale: VecDeque::new(),
+            rate: RateLimiter::new(rate_limits),
         }
     }
 }
@@ -94,6 +98,18 @@ pub struct ProcessReport {
     pub rejected: u64,
     /// Connections dropped during the pass.
     pub disconnected: usize,
+}
+
+/// A pending client reducer call, keyed by a gateway-allocated request id
+/// (Phase 16: client request ids are only unique per connection, so the
+/// gateway must namespace them to keep correlation unambiguous on shared
+/// worlds).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PendingCall {
+    /// The connection awaiting the result.
+    connection: ConnectionId,
+    /// The client's original request id (echoed back on the result).
+    client_request_id: u64,
 }
 
 /// The report of one [`NetworkGateway::step_worlds`] pass.
@@ -121,11 +137,20 @@ pub struct NetworkGateway {
     connections: BTreeMap<ConnectionId, ConnectionEntry>,
     next_connection: u64,
     next_session: u64,
-    /// Pending reducer calls awaiting their world's next tick (ADR-013 D3):
-    /// `(world, request_id) -> connection`. A call is removed when its
+    /// Pending reducer calls awaiting their world's next tick (ADR-013 D3),
+    /// keyed by a **gateway-allocated** request id: `(world, gateway_id) ->
+    /// pending`. The gateway never trusts client request ids for correlation
+    /// — two clients may (and the SDK always does) start their ids at 1, so
+    /// a `(world, client_request_id)` key would collide across connections
+    /// (Phase 16 finding). The runtime echoes the gateway id; the gateway
+    /// translates it back to the requesting connection and the client's
+    /// original id when routing the result. Entries are removed when their
     /// `ReducerResult` is routed, or cleared on detach/disconnect/world
     /// failure (the caller then receives an error, never a hang).
-    pending_calls: BTreeMap<(WorldId, u64), ConnectionId>,
+    pending_calls: BTreeMap<(WorldId, u64), PendingCall>,
+    /// The next gateway-allocated request id (monotonic per gateway, so
+    /// unique across every world and connection).
+    next_gateway_request: u64,
     /// Pending `Subscribe` request ids awaiting their subscription's
     /// `Initial` snapshot: `(connection, subscription) -> request_id`
     /// (ADR-013). Entries live for one `pump_subscription` call.
@@ -154,6 +179,7 @@ impl NetworkGateway {
             next_connection: 0,
             next_session: 0,
             pending_calls: BTreeMap::new(),
+            next_gateway_request: 1,
             snapshot_requests: BTreeMap::new(),
             events: VecDeque::new(),
             metrics: NetworkMetrics::empty(),
@@ -210,7 +236,8 @@ impl NetworkGateway {
         }
         let id = ConnectionId::from_u64(self.next_connection);
         self.next_connection += 1;
-        self.connections.insert(id, ConnectionEntry::new(connection));
+        self.connections
+            .insert(id, ConnectionEntry::new(connection, &self.config.rate_limits));
         Self::push_event(
             &mut self.events,
             self.config.event_log_limit(),
@@ -327,6 +354,9 @@ impl NetworkGateway {
                 );
             }
             ClientMessage::Authenticate { credentials } => {
+                if !self.check_rate(connection, RateBucket::Auth) {
+                    return;
+                }
                 if self
                     .connections
                     .get(&connection)
@@ -448,7 +478,12 @@ impl NetworkGateway {
                     },
                 );
             }
-            ClientMessage::InputFrame { frame } => self.handle_input(connection, frame),
+            ClientMessage::InputFrame { frame } => {
+                if !self.check_rate(connection, RateBucket::Input) {
+                    return;
+                }
+                self.handle_input(connection, frame);
+            }
             ClientMessage::Subscribe { request_id, query } => {
                 self.handle_subscribe(connection, request_id, query)
             }
@@ -467,6 +502,9 @@ impl NetworkGateway {
                 }
             }
             ClientMessage::Resync { subscription } => {
+                if !self.check_rate(connection, RateBucket::Resync) {
+                    return;
+                }
                 let Some(net_sub) = self
                     .connections
                     .get_mut(&connection)
@@ -522,7 +560,7 @@ impl NetworkGateway {
                     let _ = self.runtime.unsubscribe(world, subscription);
                 }
                 // Pending reducer calls die with the attachment.
-                self.pending_calls.retain(|_, conn| *conn != connection);
+                self.pending_calls.retain(|_, pending| pending.connection != connection);
                 Self::push_event(
                     &mut self.events,
                     self.config.event_log_limit(),
@@ -555,6 +593,9 @@ impl NetworkGateway {
         reducer: String,
         args: ReducerArgs,
     ) {
+        if !self.check_rate(connection, RateBucket::Reducer) {
+            return;
+        }
         // The top bit of a request id is reserved for server-originated
         // calls (ADR-014 D3): a client claiming it would make correlation
         // ambiguous with `GameServer::invoke_reducer`, so it is rejected.
@@ -591,14 +632,21 @@ impl NetworkGateway {
         let pending_for_connection = self
             .pending_calls
             .values()
-            .filter(|conn| **conn == connection)
+            .filter(|pending| pending.connection == connection)
             .count();
         if pending_for_connection >= self.config.max_pending_calls_per_connection() {
             let _ = self.send_reducer_error(connection, request_id, "too many pending reducer calls");
             self.metrics.reducer_calls_rejected += 1;
             return;
         }
-        if self.pending_calls.contains_key(&(world, request_id)) {
+        // A client reusing the same request id while one of its own calls is
+        // still pending would be ambiguous *to that client* (it correlates
+        // by its own id); reject defensively. Cross-client ids never collide
+        // here because correlation uses the gateway-allocated id below.
+        let client_id_reused = self.pending_calls.values().any(|pending| {
+            pending.connection == connection && pending.client_request_id == request_id
+        });
+        if client_id_reused {
             let _ = self.send_reducer_error(connection, request_id, "request id already pending");
             self.metrics.reducer_calls_rejected += 1;
             return;
@@ -613,9 +661,20 @@ impl NetworkGateway {
         // (ADR-013 D3 / ADR-014 D8): a client-supplied value for the key is
         // overwritten, so identity can never be forged through `args`.
         let args = args.insert(CALLER_SOURCE_ARG, nexum_core::Value::U64(session.principal().id()));
-        match self.runtime.submit_reducer_call(world, request_id, reducer, args) {
+        // Allocate a gateway-unique request id so concurrent calls from
+        // different clients on the same world never collide (Phase 16
+        // finding: all SDK clients start their ids at 1).
+        let gateway_id = self.next_gateway_request;
+        self.next_gateway_request += 1;
+        match self.runtime.submit_reducer_call(world, gateway_id, reducer, args) {
             Ok(()) => {
-                self.pending_calls.insert((world, request_id), connection);
+                self.pending_calls.insert(
+                    (world, gateway_id),
+                    PendingCall {
+                        connection,
+                        client_request_id: request_id,
+                    },
+                );
                 self.metrics.reducer_calls_accepted += 1;
             }
             Err(error) => {
@@ -718,6 +777,9 @@ impl NetworkGateway {
         request_id: u64,
         query: nexum_subscription::Query,
     ) {
+        if !self.check_rate_for(connection, RateBucket::Subscribe, request_id) {
+            return;
+        }
         let Some(session) = self
             .connections
             .get(&connection)
@@ -868,21 +930,23 @@ impl NetworkGateway {
             }
 
             // Route committed reducer-call results (ADR-013 D3) to their
-            // requesting connections, in call order.
+            // requesting connections, in call order. The runtime echoes the
+            // gateway-allocated id; translate it back to the client's own id
+            // and the awaiting connection (Phase 16 namespace fix).
             for call_result in result.reducer_results() {
-                if let Some(connection) =
+                if let Some(pending) =
                     self.pending_calls.remove(&(world, call_result.request_id()))
                 {
                     let message = if call_result.is_ok() {
                         ServerMessage::ReducerResult {
-                            request_id: call_result.request_id(),
+                            request_id: pending.client_request_id,
                             ok: true,
                             value: call_result.value().cloned(),
                             error: None,
                         }
                     } else {
                         ServerMessage::ReducerResult {
-                            request_id: call_result.request_id(),
+                            request_id: pending.client_request_id,
                             ok: false,
                             value: None,
                             error: Some(
@@ -893,7 +957,7 @@ impl NetworkGateway {
                             ),
                         }
                     };
-                    if self.send(connection, &message).unwrap_or(false) {
+                    if self.send(pending.connection, &message).unwrap_or(false) {
                         self.metrics.reducer_results_sent += 1;
                     }
                 }
@@ -902,31 +966,32 @@ impl NetworkGateway {
 
         // Answer pending calls whose world can no longer produce a result —
         // it failed, was stopped, or was destroyed during this step — with a
-        // correlated failure, so no caller is left hanging (ADR-013 D3).
-        // A still-Running world's calls stay pending for its next tick.
-        let unresolved: Vec<(WorldId, u64, ConnectionId)> = self
+        // correlated failure (the client's own request id), so no caller is
+        // left hanging (ADR-013 D3). A still-Running world's calls stay
+        // pending for its next tick.
+        let unresolved: Vec<(WorldId, u64, PendingCall)> = self
             .pending_calls
             .iter()
-            .filter_map(|((world, request_id), connection)| {
+            .filter_map(|((world, gateway_id), pending)| {
                 let unresolved = match self.runtime.world_status(*world) {
                     Ok(status) => status.state != nexum_runtime::WorldLifecycle::Running,
                     // Destroyed: the world no longer exists.
                     Err(_) => true,
                 };
-                unresolved.then_some((*world, *request_id, *connection))
+                unresolved.then_some((*world, *gateway_id, *pending))
             })
             .collect();
-        for (world, request_id, connection) in unresolved {
-            self.pending_calls.remove(&(world, request_id));
+        for (world, gateway_id, pending) in unresolved {
+            self.pending_calls.remove(&(world, gateway_id));
             let message = ServerMessage::ReducerResult {
-                request_id,
+                request_id: pending.client_request_id,
                 ok: false,
                 value: None,
                 error: Some(format!(
                     "world {world} is no longer running; the call could not commit"
                 )),
             };
-            if self.send(connection, &message).unwrap_or(false) {
+            if self.send(pending.connection, &message).unwrap_or(false) {
                 self.metrics.reducer_results_sent += 1;
             }
         }
@@ -1081,6 +1146,33 @@ impl NetworkGateway {
         Ok(())
     }
 
+    /// Rejects an operation when its per-connection rate bucket is exhausted
+    /// (ADR-016 D1): sends a `19 rate limit exceeded` error and returns
+    /// `false`. Never blocks, never drops accepted work silently — the
+    /// rejection is explicit and observable via [`NetworkMetrics::rate_limited`].
+    fn check_rate(&mut self, connection: ConnectionId, bucket: RateBucket) -> bool {
+        self.check_rate_for(connection, bucket, 0)
+    }
+
+    /// [`Self::check_rate`] with a `request_id` so the rejection is
+    /// correlated to the request that triggered it (used by `Subscribe`).
+    fn check_rate_for(
+        &mut self,
+        connection: ConnectionId,
+        bucket: RateBucket,
+        request_id: u64,
+    ) -> bool {
+        let allowed = self
+            .connections
+            .get_mut(&connection)
+            .is_some_and(|entry| entry.rate.try_take(bucket, std::time::Instant::now()));
+        if !allowed {
+            self.metrics.rate_limited += 1;
+            let _ = self.send_error_for(connection, 19, "rate limit exceeded", request_id);
+        }
+        allowed
+    }
+
     // ------------------------------------------------------------- helpers
 
     /// Removes a connection: closes its transport, unsubscribes its
@@ -1102,7 +1194,7 @@ impl NetworkGateway {
         // Drop the connection's pending reducer calls (ADR-013 D3): the
         // results can no longer be delivered. The runtime may still execute
         // accepted calls (fire-and-forget); the correlation state is gone.
-        self.pending_calls.retain(|_, conn| *conn != *connection);
+        self.pending_calls.retain(|_, pending| pending.connection != *connection);
         entry.connection.close();
         self.metrics.clients_dropped += 1;
         Self::push_event(

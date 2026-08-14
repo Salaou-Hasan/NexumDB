@@ -10,13 +10,17 @@ use game_server::{run_client, run_server, ClientArgs, ServerArgs};
 const HELP: &str = "usage: game-server <server|client> [options]
 
 server:
-  --port N        TCP listen port (default 9337)
-  --partitions N  arena partitions; 1 = one shared world (default 1)
-  --hz N          logical ticks per second (default 20)
-  --seed N        deterministic world seed (default 42)
-  --players N     maximum players per game (default 64)
-  --persist DIR   enable WAL durability into DIR (recovery on restart)
-  --quiet         suppress per-event log lines
+  --config FILE    production config file (key = value, # comments)
+  --port N         TCP listen port (overrides config)
+  --partitions N   arena partitions; 1 = one shared world
+  --hz N           logical ticks per second
+  --seed N         deterministic world seed
+  --players N      maximum players per game
+  --workers N      logical workers
+  --persist DIR    enable WAL durability into DIR (recovery on restart)
+  --stop-after N   cleanly shut down after N server-loop iterations
+  --stop-file FILE shut down cleanly when FILE appears
+  --quiet          log level -> error; suppress per-event log lines
 
 client:
   --name NAME     player token: alice | bob | carol | dave (default alice)
@@ -59,12 +63,16 @@ fn parse_server(args: &mut impl Iterator<Item = String>) -> ServerArgs {
     let mut server = ServerArgs::default();
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--port" => server.port = args.next().unwrap_or_else(usage::<String>).parse().unwrap_or_else(|_| usage::<u16>()),
-            "--partitions" => server.partitions = args.next().unwrap_or_else(usage::<String>).parse().unwrap_or_else(|_| usage::<usize>()),
-            "--hz" => server.hz = args.next().unwrap_or_else(usage::<String>).parse().unwrap_or_else(|_| usage::<u32>()),
-            "--seed" => server.seed = args.next().unwrap_or_else(usage::<String>).parse().unwrap_or_else(|_| usage::<u64>()),
-            "--players" => server.max_players = args.next().unwrap_or_else(usage::<String>).parse().unwrap_or_else(|_| usage::<usize>()),
+            "--config" => server.config = Some(args.next().unwrap_or_else(usage::<String>).into()),
+            "--port" => server.port = Some(args.next().unwrap_or_else(usage::<String>).parse().unwrap_or_else(|_| usage::<u16>())),
+            "--partitions" => server.partitions = Some(args.next().unwrap_or_else(usage::<String>).parse().unwrap_or_else(|_| usage::<usize>())),
+            "--hz" => server.hz = Some(args.next().unwrap_or_else(usage::<String>).parse().unwrap_or_else(|_| usage::<u32>())),
+            "--seed" => server.seed = Some(args.next().unwrap_or_else(usage::<String>).parse().unwrap_or_else(|_| usage::<u64>())),
+            "--players" => server.max_players = Some(args.next().unwrap_or_else(usage::<String>).parse().unwrap_or_else(|_| usage::<usize>())),
+            "--workers" => server.workers = Some(args.next().unwrap_or_else(usage::<String>).parse().unwrap_or_else(|_| usage::<usize>())),
             "--persist" => server.persist = Some(args.next().unwrap_or_else(usage::<String>).into()),
+            "--stop-after" => server.stop_after = Some(args.next().unwrap_or_else(usage::<String>).parse().unwrap_or_else(|_| usage::<u64>())),
+            "--stop-file" => server.stop_file = Some(args.next().unwrap_or_else(usage::<String>).into()),
             "--quiet" => server.quiet = true,
             "--help" | "-h" => print_help(),
             other => {

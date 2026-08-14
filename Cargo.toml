@@ -29,6 +29,17 @@ description = "Nexum: an authoritative state engine for realtime multiplayer and
 [workspace.lints.rust]
 unsafe_code = "forbid"
 
+# Phase 16 release profile (ADR-016 D5): fat LTO + single codegen unit
+# maximize codegen quality with no correctness cost; panic=unwind keeps the
+# catch_unwind-based failure isolation (a panicking reducer/WASM host never
+# takes down the process). strip = "debuginfo" keeps symbols for crash
+# reports while shrinking the binary.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "unwind"
+strip = "debuginfo"
+
 [workspace.dependencies]
 nexum-core = { path = "crates/nexum-core", version = "0.1.0" }
 nexum-storage = { path = "crates/nexum-storage", version = "0.1.0" }

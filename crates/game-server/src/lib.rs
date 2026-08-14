@@ -27,11 +27,17 @@
 #![warn(missing_docs)]
 
 pub mod client;
+pub mod config;
 pub mod game;
+pub mod observability;
 pub mod server;
+mod shutdown;
 mod wasm;
 
 pub use client::{run_client, ClientArgs, ClientOutcome};
+pub use config::{LogLevel, ServerConfig};
+pub use observability::{Logger, ServerMetricsSnapshot};
+pub use shutdown::ShutdownHandle;
 pub use game::{
     game_factory, move_args, spawn, CLIENT_REDUCERS, COL_ALIVE, COL_AMMO, COL_COOLDOWN,
     COL_CONNECTED, COL_FACING, COL_HP, COL_ID, COL_MAX_HP, COL_SCORE, COL_X, COL_Y, TABLE,

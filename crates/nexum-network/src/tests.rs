@@ -228,6 +228,15 @@ fn recv_server(client: &mut MemoryConnection, max: u32) -> ServerMessage {
     protocol::decode_server(&frame, max).unwrap()
 }
 
+/// Drains every queued server frame (returns the decoded messages).
+fn drain_server(client: &mut MemoryConnection, max: u32) -> Vec<ServerMessage> {
+    let mut messages = Vec::new();
+    while let Some(frame) = client.try_recv_frame().unwrap() {
+        messages.push(protocol::decode_server(&frame, max).unwrap());
+    }
+    messages
+}
+
 fn handshake(gateway: &mut NetworkGateway, client: &mut MemoryConnection, max: u32) {
     send_client(
         client,
@@ -1047,6 +1056,58 @@ fn reducer_calls_require_auth_and_attachment_and_reject_duplicates() {
     assert_eq!(gateway.metrics().reducer_results_sent, 1);
 }
 
+#[test]
+fn concurrent_calls_from_different_clients_do_not_collide_on_request_ids() {
+    // Phase 16 regression: every SDK client starts its request ids at 1, so
+    // two clients calling the same world concurrently must never collide —
+    // the gateway namespaces correlation by its own allocated id and echoes
+    // each client's own id back.
+    let mut gateway = gateway_with(reducer_factory(), NetworkConfig::new());
+    create_world(&mut gateway, 0);
+    let max = gateway.config().max_frame_payload();
+    let (_, mut alice) = connect_client(&mut gateway);
+    let (_, mut bob) = connect_client(&mut gateway);
+    join_world0(&mut gateway, &mut alice, max, "alice-token");
+    join_world0(&mut gateway, &mut bob, max, "bob-token");
+
+    // Both clients submit a call with the SAME client request id (1) in the
+    // same inbound pass — both must be accepted.
+    for client in [&mut alice, &mut bob] {
+        send_client(
+            client,
+            &ClientMessage::CallReducer {
+                request_id: 1,
+                reducer: "bump".into(),
+                args: ReducerArgs::new().insert("player", 1u64),
+            },
+            max,
+        );
+    }
+    gateway.process_inbound();
+    assert_eq!(gateway.metrics().reducer_calls_accepted, 2);
+    assert_eq!(gateway.metrics().reducer_calls_rejected, 0);
+
+    // Both calls commit on the next tick; each client receives exactly one
+    // result correlated to ITS OWN request id 1 (not the other's).
+    gateway.step_worlds().unwrap();
+    let drain = |client: &mut MemoryConnection| {
+        let mut results = Vec::new();
+        while let Some(frame) = client.try_recv_frame().unwrap() {
+            if let ServerMessage::ReducerResult { request_id, .. } =
+                protocol::decode_server(&frame, max).unwrap()
+            {
+                results.push(request_id);
+            }
+        }
+        results
+    };
+    let alice_results = drain(&mut alice);
+    let bob_results = drain(&mut bob);
+    assert_eq!(alice_results, vec![1], "alice gets her own result: {alice_results:?}");
+    assert_eq!(bob_results, vec![1], "bob gets his own result: {bob_results:?}");
+    assert_eq!(gateway.metrics().reducer_results_sent, 2);
+}
+
 // ----------------------------------------------- reducer call lifecycle
 
 #[test]
@@ -1207,9 +1268,10 @@ fn concurrent_pending_calls_across_clients_never_cross_consume_results() {
     authenticate(&mut gateway, &mut b, max, "bob-token");
     attach(&mut gateway, &mut b, max, WorldId::from_u64(0));
 
-    // Both clients pick request_id 1 on the same world. Request ids must be
-    // unique per world while pending; the second is rejected explicitly
-    // (correlated failure) so results can never be misattributed.
+    // Both clients pick request id 1 on the same world. Phase 16 fix: the
+    // gateway namespaces correlation by its own allocated id, so both calls
+    // are accepted and each client receives exactly its own result — never
+    // the other's (no cross-consumption, no spurious rejection).
     for client in [&mut a, &mut b] {
         send_client(
             client,
@@ -1222,31 +1284,25 @@ fn concurrent_pending_calls_across_clients_never_cross_consume_results() {
         );
     }
     gateway.process_inbound();
-    assert_eq!(gateway.metrics().reducer_calls_accepted, 1);
-    assert_eq!(gateway.metrics().reducer_calls_rejected, 1);
+    assert_eq!(gateway.metrics().reducer_calls_accepted, 2);
+    assert_eq!(gateway.metrics().reducer_calls_rejected, 0);
 
-    // B receives its correlated rejection immediately.
-    let msg = recv_server(&mut b, max);
-    assert!(matches!(
-        msg,
-        ServerMessage::ReducerResult { request_id: 1, ok: false, .. }
-    ));
-
-    // A's call executes and A receives exactly one terminal result.
+    // Both calls execute; each client receives exactly one terminal result
+    // correlated to its own request id 1, and never the other client's.
     gateway.step_worlds().unwrap();
-    let msg = recv_server(&mut a, max);
-    assert!(matches!(msg, ServerMessage::TickUpdate { .. })); // the tick broadcast
-    let msg = recv_server(&mut a, max);
-    assert!(matches!(
-        msg,
-        ServerMessage::ReducerResult { request_id: 1, .. }
-    ));
-    // B (attached to the same world) received the tick broadcast, but never
-    // A's result: exactly one terminal result per client, never shared.
-    let msg = recv_server(&mut b, max);
-    assert!(matches!(msg, ServerMessage::TickUpdate { .. }));
-    assert!(a.try_recv_frame().unwrap().is_none());
-    assert!(b.try_recv_frame().unwrap().is_none());
+    let drain_results = |client: &mut MemoryConnection| -> Vec<u64> {
+        let mut results = Vec::new();
+        while let Some(frame) = client.try_recv_frame().unwrap() {
+            if let ServerMessage::ReducerResult { request_id, .. } =
+                protocol::decode_server(&frame, max).unwrap()
+            {
+                results.push(request_id);
+            }
+        }
+        results
+    };
+    assert_eq!(drain_results(&mut a), vec![1], "A gets its own result only");
+    assert_eq!(drain_results(&mut b), vec![1], "B gets its own result only");
 }
 
 #[test]
@@ -1812,4 +1868,265 @@ fn reducer_calls_stamp_the_authenticated_caller_identity() {
         other => panic!("expected a successful ReducerResult, got {other:?}"),
     }
     assert_eq!(gateway.metrics().reducer_calls_rejected, 0);
+}
+
+// ------------------------------------------------------------ rate limits
+
+/// A gateway whose rate limits are tiny so tests can exhaust them quickly.
+fn rate_gateway(limits: crate::rate::RateLimitConfig) -> NetworkGateway {
+    let config = NetworkConfig::new().with_rate_limits(limits);
+    gateway_with(reducer_factory(), config)
+}
+
+#[test]
+fn auth_rate_limit_rejects_after_the_window_budget() {
+    let mut gateway = rate_gateway(
+        crate::rate::RateLimitConfig::new().with_auth_per_window(2, 60),
+    );
+    create_world(&mut gateway, 0);
+    let (_, mut client) = connect_client(&mut gateway);
+    let max = gateway.config().max_frame_payload();
+
+    // Two attempts fit the window: one success, one already-authenticated
+    // rejection (still consumes a window slot).
+    authenticate(&mut gateway, &mut client, max, "alice-token");
+    send_client(
+        &mut client,
+        &ClientMessage::Authenticate { credentials: "bob-token".into() },
+        max,
+    );
+    gateway.process_inbound();
+    let msg = recv_server(&mut client, max);
+    assert!(
+        matches!(msg, ServerMessage::Error { code: 20, .. }),
+        "re-auth on an authenticated connection is rejected as code 20"
+    );
+
+    // A third attempt on the same connection is rejected with code 19.
+    send_client(
+        &mut client,
+        &ClientMessage::Authenticate { credentials: "bob-token".into() },
+        max,
+    );
+    gateway.process_inbound();
+    let msg = recv_server(&mut client, max);
+    assert!(matches!(
+        msg,
+        ServerMessage::Error { code: 19, ref message, .. }
+            if message.contains("rate limit")
+    ));
+    assert_eq!(gateway.metrics().rate_limited, 1);
+    assert_eq!(gateway.metrics().auth_failures, 0, "rejections are not auth failures");
+}
+
+#[test]
+fn input_rate_limit_rejects_after_the_second_budget() {
+    let mut gateway = rate_gateway(
+        crate::rate::RateLimitConfig::new().with_input_per_sec(2),
+    );
+    create_world(&mut gateway, 0);
+    let (_, mut client) = connect_client(&mut gateway);
+    let max = gateway.config().max_frame_payload();
+    join_world0(&mut gateway, &mut client, max, "alice-token");
+
+    // Two input frames fit the window.
+    for _ in 0..2 {
+        let mut frame = InputFrame::new(TickId::from_u64(0));
+        frame.push(InputCommand::new(1, "spawn", Some(Value::U64(1))).unwrap());
+        send_client(&mut client, &ClientMessage::InputFrame { frame }, max);
+        gateway.process_inbound();
+    }
+    assert_eq!(gateway.metrics().inputs_accepted, 2);
+
+    // The third is rejected explicitly — never silently dropped.
+    let mut frame = InputFrame::new(TickId::from_u64(0));
+    frame.push(InputCommand::new(1, "spawn", Some(Value::U64(2))).unwrap());
+    send_client(&mut client, &ClientMessage::InputFrame { frame }, max);
+    gateway.process_inbound();
+    let msg = recv_server(&mut client, max);
+    assert!(matches!(
+        msg,
+        ServerMessage::Error { code: 19, .. }
+    ));
+    assert_eq!(gateway.metrics().inputs_accepted, 2);
+    assert_eq!(gateway.metrics().inputs_rejected, 0, "rate rejection is counted separately");
+    assert_eq!(gateway.metrics().rate_limited, 1);
+}
+
+#[test]
+fn reducer_rate_limit_rejects_excess_calls() {
+    let mut gateway = rate_gateway(
+        crate::rate::RateLimitConfig::new().with_reducer_per_sec(2),
+    );
+    create_world(&mut gateway, 0);
+    let (_, mut client) = connect_client(&mut gateway);
+    let max = gateway.config().max_frame_payload();
+    join_world0(&mut gateway, &mut client, max, "alice-token");
+
+    for request in 1..=2 {
+        send_client(
+            &mut client,
+            &ClientMessage::CallReducer {
+                request_id: request,
+                reducer: "bump".into(),
+                args: ReducerArgs::new().insert("player", 1u64),
+            },
+            max,
+        );
+        gateway.process_inbound();
+    }
+    assert_eq!(gateway.metrics().reducer_calls_accepted, 2);
+
+    // The third call is rejected with a correlated error.
+    send_client(
+        &mut client,
+        &ClientMessage::CallReducer {
+            request_id: 3,
+            reducer: "bump".into(),
+            args: ReducerArgs::new().insert("player", 1u64),
+        },
+        max,
+    );
+    gateway.process_inbound();
+    let msg = recv_server(&mut client, max);
+    assert!(matches!(
+        msg,
+        ServerMessage::Error { code: 19, .. }
+    ));
+    assert_eq!(gateway.metrics().reducer_calls_accepted, 2);
+    assert_eq!(gateway.metrics().reducer_calls_rejected, 0);
+    assert_eq!(gateway.metrics().rate_limited, 1);
+}
+
+#[test]
+fn subscribe_rate_limit_rejects_excess_subscriptions() {
+    let mut gateway = rate_gateway(
+        crate::rate::RateLimitConfig::new().with_subscribe_per_window(1, 60),
+    );
+    create_world(&mut gateway, 0);
+    let (_, mut client) = connect_client(&mut gateway);
+    let max = gateway.config().max_frame_payload();
+    join_world0(&mut gateway, &mut client, max, "alice-token");
+
+    let query = Query::builder("players").build().unwrap();
+    send_client(
+        &mut client,
+        &ClientMessage::Subscribe { request_id: 1, query: query.clone() },
+        max,
+    );
+    gateway.process_inbound();
+    assert_eq!(gateway.metrics().subscriptions, 1);
+    // Drain the queued Initial snapshot so the rejection below is next.
+    drain_server(&mut client, max);
+
+    // A second subscription on the same connection exceeds the window.
+    send_client(
+        &mut client,
+        &ClientMessage::Subscribe { request_id: 2, query },
+        max,
+    );
+    gateway.process_inbound();
+    let msg = recv_server(&mut client, max);
+    assert!(matches!(
+        msg,
+        ServerMessage::Error { code: 19, request_id: 2, .. }
+    ));
+    assert_eq!(gateway.metrics().subscriptions, 1);
+    assert_eq!(gateway.metrics().rate_limited, 1);
+}
+
+#[test]
+fn resync_rate_limit_rejects_excess_resyncs() {
+    let mut gateway = rate_gateway(
+        crate::rate::RateLimitConfig::new().with_resync_per_window(1, 60),
+    );
+    create_world(&mut gateway, 0);
+    let (_, mut client) = connect_client(&mut gateway);
+    let max = gateway.config().max_frame_payload();
+    join_world0(&mut gateway, &mut client, max, "alice-token");
+
+    let query = Query::builder("players").build().unwrap();
+    send_client(
+        &mut client,
+        &ClientMessage::Subscribe { request_id: 1, query },
+        max,
+    );
+    gateway.process_inbound();
+    // Drain the Initial snapshot.
+    let sub = match recv_server(&mut client, max) {
+        ServerMessage::SubscriptionSnapshot { subscription, .. } => subscription,
+        other => panic!("expected a snapshot, got {other:?}"),
+    };
+
+    send_client(
+        &mut client,
+        &ClientMessage::Resync { subscription: sub },
+        max,
+    );
+    gateway.process_inbound();
+    // The resync regenerates a snapshot (allowed once) — drain it.
+    drain_server(&mut client, max);
+
+    // A second resync within the same window is rejected.
+    send_client(
+        &mut client,
+        &ClientMessage::Resync { subscription: sub },
+        max,
+    );
+    gateway.process_inbound();
+    let msg = recv_server(&mut client, max);
+    assert!(matches!(
+        msg,
+        ServerMessage::Error { code: 19, .. }
+    ));
+    assert_eq!(gateway.metrics().rate_limited, 1);
+}
+
+#[test]
+fn rate_limits_are_per_connection_not_global() {
+    // A tight input budget on one connection must not throttle another.
+    let mut gateway = rate_gateway(
+        crate::rate::RateLimitConfig::new().with_input_per_sec(1),
+    );
+    create_world(&mut gateway, 0);
+    let (_, mut client_a) = connect_client(&mut gateway);
+    let (_, mut client_b) = connect_client(&mut gateway);
+    let max = gateway.config().max_frame_payload();
+    join_world0(&mut gateway, &mut client_a, max, "alice-token");
+    join_world0(&mut gateway, &mut client_b, max, "bob-token");
+
+    for (client, id) in [(&mut client_a, 1u64), (&mut client_b, 2u64)] {
+        let mut frame = InputFrame::new(TickId::from_u64(0));
+        frame.push(InputCommand::new(1, "spawn", Some(Value::U64(id))).unwrap());
+        send_client(client, &ClientMessage::InputFrame { frame }, max);
+        gateway.process_inbound();
+    }
+    assert_eq!(gateway.metrics().inputs_accepted, 2);
+    // A is now exhausted; B still has its own budget.
+    let mut frame = InputFrame::new(TickId::from_u64(0));
+    frame.push(InputCommand::new(1, "spawn", Some(Value::U64(3))).unwrap());
+    send_client(&mut client_a, &ClientMessage::InputFrame { frame }, max);
+    gateway.process_inbound();
+    let msg = recv_server(&mut client_a, max);
+    assert!(matches!(msg, ServerMessage::Error { code: 19, .. }));
+    assert_eq!(gateway.metrics().inputs_accepted, 2);
+    assert_eq!(gateway.metrics().rate_limited, 1);
+}
+
+#[test]
+fn invalid_rate_configs_are_rejected_at_startup() {
+    for limits in [
+        crate::rate::RateLimitConfig::new().with_auth_per_window(0, 60),
+        crate::rate::RateLimitConfig::new().with_input_per_sec(0),
+        crate::rate::RateLimitConfig::new().with_reducer_per_sec(0),
+        crate::rate::RateLimitConfig::new().with_subscribe_per_window(0, 60),
+        crate::rate::RateLimitConfig::new().with_resync_per_window(0, 60),
+    ] {
+        let config = NetworkConfig::new().with_rate_limits(limits);
+        let runtime = Runtime::new(RuntimeConfig::new(reducer_factory())).unwrap();
+        assert!(
+            NetworkGateway::new(runtime, config, Arc::new(test_authenticator())).is_err(),
+            "zero-limit configs must fail at startup"
+        );
+    }
 }

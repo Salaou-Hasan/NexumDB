@@ -59,7 +59,8 @@ pub struct RuntimeMetrics {
 }
 
 impl RuntimeMetrics {
-    pub(crate) fn empty() -> Self {
+    /// A zeroed metrics snapshot (before any operation).
+    pub fn empty() -> Self {
         Self {
             workers: 0,
             worlds: 0,

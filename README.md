@@ -169,6 +169,49 @@ cargo run --release -p nexum-bench -- --scale 1_000_000
 cargo run --release -p nexum-bench -- --large-tick 10_000_000 100
 ```
 
+## Production (Phase 16)
+
+Phase 16 (see the [full report](docs/reports/16-production.md)) hardened
+Nexum for production and measured its real concurrent-user ceiling:
+
+- **Production config**: one validated `ServerConfig` (`key = value` file +
+  CLI overrides) covering network bounds, queues, persistence, rate limits,
+  tick rate, seed, logging, and a static token→principal auth table.
+  Invalid configs fail at startup.
+  `cargo run -p game-server -- server --config server.conf`
+- **Rate limiting**: per-connection token buckets (auth, input/s,
+  reducer/s, subscribe, resync) with explicit `19` errors — never silent
+  drops, never inside the simulation.
+- **Graceful shutdown**: SIGINT/SIGTERM (via `ctrlc`), a stop-file, or
+  `--stop-after N` → drain inbound → flush every world's WAL → exit 0.
+- **Observability**: leveled structured logging + aggregate metrics
+  snapshot (runtime + network + game + memory estimate).
+- **Release profile**: LTO (fat), single codegen unit, panic=unwind.
+
+**CCU (honest, measured on this laptop, in-process transport, real
+protocol/gateway/runtime/world/SDK):**
+
+| CCU (connection-only) | tick p99 | 50 ms budget | class |
+|---|---|---|---|
+| 1K | 2.8 ms | ✓ | PASS |
+| 5K | 15.5 ms | ✓ | PASS |
+| 10K | 35.5 ms | ✓ | **PASS** |
+| 15K | 63.7 ms | ✗ | DEGRADED |
+| 20K | 75.5 ms | ✗ | DEGRADED |
+
+10,000 concurrent connections pass; 15–20K connect without loss but exceed
+the tick budget. Realistic gameplay (movement + combat) saturates at ~500
+clients because the arena's `move_player` reducer full-scans the players
+row-set per call — an indexing/interest-management change, not a core
+engine change. The harness also exposed and we fixed a real bug:
+cross-client request-ID collision in the gateway (all SDK clients start
+request ids at 1). Reproduce:
+
+```bash
+cargo run --release -p game-server --example ccu -- --clients 10000 --profile A --ticks 100
+cargo run --release -p game-server --example ccu -- --clients 500 --profile C --ticks 100
+```
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

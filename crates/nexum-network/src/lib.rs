@@ -46,11 +46,13 @@ pub mod gateway;
 pub mod metrics;
 pub mod policy;
 pub mod protocol;
+pub mod rate;
 pub mod session;
 pub mod transport;
 
 pub use auth::{Authenticator, Principal, TokenAuthenticator};
 pub use config::{NetworkConfig, NetworkEvent, OutboundOverflowPolicy};
+pub use rate::RateLimitConfig;
 pub use control::{ControlPlane, HealthReport};
 pub use error::{AuthError, NetworkError, ProtocolError};
 pub use gateway::{NetworkGateway, ProcessReport, StepReport, CALLER_SOURCE_ARG, SERVER_REQUEST_MSB};

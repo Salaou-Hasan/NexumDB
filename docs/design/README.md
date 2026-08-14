@@ -81,6 +81,20 @@ is implemented.
   removal, and the bench-harness no-op-update correction. Results and
   scaling analysis: [reports/15-performance.md](../reports/15-performance.md).
 
+## Completed (Phase 16)
+
+- [16-production.md](16-production.md) — Production hardening & release
+  (canonical Phase 16): validated aggregated `ServerConfig` (config file +
+  CLI), gateway rate limiting (per-connection token buckets), graceful
+  shutdown (ctrlc/stop-file/`--stop-after`, drain-then-flush WAL), leveled
+  logging + aggregate metrics, the release profile (LTO), and the CCU load
+  harness with honest PASS/DEGRADED measurements (10K PASS, 15–20K
+  DEGRADED, connection-only; ~500 realistic-gameplay on full-scan
+  reducers). Findings: the cross-client request-ID collision the harness
+  exposed (fixed). Report:
+  [reports/16-production.md](../reports/16-production.md).
+
 ## Planned topics
 
-- Production hardening & release (Phase 16)
+- None — the canonical roadmap (Phases 1–16) is complete. Future work is
+  tracked in the Phase 16 design (`Future Work`).

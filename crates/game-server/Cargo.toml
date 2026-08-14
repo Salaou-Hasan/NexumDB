@@ -18,6 +18,7 @@ nexum-sdk.workspace = true
 nexum-subscription.workspace = true
 nexum-wasm.workspace = true
 wat = "1.256"
+ctrlc = "3.4"
 
 [[bin]]
 name = "game-server"

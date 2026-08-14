@@ -8,6 +8,8 @@
 
 use nexum_core::{ConnectionId, Error, Result, WorldId};
 
+use crate::rate::RateLimitConfig;
+
 /// What the gateway does when a connection's bounded outbound queue is
 /// full (ADR-011 D5). Simulation, WAL, and other clients are never blocked
 /// either way.
@@ -62,6 +64,7 @@ pub struct NetworkConfig {
     pub(crate) max_pending_calls_per_connection: usize,
     pub(crate) overflow_policy: OutboundOverflowPolicy,
     pub(crate) event_log_limit: usize,
+    pub(crate) rate_limits: RateLimitConfig,
 }
 
 impl Default for NetworkConfig {
@@ -78,6 +81,7 @@ impl Default for NetworkConfig {
             max_pending_calls_per_connection: 64,
             overflow_policy: OutboundOverflowPolicy::Stale,
             event_log_limit: 1_024,
+            rate_limits: RateLimitConfig::default(),
         }
     }
 }
@@ -157,6 +161,12 @@ impl NetworkConfig {
         self
     }
 
+    /// Sets the per-connection rate limits (validated with the rest).
+    pub fn with_rate_limits(mut self, limits: RateLimitConfig) -> Self {
+        self.rate_limits = limits;
+        self
+    }
+
     /// Validates every bound. Called by `NetworkGateway::new`.
     pub fn validate(&self) -> Result<()> {
         if self.max_frame_payload == 0 {
@@ -203,6 +213,9 @@ impl NetworkConfig {
         if self.event_log_limit == 0 {
             return Err(Error::invalid_argument("event_log_limit must be at least 1"));
         }
+        self.rate_limits
+            .validate()
+            .map_err(Error::invalid_argument)?;
         Ok(())
     }
 
@@ -260,6 +273,11 @@ impl NetworkConfig {
     pub fn event_log_limit(&self) -> usize {
         self.event_log_limit
     }
+
+    /// The per-connection rate limits.
+    pub fn rate_limits(&self) -> &RateLimitConfig {
+        &self.rate_limits
+    }
 }
 
 impl std::fmt::Debug for NetworkConfig {
@@ -279,6 +297,7 @@ impl std::fmt::Debug for NetworkConfig {
             )
             .field("overflow_policy", &self.overflow_policy)
             .field("event_log_limit", &self.event_log_limit)
+            .field("rate_limits", &self.rate_limits)
             .finish()
     }
 }
