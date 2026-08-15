@@ -52,6 +52,21 @@ pub struct IndexDef {
 }
 
 impl IndexDef {
+    /// Builds an index definition directly.
+    ///
+    /// Used to add a derived index to an **existing** table (recovery
+    /// compatibility, ADR-017): the schema builder validates names at build
+    /// time, but a persisted table cannot be re-declared, so the definition
+    /// is constructed here and validated by `Table::add_index` (name
+    /// non-empty, not `"primary"`, not duplicate, columns resolvable).
+    pub fn new(name: impl Into<String>, columns: &[&str], unique: bool) -> Self {
+        Self {
+            name: name.into(),
+            columns: columns.iter().map(|name| (*name).to_owned()).collect(),
+            unique,
+        }
+    }
+
     /// Returns the index name.
     pub fn name(&self) -> &str {
         &self.name

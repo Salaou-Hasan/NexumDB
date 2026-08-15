@@ -40,6 +40,14 @@ pub const FIRE_DAMAGE: i64 = 25;
 /// The `players` table (authoritative gameplay state).
 pub const TABLE: &str = "players";
 
+/// The primary-key index of the `players` table (on `id`).
+pub const PK: &str = "primary";
+/// The non-unique secondary index on `(x, y)`: the derived position index
+/// used by the cell-occupancy check and the combat target lookup. Indexes
+/// are derived infrastructure (ADR-002 D5) — authoritative position stays in
+/// the row columns.
+pub const POS_INDEX: &str = "pos";
+
 /// Column indices of the `players` table (all numeric; every value is a
 /// 1-byte tag + fixed payload, which the WASM reducer relies on).
 /// The `id` column (U64, primary key).
@@ -94,10 +102,20 @@ fn get(row: &Row, column: usize) -> i64 {
     as_i64(row.get(column))
 }
 
-/// Finds the row whose id column equals `player_id`.
-fn find_player(rows: &[(RowId, Row)], player_id: u64) -> Option<&(RowId, Row)> {
-    rows.iter()
-        .find(|(_, row)| row.get(COL_ID) == Some(&Value::U64(player_id)))
+/// Fetches the row whose primary key equals `player_id` through the
+/// transaction's logical view, returning `(row_id, row)`.
+///
+/// O(log N): the primary-key index is the proven Phase-15 fast path — never
+/// a table scan (Phase 17 hot-path discipline).
+fn player_by_id(ctx: &mut ReducerContext, player_id: u64) -> Result<Option<(RowId, Row)>> {
+    let owners = ctx.lookup_unique(TABLE, PK, &[Value::U64(player_id)])?;
+    let Some(&row_id) = owners.first() else {
+        return Ok(None);
+    };
+    match ctx.get(TABLE, row_id)? {
+        Some(row) => Ok(Some((row_id, row))),
+        None => Ok(None),
+    }
 }
 
 /// Returns `row` with `column` replaced (consumes the row for chaining).
@@ -145,10 +163,9 @@ fn alive(player: &Row) -> bool {
 /// deterministic spawn point.
 pub fn player_join(ctx: &mut ReducerContext, args: &ReducerArgs) -> Result<Value> {
     let player_id = args.require_u64("player_id")?;
-    let rows = ctx.scan(TABLE)?;
-    if let Some((row_id, row)) = find_player(&rows, player_id) {
-        let row = with(row.clone(), COL_CONNECTED, Value::I64(1));
-        ctx.update(TABLE, *row_id, row)?;
+    if let Some((row_id, row)) = player_by_id(ctx, player_id)? {
+        let row = with(row, COL_CONNECTED, Value::I64(1));
+        ctx.update(TABLE, row_id, row)?;
         ctx.emit("rejoin", Value::U64(player_id))?;
         return Ok(Value::U64(player_id));
     }
@@ -177,10 +194,9 @@ pub fn player_join(ctx: &mut ReducerContext, args: &ReducerArgs) -> Result<Value
 /// persists so a reconnect reconstructs the current state.
 pub fn player_leave(ctx: &mut ReducerContext, args: &ReducerArgs) -> Result<Value> {
     let player_id = args.require_u64("player_id")?;
-    let rows = ctx.scan(TABLE)?;
-    if let Some((row_id, row)) = find_player(&rows, player_id) {
-        let row = with(row.clone(), COL_CONNECTED, Value::I64(0));
-        ctx.update(TABLE, *row_id, row)?;
+    if let Some((row_id, row)) = player_by_id(ctx, player_id)? {
+        let row = with(row, COL_CONNECTED, Value::I64(0));
+        ctx.update(TABLE, row_id, row)?;
         ctx.emit("leave", Value::U64(player_id))?;
     }
     Ok(Value::U64(player_id))
@@ -205,26 +221,28 @@ pub fn move_player(ctx: &mut ReducerContext, args: &ReducerArgs) -> Result<Value
             "dx and dy must each be -1, 0, or 1, and not both 0",
         ));
     }
-    let rows = ctx.scan(TABLE)?;
-    let (row_id, player) = find_player(&rows, caller)
-        .ok_or_else(|| Error::not_found("player"))?;
-    if !alive(player) {
+    let (row_id, player) = player_by_id(ctx, caller)?.ok_or_else(|| Error::not_found("player"))?;
+    if !alive(&player) {
         return Err(Error::invalid_argument("player is dead — respawn first"));
     }
-    if get(player, COL_CONNECTED) != 1 {
+    if get(&player, COL_CONNECTED) != 1 {
         return Err(Error::invalid_argument("player is disconnected"));
     }
-    let x = get(player, COL_X);
-    let y = get(player, COL_Y);
+    let x = get(&player, COL_X);
+    let y = get(&player, COL_Y);
     let nx = (x + dx).clamp(0, ARENA_WIDTH - 1);
     let ny = (y + dy).clamp(0, ARENA_HEIGHT - 1);
-    // No stacking: a cell occupied by another alive player is impassable
-    // (deterministic scan order).
-    let occupied = rows.iter().any(|(other_id, other)| {
-        *other_id != *row_id
-            && alive(other)
-            && get(other, COL_X) == nx
-            && get(other, COL_Y) == ny
+    // No stacking: a cell occupied by another alive player is impassable.
+    // The derived `(x, y)` index answers the cell query in O(log N + k)
+    // instead of a full-table scan (Phase 17 hot-path discipline). The index
+    // lookup records a table-epoch observation, so concurrent row mutations
+    // still conflict at commit (conservative phantom protection).
+    let occupants = ctx.lookup_index(TABLE, POS_INDEX, &[Value::I64(nx), Value::I64(ny)])?;
+    let occupied = occupants.iter().any(|&other_id| {
+        if other_id == row_id {
+            return false;
+        }
+        ctx.get(TABLE, other_id).ok().flatten().is_some_and(|other| alive(&other))
     });
     if occupied {
         return Err(Error::invalid_argument("cell is occupied"));
@@ -235,21 +253,19 @@ pub fn move_player(ctx: &mut ReducerContext, args: &ReducerArgs) -> Result<Value
         COL_FACING,
         Value::I64(facing),
     );
-    ctx.update(TABLE, *row_id, row)?;
+    ctx.update(TABLE, row_id, row)?;
     Ok(Value::U64(1))
 }
 
 /// `reload_weapon` — client-callable. Refills the caller's ammunition.
 pub fn reload_weapon(ctx: &mut ReducerContext, args: &ReducerArgs) -> Result<Value> {
     let caller = args.require_u64(CALLER_SOURCE_ARG)?;
-    let rows = ctx.scan(TABLE)?;
-    let (row_id, player) = find_player(&rows, caller)
-        .ok_or_else(|| Error::not_found("player"))?;
-    if !alive(player) {
+    let (row_id, player) = player_by_id(ctx, caller)?.ok_or_else(|| Error::not_found("player"))?;
+    if !alive(&player) {
         return Err(Error::invalid_argument("player is dead"));
     }
-    let row = with(player.clone(), COL_AMMO, Value::I64(START_AMMO));
-    ctx.update(TABLE, *row_id, row)?;
+    let row = with(player, COL_AMMO, Value::I64(START_AMMO));
+    ctx.update(TABLE, row_id, row)?;
     ctx.emit("reload", Value::U64(caller))?;
     Ok(Value::I64(START_AMMO))
 }
@@ -259,17 +275,15 @@ pub fn reload_weapon(ctx: &mut ReducerContext, args: &ReducerArgs) -> Result<Val
 /// point, hp/cooldown/ammo reset, score is kept.
 pub fn respawn_player(ctx: &mut ReducerContext, args: &ReducerArgs) -> Result<Value> {
     let caller = args.require_u64(CALLER_SOURCE_ARG)?;
-    let rows = ctx.scan(TABLE)?;
-    let (row_id, player) = find_player(&rows, caller)
-        .ok_or_else(|| Error::not_found("player"))?;
-    if alive(player) {
+    let (row_id, player) = player_by_id(ctx, caller)?.ok_or_else(|| Error::not_found("player"))?;
+    if alive(&player) {
         return Err(Error::invalid_argument("player is already alive"));
     }
     let (x, y) = spawn(caller);
     let row = with(
         with(
             with(
-                with(player.clone(), COL_X, Value::I64(x)),
+                with(player, COL_X, Value::I64(x)),
                 COL_Y,
                 Value::I64(y),
             ),
@@ -284,7 +298,7 @@ pub fn respawn_player(ctx: &mut ReducerContext, args: &ReducerArgs) -> Result<Va
         COL_AMMO,
         Value::I64(START_AMMO),
     );
-    ctx.update(TABLE, *row_id, row)?;
+    ctx.update(TABLE, row_id, row)?;
     ctx.emit("respawn", Value::U64(caller))?;
     Ok(Value::U64(1))
 }
@@ -297,17 +311,15 @@ pub fn take_damage(ctx: &mut ReducerContext, args: &ReducerArgs) -> Result<Value
         .get("amount")
         .and_then(Value::as_i64)
         .unwrap_or(0);
-    let rows = ctx.scan(TABLE)?;
-    let (row_id, player) = find_player(&rows, player_id)
-        .ok_or_else(|| Error::not_found("player"))?;
-    let hp = (get(player, COL_HP) - amount).max(0);
-    let row = with(player.clone(), COL_HP, Value::I64(hp));
+    let (row_id, player) = player_by_id(ctx, player_id)?.ok_or_else(|| Error::not_found("player"))?;
+    let hp = (get(&player, COL_HP) - amount).max(0);
+    let row = with(player, COL_HP, Value::I64(hp));
     let row = if hp == 0 {
         with(row, COL_ALIVE, Value::I64(0))
     } else {
         row
     };
-    ctx.update(TABLE, *row_id, row)?;
+    ctx.update(TABLE, row_id, row)?;
     ctx.emit("damage", Value::U64(player_id))?;
     if hp == 0 {
         ctx.emit("kill", Value::U64(player_id))?;
@@ -333,19 +345,17 @@ pub fn set_position(ctx: &mut ReducerContext, args: &ReducerArgs) -> Result<Valu
         .get("facing")
         .and_then(Value::as_i64)
         .unwrap_or(FACING_E);
-    let rows = ctx.scan(TABLE)?;
-    let (row_id, player) = find_player(&rows, player_id)
-        .ok_or_else(|| Error::not_found("player"))?;
+    let (row_id, player) = player_by_id(ctx, player_id)?.ok_or_else(|| Error::not_found("player"))?;
     let row = with(
         with(
-            with(player.clone(), COL_X, Value::I64(x)),
+            with(player, COL_X, Value::I64(x)),
             COL_Y,
             Value::I64(y),
         ),
         COL_FACING,
         Value::I64(facing),
     );
-    ctx.update(TABLE, *row_id, row)?;
+    ctx.update(TABLE, row_id, row)?;
     ctx.emit("warp", Value::U64(player_id))?;
     Ok(Value::U64(1))
 }
@@ -369,7 +379,9 @@ fn cooldown_tick(ctx: &mut SimulationContext, _frame: &InputFrame) -> Result<()>
 
 // -------------------------------------------------------------- factory
 
-/// Builds the `players` table if missing (idempotent across recovery).
+/// Builds the `players` table if missing, and ensures the derived position
+/// index exists (idempotent across recovery — a table persisted before the
+/// index was declared gets it added over existing rows).
 fn ensure_schema(store: &mut TableStore) {
     if store.table(TABLE).is_none() {
         let schema = TableSchema::builder(TABLE)
@@ -385,9 +397,18 @@ fn ensure_schema(store: &mut TableStore) {
             .column("ammo", nexum_core::ColumnType::I64)
             .column("connected", nexum_core::ColumnType::I64)
             .primary_key(&["id"])
+            .index(POS_INDEX, &["x", "y"])
             .build()
             .expect("valid players schema");
         store.create_table(schema).expect("players table created");
+    } else if store
+        .table(TABLE)
+        .is_some_and(|table| !table.index_names().any(|name| name == POS_INDEX))
+    {
+        let def = nexum_core::IndexDef::new(POS_INDEX, &["x", "y"], false);
+        store
+            .add_index(TABLE, def)
+            .expect("pos index added over existing rows");
     }
 }
 

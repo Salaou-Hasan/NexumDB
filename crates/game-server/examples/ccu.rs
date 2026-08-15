@@ -55,6 +55,9 @@ struct Args {
     /// clients never hold the whole table; Phase 15 measured full-table
     /// snapshots as O(N) per subscriber).
     window: u32,
+    /// Runtime per-world queued reducer-call cap (sized to the workload;
+    /// overflow is explicit backpressure, never silent loss).
+    queue: usize,
 }
 
 fn parse_args() -> Args {
@@ -66,6 +69,7 @@ fn parse_args() -> Args {
         partitions: 1,
         workers: 1,
         window: 32,
+        queue: 1 << 20,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -78,10 +82,12 @@ fn parse_args() -> Args {
             "--partitions" => args.partitions = value().parse().unwrap(),
             "--workers" => args.workers = value().parse().unwrap(),
             "--window" => args.window = value().parse().unwrap(),
+            "--queue" => args.queue = value().parse().unwrap(),
             "--help" | "-h" => {
                 println!(
                     "usage: ccu [--clients N] [--profile A|B|C|D] [--ticks N] \
-                     [--hz N] [--partitions N] [--workers N] [--window N]"
+                     [--hz N] [--partitions N] [--workers N] [--window N] \
+                     [--queue N]"
                 );
                 std::process::exit(0);
             }
@@ -109,7 +115,8 @@ struct SimClient {
 /// Boots the real stack with the arena game running and reducers exposed.
 fn boot(args: &Args) -> (GameServer, nexum_core::GameInstanceId) {
     let runtime_config = RuntimeConfig::new(game_factory())
-        .with_worker_count(args.workers);
+        .with_worker_count(args.workers)
+        .with_max_queued_reducer_calls(args.queue);
     let runtime = Runtime::new(runtime_config).expect("runtime");
     let network = NetworkConfig::new()
         .with_max_connections(args.clients.saturating_add(16))
@@ -191,6 +198,31 @@ fn step(server: &mut GameServer, clients: &mut [SimClient]) {
     server.gateway_mut().flush_outbound().expect("flush outbound");
     for sim in clients.iter_mut() {
         sim.client.pump().expect("client pump");
+    }
+}
+
+/// Server-side half of one step (inbound + tick + fan-out), timed separately
+/// from the client pumps for profiling.
+fn step_server(server: &mut GameServer) {
+    server.gateway_mut().process_inbound();
+    let _ = server.step();
+    server.gateway_mut().pump_subscriptions();
+    server.gateway_mut().flush_outbound().expect("flush outbound");
+}
+
+/// Client-side half: drain every client's inbound frames.
+fn step_clients(clients: &mut [SimClient]) {
+    for sim in clients.iter_mut() {
+        sim.client.pump().expect("client pump");
+    }
+}
+
+/// A realistic client consumes its event stream every tick (like a render
+/// loop); the harness must drain too, or queues grow over the measured run.
+fn drain_clients(clients: &mut [SimClient]) {
+    for sim in clients.iter_mut() {
+        sim.client.take_events();
+        sim.client.take_reducer_results();
     }
 }
 
@@ -296,7 +328,9 @@ fn main() {
     for tick in 0..args.ticks {
         drive_profile(args.profile, tick, &mut clients, args.hz);
         let tick_started = Instant::now();
-        step(&mut server, &mut clients);
+        step_server(&mut server);
+        step_clients(&mut clients);
+        drain_clients(&mut clients);
         tick_samples.push(tick_started.elapsed());
     }
     let measured_elapsed = measured_started.elapsed();

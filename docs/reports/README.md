@@ -15,15 +15,16 @@ and architecture decisions (ADRs) live in
 | [14b-playable-game.md](14b-playable-game.md) | 14 | The actual playable multiplayer arena game on the Nexum stack. |
 | [15-performance.md](15-performance.md) | 15 | Performance & benchmarking: methodology, results, bottlenecks, before/after. |
 | [16-production.md](16-production.md) | 16 | Production hardening & release: config, rate limits, shutdown, observability, CCU load measurements, security findings. |
+| [17-gameplay-hotpath.md](17-gameplay-hotpath.md) | 17 | Gameplay hot-path & CCU scaling: removed O(N) reducer scans, encode-once broadcast, subscription fan-out ceiling. |
 
-## CCU summary (Phase 16)
+## CCU summary (Phases 16–17)
 
-Connection-only CCU on the reference laptop (release, in-process transport,
-real protocol/gateway/runtime/world/SDK): **10K PASS** (tick p99 35 ms < 50
-ms budget), 15K DEGRADED (64 ms), 20K DEGRADED (75 ms). Realistic gameplay
-saturates ~500 clients on the arena's full-scan reducers. The harness
-found and we fixed a cross-client request-ID collision in the gateway.
-See [16-production.md](16-production.md).
+Connection-only CCU: **10K PASS** (tick p99 35 ms < 50 ms budget).
+Realistic gameplay: server-side reducer O(N) scans removed (30× improvement),
+but all-to-all subscription fan-out O(changes × subs) limits gameplay CCU
+at ~1K. Phase 20 (interest management) is the prerequisite for 10K+
+gameplay CCU.
+See [16-production.md](16-production.md) and [17-gameplay-hotpath.md](17-gameplay-hotpath.md).
 
 ## Benchmark summary (Phase 15)
 

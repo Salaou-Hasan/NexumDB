@@ -69,6 +69,17 @@ impl TableStore {
         Ok(())
     }
 
+    /// Adds a derived index to the named table, populating it from the
+    /// table's current rows (see [`Table::add_index`]).
+    ///
+    /// Returns [`Error::not_found`] if no such table exists.
+    pub fn add_index(&mut self, table: &str, def: nexum_core::IndexDef) -> Result<()> {
+        let table = self.tables.get_mut(table).ok_or_else(|| {
+            Error::not_found(format!("table '{table}' does not exist"))
+        })?;
+        table.add_index(def)
+    }
+
     /// Returns the named table, if it exists.
     pub fn table(&self, name: &str) -> Option<&Table> {
         self.tables.get(name)

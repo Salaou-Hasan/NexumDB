@@ -226,6 +226,53 @@ impl Table {
         Ok(ids.first().and_then(|id| self.storage.get_row(*id)))
     }
 
+    /// Adds a derived index to an existing table, populating it from the
+    /// current authoritative rows (one-time O(N) at call time).
+    ///
+    /// Used for recovery compatibility: a table persisted before an index
+    /// was declared keeps its old schema, so the index must be built over
+    /// existing rows rather than re-creating the table. Mirrors the
+    /// schema-construction path ([`Table::new`]): column positions are
+    /// resolved, a shell is built, and every row is committed into it.
+    /// Indexes stay derived — the authoritative rows are unchanged. A unique
+    /// index is validated against existing data and rejected (leaving the
+    /// table unchanged) if the data would violate it.
+    pub fn add_index(&mut self, def: nexum_core::IndexDef) -> Result<()> {
+        if def.name().is_empty() {
+            return Err(Error::invalid_argument("index name must not be empty"));
+        }
+        if def.name() == "primary" {
+            return Err(Error::invalid_argument(
+                "the primary key index cannot be added to an existing table",
+            ));
+        }
+        if self.indexes.contains_key(def.name()) {
+            return Err(Error::already_exists(format!(
+                "index '{}' already exists in table '{}'",
+                def.name(),
+                self.schema().name()
+            )));
+        }
+        let positions = self.schema().resolve_columns(def.columns())?;
+        let mut index = if def.is_unique() {
+            Index::unique(def.name().to_string(), positions)
+        } else {
+            Index::non_unique(def.name().to_string(), positions)
+        };
+        let rows: Vec<(RowId, Row)> = self
+            .storage
+            .scan()
+            .map(|(row_id, stored)| (row_id, stored.row().clone()))
+            .collect();
+        for (row_id, row) in rows {
+            let key = index.key_of(&row);
+            index.check_insert(&key)?;
+            index.commit_insert(key, row_id);
+        }
+        self.indexes.insert(def.name().to_string(), index);
+        Ok(())
+    }
+
     /// Looks up the ids of rows matching `key` in the named secondary index.
     ///
     /// Returns [`Error::not_found`] if no such index exists, or
@@ -349,6 +396,31 @@ impl Table {
     /// Returns the names of the table's secondary indexes.
     pub fn index_names(&self) -> impl Iterator<Item = &str> {
         self.indexes.keys().map(String::as_str)
+    }
+
+    /// Returns the index keys of `row` as `(index_name, key)` pairs: the
+    /// primary key under the reserved name `"primary"`, then **every**
+    /// secondary index (unique and non-unique).
+    ///
+    /// Used by the transaction engine's read-your-writes overlays to decide
+    /// whether a pending write owns a key in a named index. Secondary
+    /// indexes are sorted by name so the order is deterministic even though
+    /// the index map is a HashMap. Validates the row against the schema
+    /// first, so a malformed row is rejected instead of panicking.
+    pub fn index_keys(&self, row: &Row) -> Result<Vec<(String, Vec<Value>)>> {
+        self.schema().validate_row(row.values())?;
+        let mut keys = Vec::new();
+        if let Some(index) = &self.primary {
+            keys.push((index.name().to_string(), index.key_of(row)));
+        }
+        let mut secondary: Vec<(String, Vec<Value>)> = self
+            .indexes
+            .values()
+            .map(|index| (index.name().to_string(), index.key_of(row)))
+            .collect();
+        secondary.sort_by(|a, b| a.0.cmp(&b.0));
+        keys.extend(secondary);
+        Ok(keys)
     }
 
     /// Returns the unique-index keys of `row` as `(index_name, key)` pairs:
@@ -847,5 +919,81 @@ mod tests {
 
         // Row count matches scan count.
         assert_eq!(table.len(), table.scan().count());
+    }
+
+    /// A table with only a primary key — no secondary indexes yet.
+    fn bare_table() -> Table {
+        let schema = TableSchema::builder("players")
+            .column("id", ColumnType::U64)
+            .column("zone_id", ColumnType::U64)
+            .column("health", ColumnType::I32)
+            .column("level", ColumnType::U32)
+            .primary_key(&["id"])
+            .build()
+            .unwrap();
+        Table::new(TableId::from_u64(0), schema).unwrap()
+    }
+
+    #[test]
+    fn add_index_builds_over_existing_rows_and_stays_maintained() {
+        let mut table = bare_table();
+        let a = table.insert(row![1u64, 10u64, 100i32, 5u32]).unwrap();
+        let b = table.insert(row![2u64, 20u64, 90i32, 6u32]).unwrap();
+        let c = table.insert(row![3u64, 10u64, 80i32, 7u32]).unwrap();
+
+        // No index yet: lookup fails with NotFound.
+        assert!(table.lookup("by_zone", &[Value::U64(10)]).is_err());
+
+        // Add the derived index over the existing rows.
+        let def = nexum_core::IndexDef::new("by_zone", &["zone_id"], false);
+        table.add_index(def).unwrap();
+        assert_eq!(
+            table.lookup("by_zone", &[Value::U64(10)]).unwrap(),
+            vec![a, c],
+            "populated from existing rows, ascending"
+        );
+        assert_eq!(table.lookup("by_zone", &[Value::U64(20)]).unwrap(), vec![b]);
+
+        // The index stays transactionally maintained by later writes.
+        table.update(c, row![3u64, 30u64, 80i32, 7u32]).unwrap();
+        assert_eq!(table.lookup("by_zone", &[Value::U64(10)]).unwrap(), vec![a]);
+        assert_eq!(table.lookup("by_zone", &[Value::U64(30)]).unwrap(), vec![c]);
+        table.delete(a).unwrap();
+        assert!(table.lookup("by_zone", &[Value::U64(10)]).unwrap().is_empty());
+        assert_eq!(table.lookup("by_zone", &[Value::U64(20)]).unwrap(), vec![b]);
+        assert_eq!(table.len(), 2);
+    }
+
+    #[test]
+    fn add_index_rejects_primary_duplicate_and_empty_names() {
+        let mut table = bare_table();
+        table.insert(row![1u64, 10u64, 100i32, 5u32]).unwrap();
+
+        assert!(table.add_index(nexum_core::IndexDef::new("primary", &["id"], true)).is_err());
+        assert!(table.add_index(nexum_core::IndexDef::new("", &["zone_id"], false)).is_err());
+        table.add_index(nexum_core::IndexDef::new("by_zone", &["zone_id"], false)).unwrap();
+        // Duplicate name: rejected, and the existing index is untouched.
+        assert!(table.add_index(nexum_core::IndexDef::new("by_zone", &["level"], false)).is_err());
+        assert_eq!(
+            table.lookup("by_zone", &[Value::U64(10)]).unwrap(),
+            vec![RowId::from_u64(0)]
+        );
+    }
+
+    #[test]
+    fn add_index_unique_violation_is_rejected_without_mutation() {
+        let mut table = bare_table();
+        // Two rows share zone 10 — a *unique* index over zone_id is invalid.
+        table.insert(row![1u64, 10u64, 100i32, 5u32]).unwrap();
+        table.insert(row![2u64, 10u64, 90i32, 6u32]).unwrap();
+
+        assert!(table.add_index(nexum_core::IndexDef::new("by_zone", &["zone_id"], true)).is_err());
+        // The failed add left no index behind.
+        assert!(table.lookup("by_zone", &[Value::U64(10)]).is_err());
+        assert_eq!(table.len(), 2);
+
+        // The same columns work as a non-unique index.
+        table.add_index(nexum_core::IndexDef::new("by_zone", &["zone_id"], false)).unwrap();
+        assert_eq!(table.lookup("by_zone", &[Value::U64(10)]).unwrap().len(), 2);
     }
 }

@@ -372,6 +372,61 @@ impl Transaction {
         Ok(owners)
     }
 
+    /// Looks up the owners of `key` in the named **non-unique** secondary
+    /// index through the transaction's logical view.
+    ///
+    /// The non-unique counterpart of [`lookup_unique`](Self::lookup_unique)
+    /// with the identical semantics: committed owners that this transaction
+    /// logically deleted or updated away from the key are hidden; pending
+    /// `Insert`/`Update` writes owning the key are included; the result is
+    /// deterministically sorted and deduplicated; and a table mutation-epoch
+    /// observation is recorded (conservative phantom protection, ADR-004
+    /// D12–D13).
+    ///
+    /// Returns `[Error::not_found]` for an unknown index and
+    /// `[Error::invalid_argument]` for a malformed key (delegated to
+    /// `Table::lookup`).
+    pub fn lookup_index(
+        &mut self,
+        store: &TableStore,
+        table: &str,
+        index_name: &str,
+        key: &[Value],
+    ) -> Result<Vec<RowId>> {
+        self.ensure_active()?;
+        let table = resolve_table(store, table)?;
+        let table_id = table.id();
+        self.reads.record_table(table_id, table.epoch());
+
+        let mut owners: Vec<RowId> = Vec::new();
+        for owner in table.lookup(index_name, key)? {
+            let keep = match self.writes.get(table_id, owner) {
+                Some(WriteEntry::Delete) => false,
+                Some(WriteEntry::Update(pending)) => {
+                    row_owns_index_key(table, index_name, key, pending)?
+                }
+                Some(WriteEntry::Insert(_)) => true,
+                None => true,
+            };
+            if keep {
+                owners.push(owner);
+            }
+        }
+        for (write_table, row_id, entry) in self.writes.entries() {
+            if write_table != table_id {
+                continue;
+            }
+            if let Some(row) = entry.row()
+                && row_owns_index_key(table, index_name, key, row)?
+            {
+                owners.push(row_id);
+            }
+        }
+        owners.sort_unstable();
+        owners.dedup();
+        Ok(owners)
+    }
+
     /// Buffers an insert and returns a **provisional** `RowId` handle for it.
     ///
     /// The handle is valid only within this transaction: it can be passed to
@@ -511,6 +566,24 @@ fn row_owns_key(
 ) -> Result<bool> {
     Ok(table
         .unique_keys(row)?
+        .into_iter()
+        .any(|(name, k)| name == index_name && k == key))
+}
+
+/// Returns `true` if `row` owns `key` in the named **non-unique** secondary
+/// index.
+///
+/// Used by the read-your-writes overlay of [`Transaction::lookup_index`].
+/// `index_keys` validates the row against the schema, which is safe here
+/// because every write-set row was validated at write time.
+fn row_owns_index_key(
+    table: &nexum_table::Table,
+    index_name: &str,
+    key: &[Value],
+    row: &Row,
+) -> Result<bool> {
+    Ok(table
+        .index_keys(row)?
         .into_iter()
         .any(|(name, k)| name == index_name && k == key))
 }

@@ -6,7 +6,7 @@
 //! index consistency · Change records · coalescing matrix · provisional
 //! handles · lifecycle enforcement · determinism.
 
-use nexum_core::{ChangeKind, ColumnType, Error, TableSchema, Value};
+use nexum_core::{ChangeKind, ColumnType, Error, RowId, TableSchema, Value};
 use nexum_table::{row, TableStore};
 
 use crate::{Transaction, TransactionState};
@@ -1304,6 +1304,99 @@ fn lookup_unique_hides_logically_deleted_rows() {
         store.table("players").unwrap().lookup_unique("by_level", &[Value::U32(5)]).unwrap().len(),
         1
     );
+}
+
+#[test]
+fn lookup_index_overlays_pending_writes() {
+    let mut store = player_store();
+    let p0 = store
+        .table_mut("players")
+        .unwrap()
+        .insert(row![1u64, 10u64, 100i32, 5u32])
+        .unwrap();
+    let p1 = store
+        .table_mut("players")
+        .unwrap()
+        .insert(row![2u64, 20u64, 90i32, 6u32])
+        .unwrap();
+    store.drain_changes();
+
+    let mut tx = Transaction::begin(&mut store);
+    // Move p0 out of zone 10 and add a pending insert claiming zone 20.
+    tx.update(&store, "players", p0, row![1u64, 30u64, 100i32, 5u32]).unwrap();
+    let handle = tx.insert(&store, "players", row![3u64, 20u64, 80i32, 7u32]).unwrap();
+
+    // The pending insert is visible under its key (ascending ids, deduped)...
+    assert_eq!(
+        tx.lookup_index(&store, "players", "by_zone", &[Value::U64(20)]).unwrap(),
+        vec![p1, handle]
+    );
+    // ...the updated row's old key is released in the tx view...
+    assert!(tx.lookup_index(&store, "players", "by_zone", &[Value::U64(10)]).unwrap().is_empty());
+    // ...and its new key is visible.
+    assert_eq!(
+        tx.lookup_index(&store, "players", "by_zone", &[Value::U64(30)]).unwrap(),
+        vec![p0]
+    );
+
+    // It commits cleanly: the moved row and the pending insert land. The
+    // provisional handle becomes the engine-assigned real id (the next
+    // monotonic RowId).
+    tx.commit(&mut store).unwrap();
+    assert_eq!(
+        store.table("players").unwrap().lookup("by_zone", &[Value::U64(20)]).unwrap(),
+        vec![p1, RowId::from_u64(2)]
+    );
+    assert_eq!(
+        store.table("players").unwrap().lookup("by_zone", &[Value::U64(30)]).unwrap(),
+        vec![p0]
+    );
+}
+
+#[test]
+fn lookup_index_hides_logically_deleted_rows() {
+    let mut store = player_store();
+    let p0 = store
+        .table_mut("players")
+        .unwrap()
+        .insert(row![1u64, 10u64, 100i32, 5u32])
+        .unwrap();
+    store.drain_changes();
+
+    let mut tx = Transaction::begin(&mut store);
+    tx.delete(&store, "players", p0).unwrap();
+    // The logically-deleted row no longer owns zone 10 in the tx view.
+    assert!(tx.lookup_index(&store, "players", "by_zone", &[Value::U64(10)]).unwrap().is_empty());
+
+    // delete X then insert a new X with the same zone must be visible.
+    let handle = tx.insert(&store, "players", row![9u64, 10u64, 1i32, 9u32]).unwrap();
+    assert_eq!(
+        tx.lookup_index(&store, "players", "by_zone", &[Value::U64(10)]).unwrap(),
+        vec![handle]
+    );
+}
+
+#[test]
+fn lookup_index_results_are_sorted_ascending() {
+    let mut store = player_store();
+    // Insert zone-10 rows with non-ascending primary-key *values*: engine
+    // RowIds are assigned monotonically, so ascending RowId output proves
+    // the index (and the transaction overlay) sorts deterministically.
+    let mut ids = Vec::new();
+    for id in [3u64, 1u64, 2u64] {
+        ids.push(
+            store
+                .table_mut("players")
+                .unwrap()
+                .insert(row![id, 10u64, 100i32, id as u32])
+                .unwrap(),
+        );
+    }
+    store.drain_changes();
+
+    let mut tx = Transaction::begin(&mut store);
+    let owners = tx.lookup_index(&store, "players", "by_zone", &[Value::U64(10)]).unwrap();
+    assert_eq!(owners, ids, "ascending RowId order, matching the committed set");
 }
 
 // ------------------------------------- correction: write-time version capture

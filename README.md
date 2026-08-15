@@ -200,10 +200,10 @@ protocol/gateway/runtime/world/SDK):**
 | 20K | 75.5 ms | ✗ | DEGRADED |
 
 10,000 concurrent connections pass; 15–20K connect without loss but exceed
-the tick budget. Realistic gameplay (movement + combat) saturates at ~500
-clients because the arena's `move_player` reducer full-scans the players
-row-set per call — an indexing/interest-management change, not a core
-engine change. The harness also exposed and we fixed a real bug:
+the tick budget. Realistic gameplay now uses direct PK/index lookups (Phase 17 fixed the
+full-scan bottleneck — 30× server-side improvement) but remains bounded
+by the subscription engine's all-to-all fan-out O(changes × subscriptions)
+per tick, which is the Phase 20 interest-management target. The harness also exposed and we fixed a real bug:
 cross-client request-ID collision in the gateway (all SDK clients start
 request ids at 1). Reproduce:
 
@@ -211,6 +211,23 @@ request ids at 1). Reproduce:
 cargo run --release -p game-server --example ccu -- --clients 10000 --profile A --ticks 100
 cargo run --release -p game-server --example ccu -- --clients 500 --profile C --ticks 100
 ```
+
+## Gameplay Hot-Path (Phase 17)
+
+Phase 17 (see the [full report](docs/reports/17-gameplay-hotpath.md))
+removed accidental O(N) game-reducer scans and measured the honest CCU
+ceiling after those fixes:
+
+- **Game reducers**: all 7 native reducers + WASM `fire_weapon` now use
+  direct PK/index lookups — server-side profile D @ 500: **83ms → 2.7ms
+  (30×)**.
+- **TickUpdate encode-once**: gateway encodes the full change set once
+  per world and clones bytes to each connection — 51ms → 3ms at 1K.
+- **New APIs**: `Transaction::lookup_index`, `ReducerContext::lookup_index`,
+  `OP_LOOKUP_INDEX` (WASM op 9), `Table::add_index`.
+- **CCU**: connection-only 10K PASS; gameplay profiles saturate at ~1K due
+  to the subscription engine's all-to-all fan-out O(changes × subs),
+  which is explicitly Phase 20 scope.
 
 ## License
 

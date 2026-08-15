@@ -24,7 +24,7 @@ use crate::abi::{
     decode_emit, decode_insert, decode_lookup, decode_table, decode_table_row, decode_update,
     encode_get_result, encode_insert_result, encode_lookup_result, encode_scan_result,
     envelope_err, envelope_ok, opcode, OP_CONTAINS, OP_DELETE, OP_EMIT, OP_GET, OP_INSERT,
-    OP_LOOKUP_UNIQUE, OP_SCAN, OP_UPDATE,
+    OP_LOOKUP_INDEX, OP_LOOKUP_UNIQUE, OP_SCAN, OP_UPDATE,
 };
 use crate::limits::WasmLimits;
 
@@ -217,6 +217,7 @@ fn handle_op(state: &mut HostState<'_, '_>, op: u32, args: &[u8]) -> Vec<u8> {
         Ok(OP_CONTAINS) => op_contains(ctx, args),
         Ok(OP_SCAN) => op_scan(ctx, args, max_scan_bytes),
         Ok(OP_LOOKUP_UNIQUE) => op_lookup_unique(ctx, args, max_scan_bytes),
+        Ok(OP_LOOKUP_INDEX) => op_lookup_index(ctx, args, max_scan_bytes),
         Ok(OP_INSERT) => op_insert(ctx, args),
         Ok(OP_UPDATE) => op_update(ctx, args),
         Ok(OP_DELETE) => op_delete(ctx, args),
@@ -306,6 +307,28 @@ fn op_lookup_unique(
     if bytes.len() > max_scan_bytes {
         return Err(Error::capacity(format!(
             "unique lookup on table '{table}' exceeds the configured result limit"
+        )));
+    }
+    Ok(bytes)
+}
+
+fn op_lookup_index(
+    ctx: &mut ReducerContext<'_>,
+    args: &[u8],
+    max_scan_bytes: usize,
+) -> Result<Vec<u8>, Error> {
+    let (table, index, key) = decode(decode_lookup(&mut &*args))?;
+    let owners = ctx.lookup_index(&table, &index, &key)?;
+    // Fast reject before encoding: each owner encodes to 8 bytes.
+    if owners.len() > max_scan_bytes / 8 {
+        return Err(Error::capacity(format!(
+            "index lookup on table '{table}' exceeds the configured result limit"
+        )));
+    }
+    let bytes = encode_lookup_result(&owners);
+    if bytes.len() > max_scan_bytes {
+        return Err(Error::capacity(format!(
+            "index lookup on table '{table}' exceeds the configured result limit"
         )));
     }
     Ok(bytes)

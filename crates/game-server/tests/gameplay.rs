@@ -547,3 +547,69 @@ fn wasm_module_same_inputs_same_state_produce_identical_results() {
     let rows_b = scan_players(&b);
     assert_eq!(rows_a, rows_b, "identical final state");
 }
+
+// ------------------------------------------------- Phase 17 hot-path scale
+
+/// A deterministic many-player regression test for the Phase 17 hot-path
+/// reducers: 96 players join, then every player moves east every tick for 12
+/// ticks. Exercises the primary-key lookup path (`player_by_id`) and the
+/// derived `(x, y)` index occupancy check at scale. Proves: every call gets a
+/// result (no silent loss), positions stay in the arena, and two identical
+/// worlds under identical inputs reach identical authoritative state.
+#[test]
+fn many_players_move_through_pk_and_position_index_deterministically() {
+    const N: u64 = 96;
+    const TICKS: usize = 12;
+
+    let run = |seed: u64| -> Vec<(u64, i64, i64, i64)> {
+        let mut world = world(seed);
+        for id in 1..=N {
+            join_player(&mut world, id);
+        }
+        for _tick in 0..TICKS {
+            let frame = InputFrame::new(world.tick_number());
+            let calls: Vec<ReducerCall> = (1..=N)
+                .map(|id| {
+                    ReducerCall::new(
+                        id,
+                        "move_player",
+                        ReducerArgs::new()
+                            .insert(CALLER_SOURCE_ARG, id)
+                            .insert("dx", 1i64)
+                            .insert("dy", 0i64),
+                    )
+                    .unwrap()
+                })
+                .collect();
+            let result = world.tick_with_calls(&frame, &[], &calls).unwrap();
+            assert_eq!(
+                result.reducer_results().len(),
+                N as usize,
+                "every move call produced a result — nothing silently lost"
+            );
+        }
+        // Deterministic final state, keyed by player id.
+        let mut state: Vec<(u64, i64, i64, i64)> = scan_players(&world)
+            .iter()
+            .map(|(_, row)| {
+                (
+                    row.get(0).and_then(Value::as_u64).unwrap(),
+                    get(row, COL_X),
+                    get(row, COL_Y),
+                    get(row, COL_ALIVE),
+                )
+            })
+            .collect();
+        state.sort_unstable();
+        assert!(state.iter().all(|(_, x, y, _)| *x >= 0
+            && *x < game_server::game::ARENA_WIDTH
+            && *y >= 0
+            && *y < game_server::game::ARENA_HEIGHT));
+        state
+    };
+
+    let state_a = run(99);
+    let state_b = run(99);
+    assert_eq!(state_a, state_b, "identical inputs ⇒ identical authoritative state");
+    assert_eq!(state_a.len(), N as usize, "all players still present");
+}

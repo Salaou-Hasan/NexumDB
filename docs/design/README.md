@@ -94,7 +94,21 @@ is implemented.
   exposed (fixed). Report:
   [reports/16-production.md](../reports/16-production.md).
 
+## Completed (Phase 17)
+
+- [17-gameplay-hotpath.md](17-gameplay-hotpath.md) — Gameplay hot-path &
+  CCU scaling (canonical Phase 17): removed O(N) game-reducer scans
+  (all 7 native reducers + WASM fire_weapon → direct PK/index lookup),
+  fixed TickUpdate re-encode-per-client → encode-once broadcast, added
+  `Transaction::lookup_index` / `ReducerContext::lookup_index` /
+  `OP_LOOKUP_INDEX` (WASM op 9) / `Table::add_index` for recovery-
+  compatible post-creation indexing. Measured honest CCU: 10K PASS
+  (connection-only), gameplay profiles SATURATED due to subscription
+  all-to-all fan-out O(changes × subs) — explicitly Phase 20 scope.
+  Server-side profile D @ 500: 83ms → 2.7ms (30×). Report:
+  [reports/17-gameplay-hotpath.md](../reports/17-gameplay-hotpath.md).
+
 ## Planned topics
 
-- None — the canonical roadmap (Phases 1–16) is complete. Future work is
-  tracked in the Phase 16 design (`Future Work`).
+- None — the canonical roadmap (Phases 1–17) is complete. Future work is
+  tracked in Phase 17/20 design (subscription interest management).

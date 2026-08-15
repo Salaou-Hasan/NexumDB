@@ -87,6 +87,19 @@ impl<'a> ReducerContext<'a> {
         self.tx.lookup_unique(self.store, table, index_name, key)
     }
 
+    /// Looks up the owners of `key` in the named non-unique secondary index,
+    /// through the transaction's logical view (the non-unique counterpart of
+    /// [`lookup_unique`](Self::lookup_unique), with the same pending-write
+    /// overlay and phantom protection).
+    pub fn lookup_index(
+        &mut self,
+        table: &str,
+        index_name: &str,
+        key: &[Value],
+    ) -> Result<Vec<RowId>> {
+        self.tx.lookup_index(self.store, table, index_name, key)
+    }
+
     /// Buffers an insert; returns a provisional `RowId` handle (storage
     /// assigns the real id at commit).
     pub fn insert(&mut self, table: &str, row: Row) -> Result<RowId> {

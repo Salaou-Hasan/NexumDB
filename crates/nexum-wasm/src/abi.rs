@@ -34,6 +34,9 @@ pub const OP_CONTAINS: u32 = 2;
 pub const OP_SCAN: u32 = 3;
 /// `LOOKUP_UNIQUE` owners of a key in a unique index (epoch observation).
 pub const OP_LOOKUP_UNIQUE: u32 = 4;
+/// `LOOKUP_INDEX` owners of a key in a non-unique secondary index (epoch
+/// observation). Same wire format as `OP_LOOKUP_UNIQUE`.
+pub const OP_LOOKUP_INDEX: u32 = 9;
 /// `INSERT` a row; returns the provisional row id.
 pub const OP_INSERT: u32 = 5;
 /// `UPDATE` a row.
@@ -49,7 +52,7 @@ pub const RET_REJECT: u32 = u32::MAX;
 
 /// Returns the opcode for a numeric code, or `InvalidArgument`.
 pub fn opcode(code: u32) -> Result<u32> {
-    if (OP_GET..=OP_EMIT).contains(&code) {
+    if (OP_GET..=OP_LOOKUP_INDEX).contains(&code) {
         Ok(code)
     } else {
         Err(Error::invalid_argument(format!("unknown ABI opcode {code}")))
@@ -394,8 +397,9 @@ mod tests {
     #[test]
     fn unknown_opcode_is_rejected() {
         assert!(opcode(0).is_err());
-        assert!(opcode(9).is_err());
+        assert!(opcode(10).is_err());
         assert_eq!(opcode(OP_GET).unwrap(), OP_GET);
         assert_eq!(opcode(OP_EMIT).unwrap(), OP_EMIT);
+        assert_eq!(opcode(OP_LOOKUP_INDEX).unwrap(), OP_LOOKUP_INDEX);
     }
 }

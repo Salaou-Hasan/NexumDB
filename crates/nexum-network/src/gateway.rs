@@ -882,12 +882,26 @@ impl NetworkGateway {
         for (world, result) in results {
             let world = *world;
             report.worlds += 1;
+            // One TickUpdate per world, encoded **once** and cloned to every
+            // attached session (ADR-017 D4): re-encoding per connection was
+            // O(changes × clients) — the dominant fan-out cost at scale.
             let message = ServerMessage::TickUpdate {
                 world,
                 tick: result.tick(),
                 tx_id: result.tx_id(),
                 changes: result.changes().to_vec(),
                 events: result.events().to_vec(),
+            };
+            let frame = match protocol::encode_server(&message, self.config.max_frame_payload()) {
+                Ok(frame) => frame,
+                Err(_) => {
+                    // An encode failure (oversized frame) drops the whole
+                    // broadcast rather than failing the tick: the change set
+                    // is still committed authoritatively; clients get the
+                    // delta via their subscriptions.
+                    report.messages_dropped += 1;
+                    continue;
+                }
             };
             let attached: Vec<ConnectionId> = self
                 .connections
@@ -901,7 +915,7 @@ impl NetworkGateway {
                 .map(|(id, _)| *id)
                 .collect();
             for connection in attached {
-                if self.send(connection, &message).unwrap_or(false) {
+                if self.send_encoded(connection, frame.clone(), &message).unwrap_or(false) {
                     report.tick_updates_sent += 1;
                     self.metrics.tick_updates_sent += 1;
                 } else {
@@ -1035,6 +1049,21 @@ impl NetworkGateway {
         message: &ServerMessage,
     ) -> Result<bool, NetworkError> {
         let frame = protocol::encode_server(message, self.config.max_frame_payload())?;
+        self.send_encoded(connection, frame, message)
+    }
+
+    /// Sends a **pre-encoded** frame to a connection, applying the same
+    /// stale/overflow policy as [`send`](Self::send) (the message is used
+    /// only for the stale-signal classification). Encoding once and cloning
+    /// the bytes to every recipient avoids re-serializing a large message
+    /// (e.g. a `TickUpdate` carrying the whole change set) once per
+    /// connection — ADR-017 D4.
+    fn send_encoded(
+        &mut self,
+        connection: ConnectionId,
+        frame: Vec<u8>,
+        message: &ServerMessage,
+    ) -> Result<bool, NetworkError> {
         let entry = self
             .connections
             .get_mut(&connection)
