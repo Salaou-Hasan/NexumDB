@@ -33,6 +33,10 @@ Post-Phase-18 ladder (8–16 partitions × 8–16 workers, release, 20 Hz):
 - **Realistic (profile C):** movement plus the simultaneous fire burst
   (wasmi re-instantiation per call): 10K ≈ 0.8 s, 15K ≈ 1.0 s fire tick
   (Phase 22). 15–20K *gameplay* CCU is NOT yet claimed.
+- **Memory (measured RSS, profile A):** steady state ≈ 5.7 MB + 24.7 KB
+  private per connection (10K 251 MB, 15K 376 MB, 20K 502 MB); a mass
+  join storm without client consumption spikes several× (20K peak
+  4.1 GB, O(N²) un-drained SDK buffers — settled in ~2 s).
 
 See [18-multi-core.md](18-multi-core.md), [16-production.md](16-production.md),
 [17-gameplay-hotpath.md](17-gameplay-hotpath.md), and

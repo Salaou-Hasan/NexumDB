@@ -429,8 +429,13 @@ fn main() {
         metrics.frames_received, metrics.rate_limited);
     println!("game:  players_active={} games={} reducer_calls={}",
         game_metrics.players_active, game_metrics.games_active, game_metrics.reducer_calls);
-    println!("mem:   est.~{}MB (rows × 88B + conns × 2KB + 8MB base)",
-        (args.clients as u64).saturating_mul(2 * 1024) / (1024 * 1024) + 8);
+    // Calibrated to measured steady-state RSS (Phase 18 follow-up): the
+    // full stack (server + in-process SDK clients) needs ≈ 24.7 KB private
+    // per connection with a ~6 MB base — linear fit over 5K/10K/15K/20K
+    // measured samples. A mass-join storm without client consumption spikes
+    // several× higher (un-drained SDK event buffers).
+    println!("mem:   est.~{}MB (steady-state fit: ~24.7KB/conn + 6MB base, incl. in-process SDK clients; join storm spikes several×)",
+        (args.clients as u64).saturating_mul(25 * 1024) / (1024 * 1024) + 6);
 
     // ---- classification (honest, ADR-016 D4) ---------------------------
     let p99_over_budget = p99 > tick_budget;

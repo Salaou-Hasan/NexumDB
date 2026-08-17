@@ -186,3 +186,49 @@ Phase 22 (instance/linker reuse) is the fix.
   (p99 98–115 ms)** — bounded by gateway/SDK O(clients) work (Phase 21)
   and the WASM fire burst (Phase 22), not by the multi-core world tick.
 - 15–20K *gameplay* CCU is therefore NOT yet claimed.
+
+## 9. Measured process RSS (10K / 15K / 20K)
+
+Measured with a PowerShell sampler polling the harness process's
+`WorkingSet64` / `PrivateMemorySize64` every 200 ms through the whole run
+(connect + warmup + measured phase). All runs: profile A (connection
+only), 8 partitions × 8 workers, 20 Hz. The full stack — server **and**
+the in-process SDK clients — lives in one process, so these are
+end-to-end numbers (a real deployment's server-only per-connection cost
+is a subset, unmeasured separately).
+
+| CCU | steady WS | steady private | connect/join-storm peak WS |
+|----:|----------:|---------------:|---------------------------:|
+| 5K  | 132 MB    | 131 MB         | 320 MB                    |
+| 10K | 245 MB    | 251 MB         | 1,106 MB                  |
+| 15K | 362 MB    | 376 MB         | 2,279 MB                  |
+| 20K | 481 MB    | 502 MB         | 3,827 MB                  |
+
+(Steady state is the plateau after the join burst settles — reached in the
+first warmup ticks; the last sample is excluded because it catches process
+teardown.)
+
+**Per-connection cost (linear fit over the four steady-state points):**
+
+```text
+private ≈ 5.7 MB + 24.7 KB × CCU     (R² ≈ 1.0: 129/253/377/500 vs 131/251/376/502 MB)
+working set ≈ 13 MB + 23.3 KB × CCU
+```
+
+So the answer to "bytes per connection": **~24.7 KB private per
+connection at steady state, end-to-end** (dominated by the memory-transport
+buffers, SDK view/event state, connection/session entries, and subscription
+windows). At 20K CCU that is ~500 MB private — comfortably within the
+16 GB machine. The harness's earlier `est.~27MB` line (2 KB/conn) was
+wrong by ~12× and is now calibrated to the measured fit.
+
+**Join-storm peak (operational caveat):** a mass connect/join without
+client consumption spikes memory several× — ~2.4× at 5K, ~4.7× at 10K,
+~6.3× at 15K, ~8× at 20K (4.1 GB peak). The superlinear growth is the
+un-drained SDK event buffers during connect (each new join delivers a
+delta to every already-subscribed client — O(N²) buffered deltas until the
+measured phase starts draining); it settles in ~2 s once clients consume.
+Real clients that drain every frame avoid this; it is also bounded
+server-side by the subscription overflow→stale policy (ADR-008). Worth an
+explicit stress test in Phase 26 (reconnect storms) and a bounded SDK event
+buffer in Phase 21.

@@ -208,7 +208,13 @@ and the WASM fire burst (Phase 22), not by the multi-core world tick
 (Phase 18). 15–20K *gameplay* CCU is NOT yet claimed. The harness also
 exposed and we fixed two real bugs: cross-client request-ID collision in
 the gateway (all SDK clients start request ids at 1) and a gateway inbound
-O(N²) (per-call `pending_calls` scans → per-connection index). Reproduce:
+O(N²) (per-call `pending_calls` scans → per-connection index).
+
+**Memory (measured RSS, profile A steady state):** ≈ 5.7 MB + **24.7 KB
+private per connection** (10K 251 MB, 15K 376 MB, 20K 502 MB) — end-to-end
+including the in-process SDK clients; a mass join storm without client
+consumption spikes several× (20K peak 4.1 GB, O(N²) un-drained SDK
+buffers, settles in ~2 s). Reproduce:
 
 ```bash
 cargo run --release -p game-server --example ccu -- --clients 10000 --profile A --ticks 100
