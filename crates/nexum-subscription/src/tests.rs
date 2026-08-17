@@ -931,16 +931,10 @@ fn shared_row_payloads_across_subscriptions() {
     assert_eq!(deltas_a, deltas_b);
 
     // The windows hold the *shared* Arc from the committed change.
-    let row_a = registry
-        .lookup(a)
-        .unwrap()
-        .window_row(row_id)
-        .expect("row 0 in window");
-    let row_b = registry
-        .lookup(b)
-        .unwrap()
-        .window_row(row_id)
-        .expect("row 0 in window");
+    let sub_a = registry.lookup(a).unwrap();
+    let row_a = sub_a.window_row(row_id).expect("row 0 in window");
+    let sub_b = registry.lookup(b).unwrap();
+    let row_b = sub_b.window_row(row_id).expect("row 0 in window");
     assert!(
         Arc::ptr_eq(row_a, row_b),
         "subscriptions must share the row payload"
@@ -954,6 +948,140 @@ fn shared_row_payloads_across_subscriptions() {
         ),
         "window must hold the change's own Arc"
     );
+}
+
+// --------------------------------------------------- interest management
+
+// Identical queries share one view (ADR-020 D1): each committed change is
+// evaluated once per distinct query, not once per subscription, and every
+// member still receives the identical delta stream.
+#[test]
+fn identical_subscriptions_share_one_view_and_evaluate_once() {
+    let mut store = world();
+    let mut registry = SubscriptionRegistry::new();
+    let mut subs = Vec::new();
+    for _ in 0..10 {
+        subs.push(registry.subscribe(&store, zone10()).unwrap());
+    }
+    assert_eq!(registry.view_count(), 1, "identical queries share one view");
+    assert_eq!(registry.len(), 10);
+
+    let changes = commit(&mut store, |tx, store| {
+        tx.insert(store, "players", player(1, 10, 100, 1)).unwrap();
+        tx.insert(store, "players", player(2, 10, 90, 2)).unwrap();
+    });
+    let report = registry.apply_changes(&store, &changes);
+    assert_eq!(
+        report.evaluations(),
+        2,
+        "one evaluation per change, not per subscription"
+    );
+    assert_eq!(report.affected().len(), 10);
+
+    // Every member received the identical delta stream.
+    let first = registry.drain(subs[0]).unwrap();
+    for sub in &subs[1..] {
+        assert_eq!(registry.drain(*sub).unwrap(), first);
+    }
+    assert_eq!(first.len(), 3, "Initial snapshot + 2 inserts");
+    assert!(first
+        .iter()
+        .skip(1)
+        .all(|u| matches!(u, SubscriptionUpdate::Insert { .. })));
+}
+
+// Distinct queries are NOT grouped: each gets its own view and evaluation.
+#[test]
+fn different_queries_are_not_grouped() {
+    let mut store = world();
+    let mut registry = SubscriptionRegistry::new();
+    let a = registry.subscribe(&store, zone10()).unwrap();
+    let b = registry
+        .subscribe(
+            &store,
+            Query::builder("players")
+                .predicate_eq("zone_id", 20u64)
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
+    assert_eq!(registry.view_count(), 2);
+
+    let changes = commit(&mut store, |tx, store| {
+        tx.insert(store, "players", player(1, 10, 100, 1)).unwrap();
+        tx.insert(store, "players", player(2, 20, 90, 2)).unwrap();
+    });
+    let report = registry.apply_changes(&store, &changes);
+    assert_eq!(
+        report.evaluations(),
+        4,
+        "each distinct query is evaluated per change (2 changes x 2 views)"
+    );
+    // Each member holds its Initial snapshot plus its zone's single Insert.
+    let a_deltas = registry.drain(a).unwrap();
+    let b_deltas = registry.drain(b).unwrap();
+    assert_eq!(a_deltas.len(), 2);
+    assert_eq!(b_deltas.len(), 2);
+    assert!(matches!(a_deltas[1], SubscriptionUpdate::Insert { .. }));
+    assert!(matches!(b_deltas[1], SubscriptionUpdate::Insert { .. }));
+}
+
+// Unsubscribing one member leaves the others intact; the shared view is
+// freed when its last member leaves, and a later identical subscription
+// rebuilds it.
+#[test]
+fn unsubscribe_member_leaves_others_intact_and_frees_orphan_views() {
+    let mut store = world();
+    let mut registry = SubscriptionRegistry::new();
+    let a = registry.subscribe(&store, zone10()).unwrap();
+    let b = registry.subscribe(&store, zone10()).unwrap();
+    assert_eq!(registry.view_count(), 1);
+
+    registry.unsubscribe(a).unwrap();
+    assert_eq!(registry.view_count(), 1, "b still uses the view");
+
+    let changes = commit(&mut store, |tx, store| {
+        tx.insert(store, "players", player(1, 10, 100, 1)).unwrap();
+    });
+    let report = registry.apply_changes(&store, &changes);
+    assert_eq!(report.affected(), &[b]);
+    assert!(registry
+        .drain(b)
+        .unwrap()
+        .iter()
+        .any(|u| matches!(u, SubscriptionUpdate::Insert { .. })));
+
+    registry.unsubscribe(b).unwrap();
+    assert_eq!(registry.view_count(), 0, "orphan view freed");
+
+    // A new identical subscription rebuilds the orphaned view and snapshots
+    // the current authoritative state.
+    let c = registry.subscribe(&store, zone10()).unwrap();
+    assert_eq!(registry.view_count(), 1);
+    let initial = registry.drain(c).unwrap();
+    assert!(matches!(&initial[0], SubscriptionUpdate::Initial { rows, .. } if rows.len() == 1));
+}
+
+// A member joining a live group snapshots the group's current view (already
+// up to date), not a stale one.
+#[test]
+fn member_joining_live_group_snapshots_current_view() {
+    let mut store = world();
+    let mut registry = SubscriptionRegistry::new();
+    let a = registry.subscribe(&store, zone10()).unwrap();
+    let changes = commit(&mut store, |tx, store| {
+        tx.insert(store, "players", player(1, 10, 100, 1)).unwrap();
+        tx.insert(store, "players", player(2, 10, 90, 2)).unwrap();
+    });
+    registry.apply_changes(&store, &changes);
+    registry.drain(a).unwrap();
+
+    let b = registry.subscribe(&store, zone10()).unwrap();
+    assert_eq!(registry.view_count(), 1);
+    match &registry.drain(b).unwrap()[0] {
+        SubscriptionUpdate::Initial { rows, .. } => assert_eq!(rows.len(), 2),
+        other => panic!("expected Initial, got {other:?}"),
+    }
 }
 
 // Exercise every comparison operator through the builder.

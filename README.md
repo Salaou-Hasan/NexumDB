@@ -249,6 +249,25 @@ a refcount bump instead of a per-(change × sub) deep clone. sub_apply:
 **~365ms → 204ms**. The remaining cost is the O(changes × subs)
 evaluation count itself — the Phase 20 interest-management target.
 
+## Interest Management (Phase 20)
+
+Phase 20 (see the [full report](docs/reports/20-interest-management.md))
+replaced the all-to-all subscription fan-out with **duplicate-subscription
+grouping**: one shared derived view per distinct query, evaluated once per
+commit, fanned out to each member's buffer. Plus a **bounded TickUpdate**
+(the broadcast no longer carries the full change list; clients receive
+windowed subscription deltas). Measured at 1K (profile C, release):
+
+- **Subscription evaluations per change: ~1,000 → 1.00** (the workload
+  metric; 1M evaluations/tick → ~1K).
+- **sub_apply: 11.4ms → 0.2ms/tick (57×)**, now 3.5% of tick.
+- **Client decode: 4.0ms → 1.4ms**; p95 round-trip tick **204ms → 29ms**.
+- CCU: **A@10K PASS** (p99 10.7ms), **B@1K PASS** (p99 31ms).
+
+The remaining spikes are the WASM **fire burst** (1,000 simultaneous
+`fire_weapon` calls re-instantiate wasmi per invocation — ~550ms
+server-side at 1K) — the explicit Phase 22 target.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

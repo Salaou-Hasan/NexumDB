@@ -998,6 +998,7 @@ impl Runtime {
         let world_tick_ns = world_tick_start.elapsed().as_nanos() as u64;
         metrics.ticks_total += 1;
         metrics.ticks_succeeded += 1;
+        metrics.changes_committed += result.changes().len() as u64;
         metrics.tick_ns_total += started.elapsed().as_nanos() as u64;
         entry.ticks_run += 1;
         Self::push_event(
@@ -1063,7 +1064,11 @@ impl Runtime {
         // to every client view and be dropped as a `ViewGap`.
         if !result.changes().is_empty() {
             let sub_start = Instant::now();
-            let _ = entry.subscriptions.apply_changes(entry.world.store(), result.changes());
+            let report = entry
+                .subscriptions
+                .apply_changes(entry.world.store(), result.changes());
+            metrics.subscription_evaluations += report.evaluations();
+            metrics.subscription_deltas += report.deltas();
             metrics.last_tick_profile =
                 (world_tick_ns, wal_ns, sub_start.elapsed().as_nanos() as u64);
         } else {
@@ -1176,6 +1181,11 @@ impl Runtime {
             .worlds
             .values()
             .map(|entry| entry.subscriptions.len())
+            .sum();
+        metrics.subscription_views = self
+            .worlds
+            .values()
+            .map(|entry| entry.subscriptions.view_count())
             .sum();
         metrics.partitions = self.partitions.len();
         metrics.uptime_ns = self.started_at.elapsed().as_nanos() as u64;

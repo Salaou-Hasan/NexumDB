@@ -122,9 +122,13 @@ fn boot(args: &Args) -> (GameServer, nexum_core::GameInstanceId) {
         .with_worker_count(args.workers)
         .with_max_queued_reducer_calls(args.queue);
     let runtime = Runtime::new(runtime_config).expect("runtime");
+    // Bounded TickUpdate (ADR-020 D2): the broadcast carries tick metadata
+    // only; clients receive windowed subscription deltas as the delivery
+    // path — removing the O(changes × clients) redundant decode.
     let network = NetworkConfig::new()
         .with_max_connections(args.clients.saturating_add(16))
-        .with_max_queued_outbound_frames(args.clients.saturating_add(16));
+        .with_max_queued_outbound_frames(args.clients.saturating_add(16))
+        .with_tick_update_changes(false);
     let server_config = GameServerConfig::new().with_tick_rate_hz(args.hz as u32);
     let mut server = GameServer::new(
         runtime,
@@ -415,6 +419,11 @@ fn main() {
     println!("state: ticks_ok={} ticks_failed={} worlds={} partitions={}",
         runtime_metrics.ticks_succeeded, runtime_metrics.ticks_failed,
         runtime_metrics.running_worlds, runtime_metrics.partitions);
+    let subs_eval = runtime_metrics.subscription_evaluations;
+    let subs_deltas = runtime_metrics.subscription_deltas;
+    let per_change = subs_eval as f64 / (runtime_metrics.changes_committed.max(1)) as f64;
+    println!("subs:  evaluations={subs_eval} deltas={subs_deltas} per_change={per_change:.2} views={}",
+        runtime_metrics.subscription_views);
     println!("net:   conns={} sessions={} subs={} frames={} rate_limited={}",
         metrics.connections, metrics.sessions, metrics.subscriptions,
         metrics.frames_received, metrics.rate_limited);

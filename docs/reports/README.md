@@ -17,6 +17,7 @@ and architecture decisions (ADRs) live in
 | [16-production.md](16-production.md) | 16 | Production hardening & release: config, rate limits, shutdown, observability, CCU load measurements, security findings. |
 | [17-gameplay-hotpath.md](17-gameplay-hotpath.md) | 17 | Gameplay hot-path & CCU scaling: removed O(N) reducer scans, encode-once broadcast, subscription fan-out ceiling. |
 | [19-hotpath-profiling.md](19-hotpath-profiling.md) | 19 | Execution hot-path profiling: measured ranked bottlenecks (subscription fan-out 72% of tick), Arc-shared row payloads — sub_apply 30.5ms → 11.4ms (2.7×). |
+| [20-interest-management.md](20-interest-management.md) | 20 | Interest management / AOI: duplicate-subscription grouping (evaluations/change ~1,000 → 1.00, sub_apply 57×) + bounded TickUpdate; measured ladder A@10K & B@1K PASS. |
 
 ## CCU summary (Phases 16–17)
 

@@ -176,7 +176,9 @@ fn full_client_to_wal_to_subscription_path() {
         RuntimeConfig::new(input_factory()).with_persistence(PersistencePolicy::Flush, dir.clone()),
     )
     .unwrap();
-    let mut gateway = NetworkGateway::new(runtime, NetworkConfig::new(), test_auth()).unwrap();
+    // This test asserts the full change list on TickUpdate.
+    let network = NetworkConfig::new().with_tick_update_changes(true);
+    let mut gateway = NetworkGateway::new(runtime, network, test_auth()).unwrap();
     let world = WorldId::from_u64(0);
     gateway.control().create_world(world, SimulationConfig::new()).unwrap();
     gateway.control().start_world(world).unwrap();

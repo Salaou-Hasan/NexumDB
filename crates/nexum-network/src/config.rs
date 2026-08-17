@@ -65,6 +65,13 @@ pub struct NetworkConfig {
     pub(crate) overflow_policy: OutboundOverflowPolicy,
     pub(crate) event_log_limit: usize,
     pub(crate) rate_limits: RateLimitConfig,
+    /// Whether `TickUpdate` broadcasts carry the full committed change list
+    /// (ADR-020 D2). Bounded by default (`false`): clients receive windowed
+    /// `SubscriptionDelta` frames as the delivery path, and the `TickUpdate`
+    /// carries only tick metadata + events — removing the O(changes ×
+    /// clients) redundant decode. Opt in for per-tick full-change
+    /// diagnostics.
+    pub(crate) tick_update_changes: bool,
 }
 
 impl Default for NetworkConfig {
@@ -82,6 +89,7 @@ impl Default for NetworkConfig {
             overflow_policy: OutboundOverflowPolicy::Stale,
             event_log_limit: 1_024,
             rate_limits: RateLimitConfig::default(),
+            tick_update_changes: false,
         }
     }
 }
@@ -109,6 +117,13 @@ impl NetworkConfig {
     /// Sets the per-connection outbound queue bound (≥ 1).
     pub fn with_max_queued_outbound_frames(mut self, n: usize) -> Self {
         self.max_queued_outbound_frames = n;
+        self
+    }
+
+    /// Sets whether `TickUpdate` broadcasts carry the full committed change
+    /// list (ADR-020 D2). Bounded by default (`false`).
+    pub fn with_tick_update_changes(mut self, enabled: bool) -> Self {
+        self.tick_update_changes = enabled;
         self
     }
 

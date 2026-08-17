@@ -205,7 +205,13 @@ fn connect(gateway: &mut NetworkGateway, token: &str, world: WorldId) -> Client 
 
 fn gateway_with(factory: WorldFactory) -> NetworkGateway {
     let runtime = Runtime::new(RuntimeConfig::new(factory)).unwrap();
-    NetworkGateway::new(runtime, NetworkConfig::new(), test_auth()).unwrap()
+    // These tests assert the full change list on the Tick event.
+    NetworkGateway::new(
+        runtime,
+        NetworkConfig::new().with_tick_update_changes(true),
+        test_auth(),
+    )
+    .unwrap()
 }
 
 // ------------------------------------------------------------ full pipeline
@@ -217,7 +223,13 @@ fn full_sdk_pipeline_input_tick_subscription_and_reducer_call() {
         RuntimeConfig::new(input_factory()).with_persistence(PersistencePolicy::Flush, dir.clone()),
     )
     .unwrap();
-    let mut gateway = NetworkGateway::new(runtime, NetworkConfig::new(), test_auth()).unwrap();
+    // These tests assert the full change list on the Tick event.
+    let mut gateway = NetworkGateway::new(
+        runtime,
+        NetworkConfig::new().with_tick_update_changes(true),
+        test_auth(),
+    )
+    .unwrap();
     let world = WorldId::from_u64(0);
     gateway.control().create_world(world, SimulationConfig::new()).unwrap();
     gateway.control().start_world(world).unwrap();
@@ -492,7 +504,13 @@ fn recovery_restores_state_without_replaying_history_to_the_sdk() {
                 .with_persistence(PersistencePolicy::Flush, dir.clone()),
         )
         .unwrap();
-        let mut gateway = NetworkGateway::new(runtime, NetworkConfig::new(), test_auth()).unwrap();
+        // These tests assert the full change list on the Tick event.
+    let mut gateway = NetworkGateway::new(
+        runtime,
+        NetworkConfig::new().with_tick_update_changes(true),
+        test_auth(),
+    )
+    .unwrap();
         let world = WorldId::from_u64(0);
         gateway.control().create_world(world, SimulationConfig::new()).unwrap();
         gateway.control().start_world(world).unwrap();
@@ -516,7 +534,13 @@ fn recovery_restores_state_without_replaying_history_to_the_sdk() {
                 .with_persistence(PersistencePolicy::Flush, dir.clone()),
         )
         .unwrap();
-        let mut gateway = NetworkGateway::new(runtime, NetworkConfig::new(), test_auth()).unwrap();
+        // These tests assert the full change list on the Tick event.
+    let mut gateway = NetworkGateway::new(
+        runtime,
+        NetworkConfig::new().with_tick_update_changes(true),
+        test_auth(),
+    )
+    .unwrap();
         let world = WorldId::from_u64(0);
         let report = gateway
             .control()

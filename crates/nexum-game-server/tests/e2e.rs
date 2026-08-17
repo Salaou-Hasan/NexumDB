@@ -256,7 +256,9 @@ fn full_pipeline_join_reducer_subscription_and_wal() {
         RuntimeConfig::new(game_factory()).with_persistence(PersistencePolicy::Flush, dir.clone()),
     )
     .unwrap();
-    let mut server = GameServer::new(runtime, NetworkConfig::new(), auth(), GameServerConfig::new())
+    // This test asserts the full change list on the Tick event.
+    let network = NetworkConfig::new().with_tick_update_changes(true);
+    let mut server = GameServer::new(runtime, network, auth(), GameServerConfig::new())
         .unwrap();
     let game = running_game(
         &mut server,

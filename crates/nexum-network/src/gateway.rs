@@ -885,11 +885,23 @@ impl NetworkGateway {
             // One TickUpdate per world, encoded **once** and cloned to every
             // attached session (ADR-017 D4): re-encoding per connection was
             // O(changes × clients) — the dominant fan-out cost at scale.
+            //
+            // Bounded payload (ADR-020 D2): by default the broadcast carries
+            // tick metadata + events only — the full change list is redundant
+            // with the windowed `SubscriptionDelta` delivery path and costs
+            // O(changes × clients) to decode. Opt in via
+            // `NetworkConfig::with_tick_update_changes(true)` for per-tick
+            // full-change diagnostics.
+            let changes = if self.config.tick_update_changes {
+                result.changes().to_vec()
+            } else {
+                Vec::new()
+            };
             let message = ServerMessage::TickUpdate {
                 world,
                 tick: result.tick(),
                 tx_id: result.tx_id(),
-                changes: result.changes().to_vec(),
+                changes,
                 events: result.events().to_vec(),
             };
             let frame = match protocol::encode_server(&message, self.config.max_frame_payload()) {

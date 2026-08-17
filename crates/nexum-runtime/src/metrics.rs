@@ -48,6 +48,16 @@ pub struct RuntimeMetrics {
     pub snapshots: u64,
     /// Subscriptions currently registered across all worlds.
     pub subscriptions: usize,
+    /// Subscription `apply_change` evaluations (one per change × distinct
+    /// query) — the interest-management workload metric (ADR-020 D3).
+    pub subscription_evaluations: u64,
+    /// Subscription updates produced by the shared views.
+    pub subscription_deltas: u64,
+    /// Distinct shared subscription views across all worlds (ADR-020 D1) —
+    /// the fan-out factor: one evaluation per change per view.
+    pub subscription_views: usize,
+    /// Changes committed across all worlds (for per-change metrics).
+    pub changes_committed: u64,
     /// Worlds created.
     pub world_creations: u64,
     /// Worlds recovered from persisted state.
@@ -84,6 +94,10 @@ impl RuntimeMetrics {
             wal_failures: 0,
             snapshots: 0,
             subscriptions: 0,
+            subscription_evaluations: 0,
+            subscription_deltas: 0,
+            subscription_views: 0,
+            changes_committed: 0,
             world_creations: 0,
             recoveries: 0,
             world_failures: 0,

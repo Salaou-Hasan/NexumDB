@@ -120,12 +120,24 @@ is implemented.
   11.4ms (2.7×) at 1K profile C. Report:
   [reports/19-hotpath-profiling.md](../reports/19-hotpath-profiling.md).
 
+## Completed (Phase 20)
+
+- [20-interest-management.md](20-interest-management.md) — Interest
+  management / AOI (canonical Phase 20): duplicate-subscription grouping
+  (one shared derived view per distinct query — evaluations per change
+  ~1,000 → 1.00, sub_apply 11.4ms → 0.2ms, 57×) and bounded TickUpdate
+  (no full change list in the broadcast — client decode 4.0ms → 1.4ms).
+  Preserves per-member buffers, overflow→stale, resync, drop detection;
+  adds evaluation/delta counters (`ApplyReport`, `RegistryStats`,
+  `RuntimeMetrics`). Remaining measured bottleneck: the WASM fire burst
+  (per-call wasmi instantiation) — Phase 22. Report:
+  [reports/20-interest-management.md](../reports/20-interest-management.md).
+
 ## Planned topics
 
-- **Phase 20 — Interest management / AOI** — the measured next bottleneck:
-  subscription all-to-all evaluation is O(changes × subs) and client
-  decode is O(changes × clients); both need relevance filtering, not
-  constant-factor tuning.
+- **Phase 22 — WASM reducer optimization** — the measured #1 remaining
+  cost: the fire burst re-instantiates wasmi per call (~550ms for 1,000
+  calls at 1K). Instance/linker reuse, batched host calls.
 - **Phase 18 — Multi-core runtime** — parallel execution across
-  independent worlds/partitions, deferred until the single-world
-  subscription path is healthy.
+  independent worlds/partitions (linear world-tick path, ~12ms/1K moves).
+- **Phase 21 — Memory/alloc** — per-tick allocation reduction.

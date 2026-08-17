@@ -763,7 +763,11 @@ fn duplicate_attachment_is_idempotent_and_cross_world_attach_is_rejected() {
 
 #[test]
 fn inputs_reach_the_attached_world() {
-    let mut gateway = gateway_with(input_factory(), NetworkConfig::new());
+    let mut gateway = gateway_with(
+        input_factory(),
+        // This test asserts the full change list on TickUpdate.
+        NetworkConfig::new().with_tick_update_changes(true),
+    );
     create_world(&mut gateway, 0);
     let (_, mut client) = connect_client(&mut gateway);
     let max = gateway.config().max_frame_payload();
@@ -811,7 +815,11 @@ fn inputs_reach_the_attached_world() {
 fn command_sources_are_stamped_with_the_principal_id() {
     // Alice's principal id is 1; a client-forged source of 999 must be
     // replaced by the server before the command reaches the world.
-    let mut gateway = gateway_with(source_factory(), NetworkConfig::new());
+    let mut gateway = gateway_with(
+        source_factory(),
+        // This test asserts the full change list on TickUpdate.
+        NetworkConfig::new().with_tick_update_changes(true),
+    );
     create_world(&mut gateway, 0);
     let (_, mut client) = connect_client(&mut gateway);
     let max = gateway.config().max_frame_payload();
@@ -837,7 +845,11 @@ fn command_sources_are_stamped_with_the_principal_id() {
 
 #[test]
 fn inputs_never_reach_another_world() {
-    let mut gateway = gateway_with(input_factory(), NetworkConfig::new());
+    let mut gateway = gateway_with(
+        input_factory(),
+        // This test asserts the full change list on TickUpdate.
+        NetworkConfig::new().with_tick_update_changes(true),
+    );
     create_world(&mut gateway, 0);
     create_world(&mut gateway, 1);
     let max = gateway.config().max_frame_payload();
