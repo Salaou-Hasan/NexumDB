@@ -948,6 +948,7 @@ impl Runtime {
             }
         }
         let started = Instant::now();
+        let world_tick_start = Instant::now();
 
         let result = match entry.world.tick_with_calls(&frame, delivered, &calls) {
             Ok(result) => result,
@@ -994,6 +995,7 @@ impl Runtime {
                 });
             }
         };
+        let world_tick_ns = world_tick_start.elapsed().as_nanos() as u64;
         metrics.ticks_total += 1;
         metrics.ticks_succeeded += 1;
         metrics.tick_ns_total += started.elapsed().as_nanos() as u64;
@@ -1010,6 +1012,7 @@ impl Runtime {
 
         // Durability first (ADR-010 D4).
         let mut persisted = false;
+        let wal_start = Instant::now();
         if let Some(wal) = entry.wal.as_mut() {
             match wal.append(result.tx_id(), result.changes()) {
                 Ok(_) => {
@@ -1050,6 +1053,8 @@ impl Runtime {
             }
         }
 
+        let wal_ns = wal_start.elapsed().as_nanos() as u64;
+
         // Observation second (ADR-010 D4): only durable changes. A tick that
         // committed zero changes is skipped entirely: the registry assigns one
         // sequence number per `apply_changes` call (ADR-008 D7), so feeding it
@@ -1057,7 +1062,12 @@ impl Runtime {
         // subscription can observe — the next real delta would look like a gap
         // to every client view and be dropped as a `ViewGap`.
         if !result.changes().is_empty() {
+            let sub_start = Instant::now();
             let _ = entry.subscriptions.apply_changes(entry.world.store(), result.changes());
+            metrics.last_tick_profile =
+                (world_tick_ns, wal_ns, sub_start.elapsed().as_nanos() as u64);
+        } else {
+            metrics.last_tick_profile = (world_tick_ns, wal_ns, 0);
         }
 
         // Outbound message enqueue (ADR-012 D3): committed messages are

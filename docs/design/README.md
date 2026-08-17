@@ -108,7 +108,24 @@ is implemented.
   Server-side profile D @ 500: 83ms → 2.7ms (30×). Report:
   [reports/17-gameplay-hotpath.md](../reports/17-gameplay-hotpath.md).
 
+## Completed (Phase 19)
+
+- [19-hotpath-profiling.md](19-hotpath-profiling.md) — Execution hot-path
+  profiling: instrumented the CCU harness (phase timers) and the runtime
+  (per-tick world/WAL/subscription profile), ranked the measured
+  bottlenecks (subscription all-to-all fan-out 72% of tick, client
+  full-set decode 13%, world tick 28%), and implemented the highest-value
+  optimization: `Change` rows are now `Arc<Row>` shared across the WAL
+  and every subscription window (ADR-019 D4) — sub_apply 30.5ms →
+  11.4ms (2.7×) at 1K profile C. Report:
+  [reports/19-hotpath-profiling.md](../reports/19-hotpath-profiling.md).
+
 ## Planned topics
 
-- None — the canonical roadmap (Phases 1–17) is complete. Future work is
-  tracked in Phase 17/20 design (subscription interest management).
+- **Phase 20 — Interest management / AOI** — the measured next bottleneck:
+  subscription all-to-all evaluation is O(changes × subs) and client
+  decode is O(changes × clients); both need relevance filtering, not
+  constant-factor tuning.
+- **Phase 18 — Multi-core runtime** — parallel execution across
+  independent worlds/partitions, deferred until the single-world
+  subscription path is healthy.

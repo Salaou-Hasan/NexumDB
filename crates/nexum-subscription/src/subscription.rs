@@ -4,7 +4,8 @@
 //!
 //! - `window` — **all** rows matching the query's predicates, sorted by the
 //!   query's sort key (or by `RowId` when there is none). Each entry carries
-//!   the row payload so that window backfill can produce `Insert` deltas
+//!   the row payload (an `Arc<Row>` shared across identical subscriptions,
+//!   ADR-019 D4) so that window backfill can produce `Insert` deltas
 //!   without touching storage;
 //! - `visible_ids` — the *delivered* membership: the top-`window_cap` rows
 //!   of `window` (the query's `limit`, capped by the registry's
@@ -24,6 +25,7 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Bound;
+use std::sync::Arc;
 
 use nexum_core::{ChangeKind, Row, RowId, TableId, Value};
 use nexum_storage::Change;
@@ -88,8 +90,12 @@ pub struct Subscription {
     /// The effective window cap: the query's `limit` (if any), never larger
     /// than the registry's `max_snapshot_rows` safety bound.
     window_cap: usize,
-    /// Every matching row, sorted by the query ordering.
-    window: BTreeMap<Key, Row>,
+    /// Every matching row, sorted by the query ordering. Payloads are
+    /// `Arc<Row>` **shared across subscriptions** (ADR-019 D4): the registry
+    /// wraps each committed row once per commit, so per-subscription window
+    /// maintenance bumps a refcount instead of deep-cloning the row — the
+    /// measured hot path (O(changes × subscriptions) clones per tick).
+    window: BTreeMap<Key, Arc<Row>>,
     /// `row_id → key` mirror of `window` (ADR-015 D5): turns the per-change
     /// membership lookups from O(window) scans into O(log N) lookups while
     /// keeping the authoritative window structure unchanged.
@@ -161,6 +167,16 @@ impl Subscription {
         self.visible_ids.len()
     }
 
+    /// Returns the shared row payload currently in the window for `row_id`,
+    /// if present — the exact `Arc` installed by the last change or rebuild.
+    /// Test-only introspection proving payload sharing across subscriptions
+    /// (ADR-019 D4).
+    #[cfg(test)]
+    pub(crate) fn window_row(&self, row_id: RowId) -> Option<&Arc<Row>> {
+        let key = self.row_keys.get(&row_id)?;
+        self.window.get(key)
+    }
+
     /// Returns the observed table id (pinned at compile time).
     pub(crate) fn table_id(&self) -> TableId {
         self.compiled.table_id()
@@ -191,7 +207,7 @@ impl Subscription {
         let mut delivered = Vec::with_capacity(self.window_cap.min(ordered.len()));
         for (key, row) in ordered {
             self.row_keys.insert(key.row_id, key.clone());
-            self.window.insert(key, row);
+            self.window.insert(key, Arc::new(row));
         }
         for key in self.window.keys().take(self.window_cap) {
             self.visible_ids.insert(key.row_id);
@@ -235,11 +251,15 @@ impl Subscription {
 
     /// Applies one committed change to the derived view, appending deltas to
     /// the buffer. May mark the subscription stale on buffer overflow.
+    ///
+    /// The new row is taken from the change's shared `Arc<Row>` payload
+    /// (ADR-019 D4): retaining it in the window bumps a refcount instead of
+    /// deep-cloning the row per subscription.
     pub(crate) fn apply_change(&mut self, change: &Change, seq: u64) {
         let row_id = change.row_id();
         match change.kind() {
             ChangeKind::Insert => {
-                if let Some(new_row) = change.new_row()
+                if let Some(new_row) = change.new_row_shared()
                     && self.compiled.matches(new_row)
                 {
                     // A brand-new row: it was never in the view before, so no
@@ -248,7 +268,8 @@ impl Subscription {
                 }
             }
             ChangeKind::Update => {
-                let (Some(_old_row), Some(new_row)) = (change.old_row(), change.new_row())
+                let (Some(_old_row), Some(new_row)) =
+                    (change.old_row(), change.new_row_shared())
                 else {
                     return;
                 };
@@ -292,12 +313,13 @@ impl Subscription {
     /// Inserts or replaces `row_id`'s window entry (it now matches) and
     /// re-synchronizes the window. `was_visible` controls the `Update` delta:
     /// when the row was visible before the change, an `Update` is emitted if
-    /// it remains visible.
-    fn upsert(&mut self, row_id: RowId, row: &Row, seq: u64, was_visible: bool) {
+    /// it remains visible. The row is retained as a shared `Arc` (ADR-019
+    /// D4) — a refcount bump per subscription rather than a deep clone.
+    fn upsert(&mut self, row_id: RowId, row: &Arc<Row>, seq: u64, was_visible: bool) {
         let old = self.remove(row_id);
         let key = self.key_of(row, row_id);
         self.row_keys.insert(row_id, key.clone());
-        self.window.insert(key.clone(), row.clone());
+        self.window.insert(key.clone(), Arc::clone(row));
         let update = was_visible.then(|| DeliveredRow::new(row_id, self.compiled.project(row)));
         self.sync_window(seq, update, old, Some(key));
     }
@@ -434,7 +456,11 @@ impl Subscription {
             .row_keys
             .get(&row_id)
             .expect("delivered rows come from the window");
-        self.window.get(key).expect("row_keys mirrors the window").clone()
+        self.window
+            .get(key)
+            .expect("row_keys mirrors the window")
+            .as_ref()
+            .clone()
     }
 
     /// Debug-only: the incremental visible set must equal the exact top-cap

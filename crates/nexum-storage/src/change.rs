@@ -10,17 +10,26 @@
 //! diff would duplicate the row data and force every writer to compute it
 //! (ADR-003 D5).
 
+use std::sync::Arc;
+
 use nexum_core::{ChangeKind, RowId, TableId, Version};
 use nexum_core::Row;
 
 /// One committed mutation of one row.
+///
+/// Row payloads are held as `Arc<Row>` **shared across consumers** (ADR-019
+/// D4): the commit path wraps each row once, then the WAL and every
+/// subscription window share the same allocation via refcount bumps instead
+/// of deep-cloning the row per consumer — the measured subscription hot path
+/// (O(changes × subscriptions) clones per tick). `old_row`/`new_row` return
+/// plain `&Row` (deref), so readers are unchanged.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Change {
     table_id: TableId,
     kind: ChangeKind,
     row_id: RowId,
-    old_row: Option<Row>,
-    new_row: Option<Row>,
+    old_row: Option<Arc<Row>>,
+    new_row: Option<Arc<Row>>,
     old_version: Option<Version>,
     new_version: Option<Version>,
 }
@@ -33,7 +42,7 @@ impl Change {
             kind: ChangeKind::Insert,
             row_id,
             old_row: None,
-            new_row: Some(row),
+            new_row: Some(Arc::new(row)),
             old_version: None,
             new_version: Some(version),
         }
@@ -52,8 +61,8 @@ impl Change {
             table_id,
             kind: ChangeKind::Update,
             row_id,
-            old_row: Some(old_row),
-            new_row: Some(new_row),
+            old_row: Some(Arc::new(old_row)),
+            new_row: Some(Arc::new(new_row)),
             old_version: Some(old_version),
             new_version: Some(new_version),
         }
@@ -65,7 +74,7 @@ impl Change {
             table_id,
             kind: ChangeKind::Delete,
             row_id,
-            old_row: Some(row),
+            old_row: Some(Arc::new(row)),
             new_row: None,
             old_version: Some(version),
             new_version: None,
@@ -89,11 +98,19 @@ impl Change {
 
     /// Returns the row before the change, if this is an update or delete.
     pub fn old_row(&self) -> Option<&Row> {
-        self.old_row.as_ref()
+        self.old_row.as_deref()
     }
 
     /// Returns the row after the change, if this is an insert or update.
     pub fn new_row(&self) -> Option<&Row> {
+        self.new_row.as_deref()
+    }
+
+    /// Returns the shared row payload after the change, if this is an insert
+    /// or update. Consumers that retain the row (e.g. subscription windows)
+    /// clone this `Arc` instead of deep-cloning the row, so one committed
+    /// row is allocated once and shared across every consumer (ADR-019 D4).
+    pub fn new_row_shared(&self) -> Option<&Arc<Row>> {
         self.new_row.as_ref()
     }
 

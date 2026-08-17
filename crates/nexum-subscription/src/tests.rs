@@ -897,6 +897,65 @@ fn update_seq(update: &SubscriptionUpdate) -> u64 {
     }
 }
 
+// ------------------------------------------------------- shared payloads
+
+// Two subscriptions over the same query must deliver identical delta
+// streams and retain the *same* shared `Arc<Row>` from the committed change
+// — a refcount bump per subscription, not a deep clone (ADR-019 D4).
+#[test]
+fn shared_row_payloads_across_subscriptions() {
+    use std::sync::Arc;
+
+    let mut store = world();
+    let mut registry = SubscriptionRegistry::new();
+    let a = registry.subscribe(&store, zone10()).unwrap();
+    let b = registry.subscribe(&store, zone10()).unwrap();
+
+    let inserts = commit(&mut store, |tx, store| {
+        tx.insert(store, "players", player(1, 10, 100, 1)).unwrap();
+        tx.insert(store, "players", player(2, 10, 90, 2)).unwrap();
+    });
+    registry.apply_changes(&store, &inserts);
+
+    // Row 0 is player 1 (first insert). Update it in a new commit.
+    let row_id = RowId::from_u64(0);
+    let updates = commit(&mut store, |tx, store| {
+        tx.update(store, "players", row_id, player(1, 10, 50, 3)).unwrap();
+    });
+    let report = registry.apply_changes(&store, &updates);
+
+    // Both subscriptions were affected and delivered identical updates.
+    assert_eq!(report.affected(), &[a, b]);
+    let deltas_a = registry.drain(a).unwrap();
+    let deltas_b = registry.drain(b).unwrap();
+    assert_eq!(deltas_a, deltas_b);
+
+    // The windows hold the *shared* Arc from the committed change.
+    let row_a = registry
+        .lookup(a)
+        .unwrap()
+        .window_row(row_id)
+        .expect("row 0 in window");
+    let row_b = registry
+        .lookup(b)
+        .unwrap()
+        .window_row(row_id)
+        .expect("row 0 in window");
+    assert!(
+        Arc::ptr_eq(row_a, row_b),
+        "subscriptions must share the row payload"
+    );
+    assert!(
+        Arc::ptr_eq(
+            row_a,
+            updates[0]
+                .new_row_shared()
+                .expect("update change carries the new row"),
+        ),
+        "window must hold the change's own Arc"
+    );
+}
+
 // Exercise every comparison operator through the builder.
 #[test]
 fn comparison_ops_are_usable_in_queries() {

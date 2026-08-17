@@ -229,6 +229,26 @@ ceiling after those fixes:
   to the subscription engine's all-to-all fan-out O(changes × subs),
   which is explicitly Phase 20 scope.
 
+## Hot-Path Profiling (Phase 19)
+
+Phase 19 (see the [full report](docs/reports/19-hotpath-profiling.md))
+instrumented the tick path at phase + sub-phase level and ranked the
+measured bottlenecks (not assumptions):
+
+- **#1 — Subscription all-to-all fan-out** — 30.5 ms/tick (72% of tick) at
+  1K: O(changes × subs) = 1M `apply_change` calls per movement tick, each
+  deep-cloning the row into the window.
+- **#2 — Client-side full-set decode** — 6.6 ms/tick: O(changes × clients).
+- **#3 — World tick** — 11.9 ms/tick: linear O(changes) game logic.
+
+**Optimization (measured 2.7× on the #1 bottleneck):** `Change` now holds
+its rows as `Arc<Row>` (ADR-019 D4) — the commit path wraps each
+committed row once, and every subscription window shares the payload via
+a refcount bump instead of a per-(change × sub) deep clone. sub_apply:
+**30.5ms → 11.4ms** (avg/tick at 1K, profile C); p95 round-trip tick
+**~365ms → 204ms**. The remaining cost is the O(changes × subs)
+evaluation count itself — the Phase 20 interest-management target.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

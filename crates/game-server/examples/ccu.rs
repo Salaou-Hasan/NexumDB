@@ -58,6 +58,8 @@ struct Args {
     /// Runtime per-world queued reducer-call cap (sized to the workload;
     /// overflow is explicit backpressure, never silent loss).
     queue: usize,
+    /// Print per-phase timing breakdown for every tick.
+    profile_detail: bool,
 }
 
 fn parse_args() -> Args {
@@ -70,6 +72,7 @@ fn parse_args() -> Args {
         workers: 1,
         window: 32,
         queue: 1 << 20,
+        profile_detail: false,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -83,6 +86,7 @@ fn parse_args() -> Args {
             "--workers" => args.workers = value().parse().unwrap(),
             "--window" => args.window = value().parse().unwrap(),
             "--queue" => args.queue = value().parse().unwrap(),
+            "--profile-detail" => args.profile_detail = true,
             "--help" | "-h" => {
                 println!(
                     "usage: ccu [--clients N] [--profile A|B|C|D] [--ticks N] \
@@ -203,6 +207,46 @@ fn step(server: &mut GameServer, clients: &mut [SimClient]) {
 
 /// Server-side half of one step (inbound + tick + fan-out), timed separately
 /// from the client pumps for profiling.
+/// Per-phase timing accumulator for profiling.
+#[derive(Default)]
+struct PhaseTimers {
+    inbound_ns: u64,
+    tick_ns: u64,
+    fanout_ns: u64,
+    pump_ns: u64,
+    flush_ns: u64,
+    client_ns: u64,
+    drain_ns: u64,
+    count: u64,
+    /// Sub-phases of the runtime tick: world tick / WAL / subscription apply.
+    world_tick_ns: u64,
+    wal_ns: u64,
+    sub_apply_ns: u64,
+}
+
+fn step_server_timed(server: &mut GameServer, t: &mut PhaseTimers) {
+    let t0 = Instant::now();
+    server.gateway_mut().process_inbound();
+    let t1 = Instant::now();
+    let _ = server.step();
+    let t2 = Instant::now();
+    server.gateway_mut().pump_subscriptions();
+    let t3 = Instant::now();
+    server.gateway_mut().flush_outbound().expect("flush outbound");
+    let t4 = Instant::now();
+    t.inbound_ns += t1.duration_since(t0).as_nanos() as u64;
+    t.tick_ns += t2.duration_since(t1).as_nanos() as u64;
+    t.fanout_ns += t3.duration_since(t2).as_nanos() as u64;
+    t.flush_ns += t4.duration_since(t3).as_nanos() as u64;
+    t.count += 1;
+    // Read the runtime's per-tick sub-phase profile (world tick / WAL /
+    // subscription apply) from the last committed tick.
+    let profile = server.runtime_mut().metrics().last_tick_profile;
+    t.world_tick_ns += profile.0;
+    t.wal_ns += profile.1;
+    t.sub_apply_ns += profile.2;
+}
+
 fn step_server(server: &mut GameServer) {
     server.gateway_mut().process_inbound();
     let _ = server.step();
@@ -325,13 +369,25 @@ fn main() {
     let rejected_before = server.gateway().metrics().inputs_rejected
         + server.gateway().metrics().reducer_calls_rejected;
 
+    let mut phase_timers = PhaseTimers::default();
     for tick in 0..args.ticks {
         drive_profile(args.profile, tick, &mut clients, args.hz);
         let tick_started = Instant::now();
-        step_server(&mut server);
+        if args.profile_detail {
+            step_server_timed(&mut server, &mut phase_timers);
+        } else {
+            step_server(&mut server);
+        }
+        let t_mid1 = Instant::now();
         step_clients(&mut clients);
+        let t_mid2 = Instant::now();
         drain_clients(&mut clients);
-        tick_samples.push(tick_started.elapsed());
+        let t_end = Instant::now();
+        tick_samples.push(t_end.duration_since(tick_started));
+        if args.profile_detail {
+            phase_timers.client_ns += t_mid2.duration_since(t_mid1).as_nanos() as u64;
+            phase_timers.drain_ns += t_end.duration_since(t_mid2).as_nanos() as u64;
+        }
     }
     let measured_elapsed = measured_started.elapsed();
 
@@ -391,4 +447,21 @@ fn main() {
     println!("\nCLASSIFICATION: {class}");
     println!("note: in-process transport; protocol/gateway/runtime/world/subscriptions/SDK are real.");
     println!("arena size: {ARENA_WIDTH}x{ARENA_HEIGHT}; movement validation is authoritative.");
+
+    if phase_timers.count > 0 {
+        let n = phase_timers.count as f64;
+        println!("\n=== PHASE BREAKDOWN (avg over {count} ticks) ===", count = phase_timers.count);
+        println!("  inbound:  {:>7.1} ms/tick ({:>4.1}%)", phase_timers.inbound_ns as f64 / n / 1e6, phase_timers.inbound_ns as f64 / phase_timers.tick_ns.max(1) as f64 * 100.0);
+        println!("  tick:     {:>7.1} ms/tick ({:>4.1}%)", phase_timers.tick_ns as f64 / n / 1e6, phase_timers.tick_ns as f64 / (phase_timers.inbound_ns + phase_timers.tick_ns + phase_timers.fanout_ns + phase_timers.pump_ns + phase_timers.flush_ns + phase_timers.client_ns + phase_timers.drain_ns).max(1) as f64 * 100.0);
+        println!("  fanout:   {:>7.1} ms/tick ({:>4.1}%)", phase_timers.fanout_ns as f64 / n / 1e6, phase_timers.fanout_ns as f64 / (phase_timers.inbound_ns + phase_timers.tick_ns + phase_timers.fanout_ns + phase_timers.pump_ns + phase_timers.flush_ns + phase_timers.client_ns + phase_timers.drain_ns).max(1) as f64 * 100.0);
+        println!("  pump:     {:>7.1} ms/tick ({:>4.1}%)", phase_timers.pump_ns as f64 / n / 1e6, phase_timers.pump_ns as f64 / (phase_timers.inbound_ns + phase_timers.tick_ns + phase_timers.fanout_ns + phase_timers.pump_ns + phase_timers.flush_ns + phase_timers.client_ns + phase_timers.drain_ns).max(1) as f64 * 100.0);
+        println!("  flush:    {:>7.1} ms/tick ({:>4.1}%)", phase_timers.flush_ns as f64 / n / 1e6, phase_timers.flush_ns as f64 / (phase_timers.inbound_ns + phase_timers.tick_ns + phase_timers.fanout_ns + phase_timers.pump_ns + phase_timers.flush_ns + phase_timers.client_ns + phase_timers.drain_ns).max(1) as f64 * 100.0);
+        println!("  clients:  {:>7.1} ms/tick ({:>4.1}%)", phase_timers.client_ns as f64 / n / 1e6, phase_timers.client_ns as f64 / (phase_timers.inbound_ns + phase_timers.tick_ns + phase_timers.fanout_ns + phase_timers.pump_ns + phase_timers.flush_ns + phase_timers.client_ns + phase_timers.drain_ns).max(1) as f64 * 100.0);
+        println!("  drain:    {:>7.1} ms/tick ({:>4.1}%)", phase_timers.drain_ns as f64 / n / 1e6, phase_timers.drain_ns as f64 / (phase_timers.inbound_ns + phase_timers.tick_ns + phase_timers.fanout_ns + phase_timers.pump_ns + phase_timers.flush_ns + phase_timers.client_ns + phase_timers.drain_ns).max(1) as f64 * 100.0);
+        println!("  -- inside tick --");
+        let tick_total = (phase_timers.world_tick_ns + phase_timers.wal_ns + phase_timers.sub_apply_ns).max(1);
+        println!("  world_tick: {:>7.1} ms/tick ({:>4.1}% of tick)", phase_timers.world_tick_ns as f64 / n / 1e6, phase_timers.world_tick_ns as f64 / tick_total as f64 * 100.0);
+        println!("  wal:        {:>7.1} ms/tick ({:>4.1}% of tick)", phase_timers.wal_ns as f64 / n / 1e6, phase_timers.wal_ns as f64 / tick_total as f64 * 100.0);
+        println!("  sub_apply:  {:>7.1} ms/tick ({:>4.1}% of tick)", phase_timers.sub_apply_ns as f64 / n / 1e6, phase_timers.sub_apply_ns as f64 / tick_total as f64 * 100.0);
+    }
 }

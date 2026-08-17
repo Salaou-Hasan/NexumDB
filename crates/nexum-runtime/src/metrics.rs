@@ -56,6 +56,9 @@ pub struct RuntimeMetrics {
     pub world_failures: u64,
     /// Runtime uptime in nanoseconds.
     pub uptime_ns: u64,
+    /// Sub-phase timing of the last tick (world_tick_ns, wal_ns, subscription_apply_ns).
+    /// Reset to zero at the start of each step.
+    pub last_tick_profile: (u64, u64, u64),
 }
 
 impl RuntimeMetrics {
@@ -85,6 +88,7 @@ impl RuntimeMetrics {
             recoveries: 0,
             world_failures: 0,
             uptime_ns: 0,
+            last_tick_profile: (0, 0, 0),
         }
     }
 
