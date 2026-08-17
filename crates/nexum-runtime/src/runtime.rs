@@ -89,6 +89,39 @@ pub struct RuntimeStepReport {
     pub duration_ns: u64,
 }
 
+/// The collected outcome of one world's tick (ADR-018 D2).
+///
+/// The tick body runs against only the [`WorldEntry`] — the world, its WAL,
+/// its subscription registry, and its input/call queues — and **collects**
+/// every effect on shared runtime state (events, metric deltas, outbound
+/// messages) instead of mutating it. The main thread then applies the
+/// outcomes in the deterministic `(worker_id, world_id)` order the serial
+/// path used, so parallel execution is observationally identical to serial.
+#[derive(Debug)]
+struct TickOutcome {
+    /// The tick's result (or the runtime error it produced).
+    result: Result<nexum_simulation::TickResult, RuntimeError>,
+    /// Runtime events emitted by this tick, in emission order.
+    events: Vec<RuntimeEvent>,
+    /// Outbound cross-partition messages, in `send_to` order.
+    outbound: Vec<PartitionMessage>,
+    /// Metric deltas produced by this tick.
+    ticks_total: u64,
+    ticks_succeeded: u64,
+    ticks_failed: u64,
+    tick_ns_total: u64,
+    changes_committed: u64,
+    wal_appends: u64,
+    wal_failures: u64,
+    world_failures: u64,
+    snapshots: u64,
+    subscription_evaluations: u64,
+    subscription_deltas: u64,
+    /// The tick's sub-phase profile (world_tick_ns, wal_ns, sub_apply_ns),
+    /// meaningful only when `ticks_succeeded > 0`.
+    last_tick_profile: (u64, u64, u64),
+}
+
 /// The single-process runtime coordinator.
 #[derive(Debug)]
 pub struct Runtime {
@@ -763,21 +796,26 @@ impl Runtime {
             tick_number,
         );
         let entry = self.worlds.get_mut(&world_id).expect("world exists");
-        Self::tick_entry(
-            &self.config,
-            &mut self.metrics,
-            &mut self.events,
-            &mut self.partitions,
+        let outcome = Self::tick_entry_collected(
+            self.config.tick_failure_policy(),
+            self.config.snapshot_interval(),
             entry,
             world_id,
             &delivered,
-        )
+        );
+        self.apply_outcome(outcome).0
     }
 
     /// Advances every running world by exactly one tick, in deterministic
     /// `(worker_id, world_id)` order (ADR-010 D2). Per-world failures are
     /// recorded (events + metrics) and follow the configured tick-failure
     /// policy without affecting other worlds.
+    ///
+    /// With more than one configured worker and more than one running world,
+    /// the tick phase executes the independent worlds **concurrently** on
+    /// scoped threads (ADR-018 D1) and merges their collected outcomes in
+    /// the same deterministic order — results are identical to the serial
+    /// path (the correctness oracle) at any worker count (ADR-018 D4).
     pub fn step(&mut self) -> Result<RuntimeStepReport, RuntimeError> {
         self.ensure_running()?;
         let started = Instant::now();
@@ -826,29 +864,22 @@ impl Runtime {
                 delivered.insert(*world_id, batch);
             }
         }
-        // Tick phase: worlds tick in the same deterministic order; each
-        // world's result never depends on its position (partitions do not
-        // read each other's state within a step).
-        for world_id in order {
-            let entry = self.worlds.get_mut(&world_id).expect("ordered worlds exist");
-            if entry.state != WorldLifecycle::Running {
+        // Tick phase (ADR-018 D1): independent worlds tick concurrently when
+        // parallelization can help; otherwise the serial path runs — the
+        // correctness oracle. Outcomes merge in deterministic world order.
+        let tick_failure_policy = self.config.tick_failure_policy();
+        let snapshot_interval = self.config.snapshot_interval();
+        let outcomes = self.tick_worlds(&order, &delivered, tick_failure_policy, snapshot_interval);
+        for (_world_id, outcome) in order.iter().zip(outcomes) {
+            let Some(outcome) = outcome else {
                 continue;
-            }
+            };
             report.ticks += 1;
-            let wal_before = self.metrics.wal_appends;
-            let batch: &[PartitionMessage] = delivered.get(&world_id).map(Vec::as_slice).unwrap_or(&[]);
-            match Self::tick_entry(
-                &self.config,
-                &mut self.metrics,
-                &mut self.events,
-                &mut self.partitions,
-                entry,
-                world_id,
-                batch,
-            ) {
+            let (result, wal_appends) = self.apply_outcome(outcome);
+            match result {
                 Ok(_) => {
                     report.succeeded += 1;
-                    report.wal_appends += self.metrics.wal_appends - wal_before;
+                    report.wal_appends += wal_appends;
                 }
                 Err(_) => report.failed += 1,
             }
@@ -863,7 +894,8 @@ impl Runtime {
     /// so callers (like the network gateway, ADR-011 D1) can fan results
     /// out per world. Per-world failures are recorded exactly as in `step`
     /// (events, metrics, and the configured [`TickFailurePolicy`]) and are
-    /// excluded from the returned results.
+    /// excluded from the returned results. Parallelizes identically to
+    /// [`step`](Self::step) (ADR-018 D1) with identical results.
     pub fn step_detailed(
         &mut self,
     ) -> Result<Vec<(WorldId, nexum_simulation::TickResult)>, RuntimeError> {
@@ -896,21 +928,14 @@ impl Runtime {
                 delivered.insert(*world_id, batch);
             }
         }
-        for world_id in order {
-            let entry = self.worlds.get_mut(&world_id).expect("ordered worlds exist");
-            if entry.state != WorldLifecycle::Running {
+        let tick_failure_policy = self.config.tick_failure_policy();
+        let snapshot_interval = self.config.snapshot_interval();
+        let outcomes = self.tick_worlds(&order, &delivered, tick_failure_policy, snapshot_interval);
+        for (world_id, outcome) in order.into_iter().zip(outcomes) {
+            let Some(outcome) = outcome else {
                 continue;
-            }
-            let batch: &[PartitionMessage] = delivered.get(&world_id).map(Vec::as_slice).unwrap_or(&[]);
-            if let Ok(result) = Self::tick_entry(
-                &self.config,
-                &mut self.metrics,
-                &mut self.events,
-                &mut self.partitions,
-                entry,
-                world_id,
-                batch,
-            ) {
+            };
+            if let Ok(result) = self.apply_outcome(outcome).0 {
                 results.push((world_id, result));
             }
         }
@@ -919,18 +944,18 @@ impl Runtime {
 
     /// Ticks one entry: deliver its inbound batch, gather input, execute,
     /// then coordinate durability, observation, and outbound message
-    /// enqueue. The single tick-processing path shared by `step`, `tick_once`
-    /// and `step_detailed`. Takes the runtime's mutable fields explicitly so
-    /// the caller can keep the `&mut WorldEntry` borrow alive.
-    fn tick_entry(
-        config: &RuntimeConfig,
-        metrics: &mut RuntimeMetrics,
-        events: &mut VecDeque<RuntimeEvent>,
-        partitions: &mut BTreeMap<PartitionId, PartitionEntry>,
+    /// **collection** (ADR-018 D2). The single tick-processing path shared
+    /// by `step`, `tick_once` and `step_detailed`, in both serial and
+    /// parallel execution. Runs against only the [`WorldEntry`]; every
+    /// effect on shared runtime state is collected into a [`TickOutcome`]
+    /// and applied by the caller in deterministic world order.
+    fn tick_entry_collected(
+        tick_failure_policy: TickFailurePolicy,
+        snapshot_interval: Option<u64>,
         entry: &mut WorldEntry,
         world_id: WorldId,
         delivered: &[PartitionMessage],
-    ) -> Result<nexum_simulation::TickResult, RuntimeError> {
+    ) -> TickOutcome {
         let frame = entry
             .inputs
             .pop_front()
@@ -953,18 +978,12 @@ impl Runtime {
         let result = match entry.world.tick_with_calls(&frame, delivered, &calls) {
             Ok(result) => result,
             Err(tick_error) => {
-                metrics.ticks_total += 1;
-                metrics.ticks_failed += 1;
-                metrics.tick_ns_total += started.elapsed().as_nanos() as u64;
-                Self::push_event(
-                    events,
-                    config.event_log_limit(),
-                    RuntimeEvent::TickFailed {
-                        world: world_id,
-                        tick: tick_error.tick(),
-                        error: tick_error.error().clone(),
-                    },
-                );
+                let mut events = Vec::new();
+                events.push(RuntimeEvent::TickFailed {
+                    world: world_id,
+                    tick: tick_error.tick(),
+                    error: tick_error.error().clone(),
+                });
                 // A failed tick committed nothing (zero authoritative
                 // mutation): requeue the drained calls at the front in FIFO
                 // order so no accepted call is silently lost (ADR-013 D3).
@@ -974,42 +993,52 @@ impl Runtime {
                 for call in calls.into_iter().rev() {
                     entry.calls.push_front(call);
                 }
-                match config.tick_failure_policy() {
+                let mut world_failures = 0;
+                match tick_failure_policy {
                     TickFailurePolicy::FailWorld => {
                         entry.state = WorldLifecycle::Failed;
-                        metrics.world_failures += 1;
-                        Self::push_event(
-                            events,
-                            config.event_log_limit(),
-                            RuntimeEvent::WorldFailed {
-                                world: world_id,
-                                reason: tick_error.error().clone(),
-                            },
-                        );
+                        world_failures = 1;
+                        events.push(RuntimeEvent::WorldFailed {
+                            world: world_id,
+                            reason: tick_error.error().clone(),
+                        });
                     }
                     TickFailurePolicy::Continue => {}
                 }
-                return Err(RuntimeError::Tick {
-                    world: world_id,
-                    error: tick_error.error().clone(),
-                });
+                return TickOutcome {
+                    result: Err(RuntimeError::Tick {
+                        world: world_id,
+                        error: tick_error.error().clone(),
+                    }),
+                    events,
+                    outbound: Vec::new(),
+                    ticks_total: 1,
+                    ticks_succeeded: 0,
+                    ticks_failed: 1,
+                    tick_ns_total: started.elapsed().as_nanos() as u64,
+                    changes_committed: 0,
+                    wal_appends: 0,
+                    wal_failures: 0,
+                    world_failures,
+                    snapshots: 0,
+                    subscription_evaluations: 0,
+                    subscription_deltas: 0,
+                    last_tick_profile: (0, 0, 0),
+                };
             }
         };
         let world_tick_ns = world_tick_start.elapsed().as_nanos() as u64;
-        metrics.ticks_total += 1;
-        metrics.ticks_succeeded += 1;
-        metrics.changes_committed += result.changes().len() as u64;
-        metrics.tick_ns_total += started.elapsed().as_nanos() as u64;
         entry.ticks_run += 1;
-        Self::push_event(
-            events,
-            config.event_log_limit(),
-            RuntimeEvent::TickCompleted {
-                world: world_id,
-                tick: result.tick(),
-                duration_ns: started.elapsed().as_nanos() as u64,
-            },
-        );
+        let mut events = Vec::new();
+        events.push(RuntimeEvent::TickCompleted {
+            world: world_id,
+            tick: result.tick(),
+            duration_ns: started.elapsed().as_nanos() as u64,
+        });
+        let mut wal_appends = 0;
+        let mut wal_failures = 0;
+        let mut world_failures = 0;
+        let mut snapshots = 0;
 
         // Durability first (ADR-010 D4).
         let mut persisted = false;
@@ -1017,37 +1046,49 @@ impl Runtime {
         if let Some(wal) = entry.wal.as_mut() {
             match wal.append(result.tx_id(), result.changes()) {
                 Ok(_) => {
-                    metrics.wal_appends += 1;
+                    wal_appends += 1;
                     persisted = true;
                 }
                 Err(error) => {
-                    metrics.wal_failures += 1;
+                    wal_failures += 1;
                     entry.state = WorldLifecycle::Failed;
-                    metrics.world_failures += 1;
-                    Self::push_event(
+                    world_failures += 1;
+                    events.push(RuntimeEvent::PersistenceFailure {
+                        world: world_id,
+                        tick: result.tick(),
+                        error: error.clone(),
+                    });
+                    return TickOutcome {
+                        result: Err(RuntimeError::Persistence(error)),
                         events,
-                        config.event_log_limit(),
-                        RuntimeEvent::PersistenceFailure {
-                            world: world_id,
-                            tick: result.tick(),
-                            error: error.clone(),
-                        },
-                    );
-                    return Err(RuntimeError::Persistence(error));
+                        outbound: Vec::new(),
+                        ticks_total: 1,
+                        ticks_succeeded: 1,
+                        ticks_failed: 0,
+                        tick_ns_total: started.elapsed().as_nanos() as u64,
+                        changes_committed: result.changes().len() as u64,
+                        wal_appends,
+                        wal_failures,
+                        world_failures,
+                        snapshots,
+                        subscription_evaluations: 0,
+                        subscription_deltas: 0,
+                        last_tick_profile: (0, 0, 0),
+                    };
                 }
             }
         }
         if persisted {
             // Periodic snapshots (best effort; failures are recorded in
             // metrics, never in world semantics).
-            if let Some(interval) = config.snapshot_interval() {
+            if let Some(interval) = snapshot_interval {
                 entry.ticks_since_snapshot += 1;
                 if entry.ticks_since_snapshot >= interval
                     && let Some(dir) = entry.snapshot_dir.clone()
                 {
                     let lsn = entry.wal.as_ref().expect("persistence enabled").lsn().as_u64();
                     if Snapshot::capture(entry.world.store(), lsn).write(&dir).is_ok() {
-                        metrics.snapshots += 1;
+                        snapshots += 1;
                         entry.ticks_since_snapshot = 0;
                     }
                 }
@@ -1062,24 +1103,214 @@ impl Runtime {
         // an empty change set would create a phantom sequence that no
         // subscription can observe — the next real delta would look like a gap
         // to every client view and be dropped as a `ViewGap`.
+        let mut subscription_evaluations = 0;
+        let mut subscription_deltas = 0;
+        let mut sub_ns = 0;
         if !result.changes().is_empty() {
             let sub_start = Instant::now();
             let report = entry
                 .subscriptions
                 .apply_changes(entry.world.store(), result.changes());
-            metrics.subscription_evaluations += report.evaluations();
-            metrics.subscription_deltas += report.deltas();
-            metrics.last_tick_profile =
-                (world_tick_ns, wal_ns, sub_start.elapsed().as_nanos() as u64);
-        } else {
-            metrics.last_tick_profile = (world_tick_ns, wal_ns, 0);
+            subscription_evaluations += report.evaluations();
+            subscription_deltas += report.deltas();
+            sub_ns = sub_start.elapsed().as_nanos() as u64;
         }
 
-        // Outbound message enqueue (ADR-012 D3): committed messages are
-        // queued to the destinations for their next tick. Bounded and
-        // non-blocking; drops are events + metrics.
-        Self::enqueue_outbound(config, metrics, events, partitions, result.outbound());
-        Ok(result)
+        // Outbound message collection (ADR-012 D3, ADR-018 D2): committed
+        // messages are queued to the destinations for their next tick by the
+        // apply step, in world order. Bounded and non-blocking; drops are
+        // events + metrics.
+        let outbound = result.outbound().to_vec();
+        let changes_committed = result.changes().len() as u64;
+        TickOutcome {
+            result: Ok(result),
+            events,
+            outbound,
+            ticks_total: 1,
+            ticks_succeeded: 1,
+            ticks_failed: 0,
+            tick_ns_total: started.elapsed().as_nanos() as u64,
+            changes_committed,
+            wal_appends,
+            wal_failures,
+            world_failures,
+            snapshots,
+            subscription_evaluations,
+            subscription_deltas,
+            last_tick_profile: (world_tick_ns, wal_ns, sub_ns),
+        }
+    }
+
+    /// Applies a collected [`TickOutcome`] to the runtime's shared state in
+    /// deterministic world order (ADR-018 D2): pushes the world's events
+    /// (bounded log), merges the metric deltas, and enqueues the world's
+    /// outbound messages. Returns the tick's result and its WAL-append
+    /// count so callers can build step reports.
+    fn apply_outcome(
+        &mut self,
+        outcome: TickOutcome,
+    ) -> (Result<nexum_simulation::TickResult, RuntimeError>, u64) {
+        let TickOutcome {
+            result,
+            events,
+            outbound,
+            ticks_total,
+            ticks_succeeded,
+            ticks_failed,
+            tick_ns_total,
+            changes_committed,
+            wal_appends,
+            wal_failures,
+            world_failures,
+            snapshots,
+            subscription_evaluations,
+            subscription_deltas,
+            last_tick_profile,
+        } = outcome;
+        for event in events {
+            Self::push_event(&mut self.events, self.config.event_log_limit(), event);
+        }
+        self.metrics.ticks_total += ticks_total;
+        self.metrics.ticks_succeeded += ticks_succeeded;
+        self.metrics.ticks_failed += ticks_failed;
+        self.metrics.tick_ns_total += tick_ns_total;
+        self.metrics.changes_committed += changes_committed;
+        self.metrics.wal_appends += wal_appends;
+        self.metrics.wal_failures += wal_failures;
+        self.metrics.world_failures += world_failures;
+        self.metrics.snapshots += snapshots;
+        self.metrics.subscription_evaluations += subscription_evaluations;
+        self.metrics.subscription_deltas += subscription_deltas;
+        if ticks_succeeded > 0 {
+            self.metrics.last_tick_profile = last_tick_profile;
+        }
+        Self::enqueue_outbound(
+            &self.config,
+            &mut self.metrics,
+            &mut self.events,
+            &mut self.partitions,
+            &outbound,
+        );
+        (result, wal_appends)
+    }
+
+    /// Ticks every running world in `order` by exactly one tick and returns
+    /// each running world's [`TickOutcome`] in `order` position (ADR-018
+    /// D1–D2).
+    ///
+    /// With `worker_count > 1` and more than one running world, the
+    /// independent worlds tick **concurrently** on scoped threads (one per
+    /// worker, over deterministic contiguous chunks of the ordered world
+    /// list); otherwise the serial path runs — the correctness oracle. The
+    /// assignment of worlds to threads never affects results: outcomes are
+    /// collected by world position and applied by the caller in
+    /// deterministic `(worker_id, world_id)` order. Worlds are reinserted
+    /// even if a thread panics, so the runtime is never left without its
+    /// worlds.
+    fn tick_worlds(
+        &mut self,
+        order: &[WorldId],
+        delivered: &BTreeMap<WorldId, Vec<PartitionMessage>>,
+        tick_failure_policy: TickFailurePolicy,
+        snapshot_interval: Option<u64>,
+    ) -> Vec<Option<TickOutcome>> {
+        let running = order
+            .iter()
+            .filter(|world| {
+                self.worlds
+                    .get(world)
+                    .is_some_and(|entry| entry.state == WorldLifecycle::Running)
+            })
+            .count();
+        if running <= 1 || self.config.worker_count() <= 1 {
+            // Serial path — the correctness oracle (ADR-018 D4).
+            let mut outcomes = Vec::with_capacity(order.len());
+            for world_id in order {
+                let entry = self.worlds.get_mut(world_id).expect("ordered worlds exist");
+                if entry.state != WorldLifecycle::Running {
+                    outcomes.push(None);
+                    continue;
+                }
+                let batch: &[PartitionMessage] =
+                    delivered.get(world_id).map(Vec::as_slice).unwrap_or(&[]);
+                outcomes.push(Some(Self::tick_entry_collected(
+                    tick_failure_policy,
+                    snapshot_interval,
+                    entry,
+                    *world_id,
+                    batch,
+                )));
+            }
+            outcomes
+        } else {
+            // Parallel path (ADR-018 D1): take the worlds out of the map so
+            // scoped threads can hold disjoint `&mut WorldEntry` — no unsafe,
+            // disjoint slices via `split_at_mut`.
+            let mut slots: Vec<Option<WorldEntry>> = Vec::with_capacity(order.len());
+            let mut outcomes: Vec<Option<TickOutcome>> = Vec::with_capacity(order.len());
+            for world_id in order {
+                slots.push(self.worlds.remove(world_id));
+                outcomes.push(None);
+            }
+            let threads = self.config.worker_count().min(order.len()).max(1);
+            let n = order.len();
+            let base = n / threads;
+            let rem = n % threads;
+            let scope_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                std::thread::scope(|scope| {
+                    let mut slot_rest: &mut [Option<WorldEntry>] = &mut slots;
+                    let mut outcome_rest: &mut [Option<TickOutcome>] = &mut outcomes;
+                    let mut order_rest: &[WorldId] = order;
+                    for thread in 0..threads {
+                        if slot_rest.is_empty() {
+                            break;
+                        }
+                        let chunk = base + usize::from(thread < rem);
+                        let (slots_head, slots_tail) = slot_rest.split_at_mut(chunk);
+                        let (outcomes_head, outcomes_tail) = outcome_rest.split_at_mut(chunk);
+                        let (order_head, order_tail) = order_rest.split_at(chunk);
+                        scope.spawn(move || {
+                            for ((slot, outcome_slot), world_id) in slots_head
+                                .iter_mut()
+                                .zip(outcomes_head.iter_mut())
+                                .zip(order_head.iter())
+                            {
+                                // Only running worlds tick — exactly like the
+                                // serial path. Failed/Created/Stopped worlds
+                                // keep an empty outcome slot.
+                                if let Some(entry) = slot.as_mut()
+                                    && entry.state == WorldLifecycle::Running
+                                {
+                                    let batch: &[PartitionMessage] =
+                                        delivered.get(world_id).map(Vec::as_slice).unwrap_or(&[]);
+                                    *outcome_slot = Some(Self::tick_entry_collected(
+                                        tick_failure_policy,
+                                        snapshot_interval,
+                                        entry,
+                                        *world_id,
+                                        batch,
+                                    ));
+                                }
+                            }
+                        });
+                        slot_rest = slots_tail;
+                        outcome_rest = outcomes_tail;
+                        order_rest = order_tail;
+                    }
+                });
+            }));
+            // Reinsert every world before anything else: a panicking thread
+            // must never leave the runtime without its worlds (ADR-018 D4).
+            for (world_id, slot) in order.iter().zip(slots) {
+                if let Some(entry) = slot {
+                    self.worlds.insert(*world_id, entry);
+                }
+            }
+            if let Err(panic) = scope_result {
+                std::panic::resume_unwind(panic);
+            }
+            outcomes
+        }
     }
 
     // --------------------------------------------------------- subscriptions

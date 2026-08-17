@@ -13,7 +13,7 @@
 //! stale + deliver `StaleNotification`s when the queue drains, or
 //! disconnect). Simulation and other clients are never blocked.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 
 use nexum_core::{ConnectionId, Error, SessionId, SubscriptionId, WorldId};
@@ -148,6 +148,12 @@ pub struct NetworkGateway {
     /// `ReducerResult` is routed, or cleared on detach/disconnect/world
     /// failure (the caller then receives an error, never a hang).
     pending_calls: BTreeMap<(WorldId, u64), PendingCall>,
+    /// Per-connection index of pending client request ids (Phase 18 finding:
+    /// the per-call `pending_calls` scans were O(pending) per call, making
+    /// inbound reducer routing O(clients²) — e.g. ~64M predicate evaluations
+    /// per movement tick at 8K clients). Kept in lockstep with
+    /// `pending_calls`; enables O(log n) pending-count and reuse checks.
+    pending_by_connection: BTreeMap<ConnectionId, BTreeSet<u64>>,
     /// The next gateway-allocated request id (monotonic per gateway, so
     /// unique across every world and connection).
     next_gateway_request: u64,
@@ -179,6 +185,7 @@ impl NetworkGateway {
             next_connection: 0,
             next_session: 0,
             pending_calls: BTreeMap::new(),
+            pending_by_connection: BTreeMap::new(),
             next_gateway_request: 1,
             snapshot_requests: BTreeMap::new(),
             events: VecDeque::new(),
@@ -561,6 +568,7 @@ impl NetworkGateway {
                 }
                 // Pending reducer calls die with the attachment.
                 self.pending_calls.retain(|_, pending| pending.connection != connection);
+                self.pending_by_connection.remove(&connection);
                 Self::push_event(
                     &mut self.events,
                     self.config.event_log_limit(),
@@ -629,11 +637,13 @@ impl NetworkGateway {
             self.metrics.reducer_calls_rejected += 1;
             return;
         }
+        // O(log n) per-connection pending-call bookkeeping (Phase 18
+        // finding): the previous `pending_calls.values()` scans were O(pending)
+        // per call, i.e. O(clients²) on a movement tick.
         let pending_for_connection = self
-            .pending_calls
-            .values()
-            .filter(|pending| pending.connection == connection)
-            .count();
+            .pending_by_connection
+            .get(&connection)
+            .map_or(0, BTreeSet::len);
         if pending_for_connection >= self.config.max_pending_calls_per_connection() {
             let _ = self.send_reducer_error(connection, request_id, "too many pending reducer calls");
             self.metrics.reducer_calls_rejected += 1;
@@ -643,9 +653,10 @@ impl NetworkGateway {
         // still pending would be ambiguous *to that client* (it correlates
         // by its own id); reject defensively. Cross-client ids never collide
         // here because correlation uses the gateway-allocated id below.
-        let client_id_reused = self.pending_calls.values().any(|pending| {
-            pending.connection == connection && pending.client_request_id == request_id
-        });
+        let client_id_reused = self
+            .pending_by_connection
+            .get(&connection)
+            .is_some_and(|ids| ids.contains(&request_id));
         if client_id_reused {
             let _ = self.send_reducer_error(connection, request_id, "request id already pending");
             self.metrics.reducer_calls_rejected += 1;
@@ -675,6 +686,10 @@ impl NetworkGateway {
                         client_request_id: request_id,
                     },
                 );
+                self.pending_by_connection
+                    .entry(connection)
+                    .or_default()
+                    .insert(request_id);
                 self.metrics.reducer_calls_accepted += 1;
             }
             Err(error) => {
@@ -963,6 +978,9 @@ impl NetworkGateway {
                 if let Some(pending) =
                     self.pending_calls.remove(&(world, call_result.request_id()))
                 {
+                    if let Some(ids) = self.pending_by_connection.get_mut(&pending.connection) {
+                        ids.remove(&pending.client_request_id);
+                    }
                     let message = if call_result.is_ok() {
                         ServerMessage::ReducerResult {
                             request_id: pending.client_request_id,
@@ -1009,6 +1027,9 @@ impl NetworkGateway {
             .collect();
         for (world, gateway_id, pending) in unresolved {
             self.pending_calls.remove(&(world, gateway_id));
+            if let Some(ids) = self.pending_by_connection.get_mut(&pending.connection) {
+                ids.remove(&pending.client_request_id);
+            }
             let message = ServerMessage::ReducerResult {
                 request_id: pending.client_request_id,
                 ok: false,
@@ -1236,6 +1257,7 @@ impl NetworkGateway {
         // results can no longer be delivered. The runtime may still execute
         // accepted calls (fire-and-forget); the correlation state is gone.
         self.pending_calls.retain(|_, pending| pending.connection != *connection);
+        self.pending_by_connection.remove(connection);
         entry.connection.close();
         self.metrics.clients_dropped += 1;
         Self::push_event(

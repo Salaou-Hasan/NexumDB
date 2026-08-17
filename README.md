@@ -268,6 +268,30 @@ The remaining spikes are the WASM **fire burst** (1,000 simultaneous
 `fire_weapon` calls re-instantiate wasmi per invocation — ~550ms
 server-side at 1K) — the explicit Phase 22 target.
 
+## Multi-Core Runtime (Phase 18)
+
+Phase 18 (see the [full report](docs/reports/18-multi-core.md)) made the
+runtime's tick phase **parallel across independent worlds/partitions**
+(ADR-018): `worker_count` workers now tick worlds concurrently on scoped
+threads, with outcomes merged in the deterministic `(worker_id, world_id)`
+order — identical results to the serial path (the correctness oracle),
+proven by exact trace-equality tests including cross-partition messaging.
+
+Measured at 8K clients × 8 partitions (profile B, release):
+
+| Workers | p95 (movement) | p99 | avg |
+|--------:|---------------:|----:|----:|
+| 1 | 62.3 ms | 103.6 ms | 23.5 ms |
+| 4 | 37.3 ms | 62.5 ms | 16.3 ms |
+| 8 | 31.7 ms | 52.4 ms | 15.2 ms |
+
+World ticks drop from ~60 ms (serial) to ~24 ms (8 workers) on movement
+ticks; scaling plateaus at 8 workers (only 8 worlds). The benchmark also
+found and fixed a gateway inbound **O(N²)**: per-call `pending_calls`
+scans → per-connection `BTreeSet` index — inbound 25.5ms → 2.3ms. The
+remaining movement-tick cost is the O(clients) gateway fan-out / SDK
+decode path (Phase 21) and the WASM fire burst (Phase 22).
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

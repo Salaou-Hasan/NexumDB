@@ -3,8 +3,13 @@
 use std::path::PathBuf;
 
 use nexum_core::row;
-use nexum_core::{ColumnType, Error, SystemId, TickId, Value, WorldId};
-use nexum_simulation::{InputCommand, InputFrame, SimulationConfig, SystemDefinition, World};
+use nexum_core::{
+    ColumnType, Error, PartitionId, ReducerId, SystemId, TickId, Value, WorldId,
+};
+use nexum_reducer::{ReducerArgs, ReducerDefinition};
+use nexum_simulation::{
+    InputCommand, InputFrame, PartitionMessage, SimulationConfig, SystemDefinition, World,
+};
 use nexum_subscription::{Query, SubscriptionUpdate};
 use nexum_table::TableStore;
 
@@ -1066,4 +1071,224 @@ fn events_are_bounded_and_metrics_count_work() {
     assert!(runtime.event_count() <= 4);
     runtime.drain_events();
     assert_eq!(runtime.event_count(), 0);
+}
+
+// ------------------------------------------------- Phase 18: parallel tick
+
+/// A factory whose worlds form a message ring (ADR-012): partition `p`
+/// sends a `ring` message to partition `(p + 1) % n` every tick; the
+/// destination handler appends a ledger row. Every world's sender runs
+/// every tick, so outbound collection, cross-partition delivery, and the
+/// handler commit path are all exercised through `step`/`step_detailed`.
+fn ring_factory() -> WorldFactory {
+    Box::new(move |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
+        if store.table("ledger").is_none() {
+            store
+                .create_table(
+                    nexum_core::TableSchema::builder("ledger")
+                        .column("seq", ColumnType::U64)
+                        .column("from", ColumnType::U64)
+                        .column("to", ColumnType::U64)
+                        .primary_key(&["seq", "from"])
+                        .build()
+                        .unwrap(),
+                )
+                .unwrap();
+        }
+        let mut world = World::new(id, store, sim)?;
+        world
+            .native_mut()
+            .register(
+                ReducerDefinition::new(ReducerId::from_u64(0), "ring", |ctx, args| {
+                    let seq = args.require_u64("seq")?;
+                    let from = args.require_u64("from")?;
+                    let to = args.require_u64("to")?;
+                    ctx.insert("ledger", row![seq, from, to])?;
+                    Ok(Value::U64(seq))
+                })
+                .unwrap(),
+            )
+            .unwrap();
+        world
+            .add_system(SystemDefinition::new(SystemId::from_u64(0), "sender", 0, |ctx, _| {
+                // Capture-free (systems are fn pointers): the ring target
+                // derives from the sender partition (0 → 1, 1 → 2, else → 0).
+                // Destinations with several senders still see deterministic
+                // `(sent_tick, from, seq)` delivery order (ADR-012 D5).
+                let from = ctx.partition().as_u64();
+                let to = match from {
+                    0 => 1,
+                    1 => 2,
+                    _ => 0,
+                };
+                let tick = ctx.tick().as_u64();
+                ctx.send_to(
+                    PartitionId::from_u64(to),
+                    "ring",
+                    ReducerArgs::new()
+                        .insert("seq", tick)
+                        .insert("from", from)
+                        .insert("to", to),
+                )?;
+                Ok(())
+            })
+            .unwrap())?;
+        Ok(world)
+    })
+}
+
+/// The full observable outcome of a ring scenario — per-world committed
+/// change traces, per-world outbound message traces, final world tick
+/// numbers, and metric aggregates. All of these are worker-count
+/// **independent**: comparing them across worker counts proves parallel
+/// execution is observationally identical to serial (ADR-018 D4).
+#[derive(Debug, PartialEq, Eq)]
+struct RingTrace {
+    changes: Vec<Vec<Vec<nexum_storage::Change>>>,
+    outbound: Vec<Vec<Vec<PartitionMessage>>>,
+    next_ticks: Vec<u64>,
+    ticks_total: u64,
+    ticks_succeeded: u64,
+    changes_committed: u64,
+    messages_sent: u64,
+    messages_delivered: u64,
+}
+
+/// Runs `worlds` ring partitions for `ticks` steps at `workers` workers.
+/// Returns the worker-count-independent trace and the drained
+/// `TickCompleted` stream (order is `(worker_id, world_id)` by design,
+/// ADR-010 D2, so it depends on the worker count).
+fn run_ring_scenario(
+    workers: usize,
+    worlds: u64,
+    ticks: u64,
+) -> (RingTrace, Vec<(u64, u64)>) {
+    let config = RuntimeConfig::new(ring_factory()).with_worker_count(workers);
+    let mut runtime = Runtime::new(config).unwrap();
+    for world in 0..worlds {
+        runtime.create_world(WorldId::from_u64(world), SimulationConfig::new()).unwrap();
+        runtime
+            .register_partition(PartitionId::from_u64(world), WorldId::from_u64(world))
+            .unwrap();
+        runtime.start_world(WorldId::from_u64(world)).unwrap();
+    }
+    let mut changes = vec![Vec::new(); worlds as usize];
+    let mut outbound = vec![Vec::new(); worlds as usize];
+    for _ in 0..ticks {
+        let results = runtime.step_detailed().unwrap();
+        for (world, result) in &results {
+            changes[world.as_u64() as usize].push(result.changes().to_vec());
+            outbound[world.as_u64() as usize].push(result.outbound().to_vec());
+        }
+    }
+    let completed = runtime
+        .drain_events()
+        .into_iter()
+        .filter_map(|event| match event {
+            crate::RuntimeEvent::TickCompleted { world, tick, .. } => {
+                Some((world.as_u64(), tick.as_u64()))
+            }
+            _ => None,
+        })
+        .collect();
+    let next_ticks = (0..worlds)
+        .map(|world| runtime.world_status(WorldId::from_u64(world)).unwrap().next_tick.as_u64())
+        .collect();
+    let metrics = runtime.metrics();
+    let trace = RingTrace {
+        changes,
+        outbound,
+        next_ticks,
+        ticks_total: metrics.ticks_total,
+        ticks_succeeded: metrics.ticks_succeeded,
+        changes_committed: metrics.changes_committed,
+        messages_sent: metrics.messages_sent,
+        messages_delivered: metrics.messages_delivered,
+    };
+    (trace, completed)
+}
+
+/// The single-threaded path is the correctness oracle: parallel execution at
+/// 2, 4, and 6 workers must reproduce the serial run exactly for everything
+/// that is worker-count independent — per-world `Vec<Change>`, the outbound
+/// message stream, final tick numbers, and metric aggregates (ADR-018 D4).
+/// The ring scenario also proves the delivery phase stays order-safe when
+/// sender and receiver worlds tick concurrently (worlds 2–5 all message
+/// world 0).
+#[test]
+fn parallel_step_matches_serial_step_exactly() {
+    let (serial, _) = run_ring_scenario(1, 6, 5);
+    for workers in [2, 4, 6] {
+        let (trace, _) = run_ring_scenario(workers, 6, 5);
+        assert_eq!(serial, trace, "workers={workers}");
+    }
+}
+
+/// The `TickCompleted` event stream must arrive in the deterministic
+/// `(worker_id, world_id)` order (ADR-010 D2, ADR-018 D2) — worlds assigned
+/// round-robin to workers at creation, each worker's worlds ascending.
+#[test]
+fn parallel_step_emits_events_in_deterministic_order() {
+    for (workers, worlds) in [(2u64, 6u64), (4, 6), (4, 9), (6, 6)] {
+        let (_, completed) = run_ring_scenario(workers as usize, worlds, 4);
+        let expected: Vec<(u64, u64)> = (0..4)
+            .flat_map(|tick| {
+                (0..workers).flat_map(move |worker| {
+                    (0..worlds).filter_map(move |world| {
+                        (world % workers == worker).then_some((world, tick))
+                    })
+                })
+            })
+            .collect();
+        assert_eq!(completed, expected, "workers={workers} worlds={worlds}");
+    }
+}
+
+/// The worker-count-independent observable of the failing-world scenario:
+/// per-step (ticks, succeeded, failed) reports, the sorted event multiset,
+/// and final tick numbers.
+type FailureTrace = (Vec<(u64, u64, u64)>, Vec<(u8, u64, u64)>, Vec<u64>);
+
+/// Parallel ticking must not change failure semantics: a failing world fails
+/// at the same tick, other worlds commit identically, and the step reports
+/// (ticks/succeeded/failed per step), the event *multiset*, and final tick
+/// numbers are identical at any worker count. (Event *order* is
+/// `(worker_id, world_id)` by design, covered by
+/// [`parallel_step_emits_events_in_deterministic_order`].)
+#[test]
+fn parallel_step_preserves_failure_isolation() {
+    let run = |workers: usize| -> FailureTrace {
+        let config = RuntimeConfig::new(failing_factory()).with_worker_count(workers);
+        let mut runtime = Runtime::new(config).unwrap();
+        start_worlds(&mut runtime, &[0, 1, 2]);
+        let mut reports = Vec::new();
+        for _ in 0..3 {
+            let report = runtime.step().unwrap();
+            reports.push((report.ticks, report.succeeded, report.failed));
+        }
+        let mut events: Vec<(u8, u64, u64)> = runtime
+            .drain_events()
+            .into_iter()
+            .filter_map(|event| match event {
+                crate::RuntimeEvent::TickCompleted { world, tick, .. } => {
+                    Some((0u8, world.as_u64(), tick.as_u64()))
+                }
+                crate::RuntimeEvent::TickFailed { world, tick, .. } => {
+                    Some((1u8, world.as_u64(), tick.as_u64()))
+                }
+                crate::RuntimeEvent::WorldFailed { world, .. } => Some((2u8, world.as_u64(), 0)),
+                _ => None,
+            })
+            .collect();
+        events.sort_unstable();
+        let next_ticks = [0u64, 1, 2]
+            .iter()
+            .map(|world| runtime.world_status(WorldId::from_u64(*world)).unwrap().next_tick.as_u64())
+            .collect();
+        (reports, events, next_ticks)
+    };
+    let serial = run(1);
+    for workers in [2, 4] {
+        assert_eq!(serial, run(workers), "workers={workers}");
+    }
 }

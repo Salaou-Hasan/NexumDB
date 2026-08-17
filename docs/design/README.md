@@ -133,11 +133,24 @@ is implemented.
   (per-call wasmi instantiation) — Phase 22. Report:
   [reports/20-interest-management.md](../reports/20-interest-management.md).
 
+## Completed (Phase 18)
+
+- [18-multi-core.md](18-multi-core.md) — Multi-core runtime (ADR-018):
+  the runtime's tick phase executes independent worlds/partitions
+  concurrently on scoped threads (one per worker), with per-world
+  outcomes collected and merged in the deterministic `(worker_id,
+  world_id)` order — observationally identical to serial (proven by
+  exact trace-equality tests incl. cross-partition messaging). The Phase
+  18 benchmark also uncovered and fixed a gateway inbound O(N²)
+  (per-call `pending_calls` scans → per-connection `BTreeSet` index;
+  inbound 25.5ms → 2.3ms). Measured at 8K clients × 8 partitions: p95
+  movement tick 62.3ms → 31.7ms (8 workers), runtime step 15.3ms →
+  7.4ms. Report: [reports/18-multi-core.md](../reports/18-multi-core.md).
+
 ## Planned topics
 
 - **Phase 22 — WASM reducer optimization** — the measured #1 remaining
   cost: the fire burst re-instantiates wasmi per call (~550ms for 1,000
   calls at 1K). Instance/linker reuse, batched host calls.
-- **Phase 18 — Multi-core runtime** — parallel execution across
-  independent worlds/partitions (linear world-tick path, ~12ms/1K moves).
-- **Phase 21 — Memory/alloc** — per-tick allocation reduction.
+- **Phase 21 — Memory/alloc** — per-tick allocation reduction; also the
+  remaining O(clients) gateway fan-out / SDK decode path.

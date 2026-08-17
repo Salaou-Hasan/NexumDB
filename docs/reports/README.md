@@ -18,6 +18,7 @@ and architecture decisions (ADRs) live in
 | [17-gameplay-hotpath.md](17-gameplay-hotpath.md) | 17 | Gameplay hot-path & CCU scaling: removed O(N) reducer scans, encode-once broadcast, subscription fan-out ceiling. |
 | [19-hotpath-profiling.md](19-hotpath-profiling.md) | 19 | Execution hot-path profiling: measured ranked bottlenecks (subscription fan-out 72% of tick), Arc-shared row payloads — sub_apply 30.5ms → 11.4ms (2.7×). |
 | [20-interest-management.md](20-interest-management.md) | 20 | Interest management / AOI: duplicate-subscription grouping (evaluations/change ~1,000 → 1.00, sub_apply 57×) + bounded TickUpdate; measured ladder A@10K & B@1K PASS. |
+| [18-multi-core.md](18-multi-core.md) | 18 | Multi-core runtime: parallel world/partition ticks (ADR-018, deterministic — exact trace equality vs serial) + gateway inbound O(N²) fix. 8K×8p movement p95 62.3ms → 31.7ms; inbound 25.5ms → 2.3ms. |
 
 ## CCU summary (Phases 16–17)
 
