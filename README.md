@@ -189,23 +189,26 @@ Nexum for production and measured its real concurrent-user ceiling:
 - **Release profile**: LTO (fat), single codegen unit, panic=unwind.
 
 **CCU (honest, measured on this laptop, in-process transport, real
-protocol/gateway/runtime/world/SDK):**
+protocol/gateway/runtime/world/SDK, post-Phase-18: 8–16 partitions × 8–16
+workers):**
 
 | CCU (connection-only) | tick p99 | 50 ms budget | class |
 |---|---|---|---|
 | 1K | 2.8 ms | ✓ | PASS |
 | 5K | 15.5 ms | ✓ | PASS |
-| 10K | 35.5 ms | ✓ | **PASS** |
-| 15K | 63.7 ms | ✗ | DEGRADED |
-| 20K | 75.5 ms | ✗ | DEGRADED |
+| 10K | 12.1 ms | ✓ | **PASS** |
+| 15K | 19.3 ms | ✓ | **PASS** |
+| 20K | 32.0 ms | ✓ | **PASS** |
 
-10,000 concurrent connections pass; 15–20K connect without loss but exceed
-the tick budget. Realistic gameplay now uses direct PK/index lookups (Phase 17 fixed the
-full-scan bottleneck — 30× server-side improvement) but remains bounded
-by the subscription engine's all-to-all fan-out O(changes × subscriptions)
-per tick, which is the Phase 20 interest-management target. The harness also exposed and we fixed a real bug:
-cross-client request-ID collision in the gateway (all SDK clients start
-request ids at 1). Reproduce:
+**Connection-only: 20K PASS** (Phase 16: 15K 63.7 ms and 20K 75.5 ms were
+DEGRADED). **Gameplay: 10K movement DEGRADED** (p95 40 ms, p99 73 ms),
+**15K movement SATURATED** (p95 65 ms, p99 98–115 ms) — bounded by the
+O(clients) gateway reducer-result fan-out + SDK decode/drain (Phase 21)
+and the WASM fire burst (Phase 22), not by the multi-core world tick
+(Phase 18). 15–20K *gameplay* CCU is NOT yet claimed. The harness also
+exposed and we fixed two real bugs: cross-client request-ID collision in
+the gateway (all SDK clients start request ids at 1) and a gateway inbound
+O(N²) (per-call `pending_calls` scans → per-connection index). Reproduce:
 
 ```bash
 cargo run --release -p game-server --example ccu -- --clients 10000 --profile A --ticks 100

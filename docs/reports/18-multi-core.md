@@ -133,3 +133,56 @@ occasional fire):
   O(clients) gateway/SDK path plus WASM fire cost, not the world tick.
 - Next measured steps: Phase 21 (network/serialization), Phase 22 (WASM
   reuse), then re-running the CCU ladder toward 10K/15K.
+
+## 8. Post-Phase-18 CCU ceiling (10K / 15K / 20K ladder)
+
+Run after the Phase 18 merge on the same reference machine (release, 20 Hz,
+in-process transport, real gateway/runtime/world/subscriptions/SDK).
+Longer runs (120–150 ticks) are used because the first-run p99 occasionally
+contains a one-off warmup/scheduler spike (e.g. A@10K first run 242 ms;
+steady state 12 ms). All runs: 0 tick failures, 0 drops, 0 rejections.
+
+| CCU | Profile | P×W | p50 | p95 | p99 | Class |
+|----:|---------|-----|----:|----:|----:|-------|
+| 10K | A (conn) | 8×8 | 10.0 ms | 11.5 ms | 12.1 ms | **PASS** |
+| 15K | A (conn) | 8×8 | 17.0 ms | 18.4 ms | 19.3 ms | **PASS** |
+| 20K | A (conn) | 8×8 | 25.4 ms | 27.3 ms | 32.0 ms | **PASS** |
+| 10K | B (move) | 8×8 | 10.7 ms | 39.5 ms | 72.9 ms | DEGRADED |
+| 15K | B (move) | 8×8 | 17.9 ms | 66.5 ms | 114.5 ms | SATURATED |
+| 15K | B (move) | 16×16 | 21.5 ms | 64.6 ms | 97.6 ms | DEGRADED |
+| 10K | C (real) | 8×8 | 11.5 ms | 156 ms | 815 ms | SATURATED (fire) |
+| 15K | C (real) | 16×16 | 21.5 ms | 341 ms | 1.0 s | SATURATED (fire) |
+
+### Connection-only ceiling: 20K PASS
+
+The steady-state idle per-tick baseline is linear in connections (~1 ms per
+1K: 10K ≈ 10 ms, 15K ≈ 17 ms, 20K ≈ 25 ms) and passes the 50 ms budget at
+20K. Phase 16 measured A@15K 63.7 ms / A@20K 75.5 ms (both DEGRADED); now
+**15K 19.3 ms and 20K 32.0 ms p99 — PASS**. Extrapolating the linear
+baseline, connection-only saturates around ~35–40K on this machine, but the
+sequential connect path degrades first (15K ≈ 34 s, 20K ≈ 66 s ≈ 300–440
+conn/s) — a warmup-path cost, not steady state.
+
+### Movement ceiling: ~10–12K gameplay CCU
+
+Movement ticks (profile B) scale with the O(clients) **gateway reducer-
+result fan-out + SDK decode/drain** — now the dominant cost, not the world
+tick (parallel world_tick sub-phase is ~2 ms avg at 15K). 10K movement ≈
+40 ms p95 (DEGRADED, near budget); 15K movement ≈ 65 ms p95 (over
+budget). 16×16 marginally improves p99 (114 → 98 ms) but raises the
+per-tick baseline (more worlds). No silent loss at any scale.
+
+### Fire-burst ceiling (WASM, Phase 22)
+
+The simultaneous fire tick (profile C, every 100 ticks) re-instantiates
+wasmi per call: 10K fires ≈ 0.8 s, 15K ≈ 1.0 s — parallel worlds cut this
+~8× vs the pre-Phase-18 serial ~5.5 s, but it remains the hard p99 spike.
+Phase 22 (instance/linker reuse) is the fix.
+
+### Honest statement
+
+- **Connection-only: 20K PASS** (p99 32 ms < 50 ms budget).
+- **Gameplay: ~10K movement DEGRADED (p99 73 ms), 15K movement SATURATED
+  (p99 98–115 ms)** — bounded by gateway/SDK O(clients) work (Phase 21)
+  and the WASM fire burst (Phase 22), not by the multi-core world tick.
+- 15–20K *gameplay* CCU is therefore NOT yet claimed.

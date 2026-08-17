@@ -20,14 +20,23 @@ and architecture decisions (ADRs) live in
 | [20-interest-management.md](20-interest-management.md) | 20 | Interest management / AOI: duplicate-subscription grouping (evaluations/change ~1,000 → 1.00, sub_apply 57×) + bounded TickUpdate; measured ladder A@10K & B@1K PASS. |
 | [18-multi-core.md](18-multi-core.md) | 18 | Multi-core runtime: parallel world/partition ticks (ADR-018, deterministic — exact trace equality vs serial) + gateway inbound O(N²) fix. 8K×8p movement p95 62.3ms → 31.7ms; inbound 25.5ms → 2.3ms. |
 
-## CCU summary (Phases 16–17)
+## CCU summary (Phases 16–18)
 
-Connection-only CCU: **10K PASS** (tick p99 35 ms < 50 ms budget).
-Realistic gameplay: server-side reducer O(N) scans removed (30× improvement),
-but all-to-all subscription fan-out O(changes × subs) limits gameplay CCU
-at ~1K. Phase 20 (interest management) is the prerequisite for 10K+
-gameplay CCU.
-See [16-production.md](16-production.md) and [17-gameplay-hotpath.md](17-gameplay-hotpath.md).
+Post-Phase-18 ladder (8–16 partitions × 8–16 workers, release, 20 Hz):
+
+- **Connection-only: 20K PASS** — p99 32 ms (10K 12 ms, 15K 19 ms, 20K
+  32 ms) vs Phase 16's 15K 63.7 ms / 20K 75.5 ms DEGRADED.
+- **Movement (profile B): 10K DEGRADED** (p95 40 ms, p99 73 ms), **15K
+  SATURATED** (p95 65 ms, p99 98–115 ms) — bounded by the O(clients)
+  gateway reducer-result fan-out + SDK decode/drain (Phase 21), not the
+  multi-core world tick (~2 ms avg at 15K).
+- **Realistic (profile C):** movement plus the simultaneous fire burst
+  (wasmi re-instantiation per call): 10K ≈ 0.8 s, 15K ≈ 1.0 s fire tick
+  (Phase 22). 15–20K *gameplay* CCU is NOT yet claimed.
+
+See [18-multi-core.md](18-multi-core.md), [16-production.md](16-production.md),
+[17-gameplay-hotpath.md](17-gameplay-hotpath.md), and
+[20-interest-management.md](20-interest-management.md).
 
 ## Benchmark summary (Phase 15)
 
