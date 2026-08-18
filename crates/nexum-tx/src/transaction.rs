@@ -124,10 +124,16 @@ impl Transaction {
     /// Both transactions must be `Active`. The child is meant to execute one
     /// system concurrently with its siblings and then be merged back via
     /// [`absorb`](Self::absorb).
+    ///
+    /// Phase 22: the parent's write set is inherited as a **shared, immutable
+    /// `Arc`** — branching is O(1) instead of an O(parent-writes) deep copy
+    /// that made per-call reducer dispatch quadratic under tick bursts. The
+    /// child's own writes accumulate in a private layer over the inherited
+    /// view; [`absorb`](Self::absorb) folds only the deltas back.
     pub fn branch_of(&mut self, parent: &Transaction) -> Result<()> {
         self.ensure_active()?;
         parent.ensure_active()?;
-        self.writes = parent.writes.clone();
+        self.writes = parent.writes.branch();
         self.provisional = parent.provisional.clone();
         Ok(())
     }
@@ -163,9 +169,11 @@ impl Transaction {
             }
         }
         self.reads.absorb(&child.reads);
-        for (table_id, row_id, entry) in child.writes.entries() {
-            self.writes.set(table_id, row_id, entry.clone());
-        }
+        // Phase 22: fold only the child's own writes (its deltas) across the
+        // branch boundary, applying the coalescing rules — including the
+        // cross-branch `insert → delete` net no-op. This is O(child writes)
+        // instead of an O(parent writes) full merge per call.
+        self.writes.absorb(child.writes);
         for (table_id, count) in &child.provisional {
             let ours = self.provisional.entry(*table_id).or_insert(0);
             if *count > *ours {
@@ -357,14 +365,16 @@ impl Transaction {
                 owners.push(owner);
             }
         }
-        for (write_table, row_id, entry) in self.writes.entries() {
-            if write_table != table_id {
-                continue;
-            }
-            if let Some(row) = entry.row()
-                && row_owns_key(table, index_name, key, row)?
-            {
-                owners.push(row_id);
+        // Scan pending writes for newly-inserted rows that own the key.
+        // Skip entirely when no Insert entries exist (update-heavy workloads
+        // like fire_weapon never insert).
+        if self.writes.has_any_insert() {
+            for (row_id, entry) in self.writes.entries_for_table(table_id) {
+                if let Some(row) = entry.row()
+                    && row_owns_key(table, index_name, key, row)?
+                {
+                    owners.push(row_id);
+                }
             }
         }
         owners.sort_unstable();
@@ -412,14 +422,14 @@ impl Transaction {
                 owners.push(owner);
             }
         }
-        for (write_table, row_id, entry) in self.writes.entries() {
-            if write_table != table_id {
-                continue;
-            }
-            if let Some(row) = entry.row()
-                && row_owns_index_key(table, index_name, key, row)?
-            {
-                owners.push(row_id);
+        // Same skip optimization as lookup_unique.
+        if self.writes.has_any_insert() {
+            for (row_id, entry) in self.writes.entries_for_table(table_id) {
+                if let Some(row) = entry.row()
+                    && row_owns_index_key(table, index_name, key, row)?
+                {
+                    owners.push(row_id);
+                }
             }
         }
         owners.sort_unstable();

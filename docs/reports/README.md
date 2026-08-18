@@ -21,6 +21,7 @@ and architecture decisions (ADRs) live in
 | [18-multi-core.md](18-multi-core.md) | 18 | Multi-core runtime: parallel world/partition ticks (ADR-018, deterministic — exact trace equality vs serial) + gateway inbound O(N²) fix. 8K×8p movement p95 62.3ms → 31.7ms; inbound 25.5ms → 2.3ms. |
 | [21-networking-hotpath.md](21-networking-hotpath.md) | 21 | Networking/serialization hot-path: Arc-shared broadcast frames (zero-copy TU, 10K allocs/tick saved) + per-world attached index (O(worlds×CCU) → O(CCU) scans); D2 batching measured net-negative and reverted. Movement fan-out −23…27%, p99 72.9 → 64.7 ms @ 10K. |
 | [21.5-extreme-profiling.md](21.5-extreme-profiling.md) | 21.5 | Extreme execution profiling: complete measured cost map (per-phase, per-reducer, allocation). WASM fire_weapon 65–69 µs/call ≈ 15× native (Phase 22 target); idle PASS @ 20K; no O(CCU²) remains; p99.9 ≈ p99 (no pathological tail). Two instrumentation bugs fixed. |
+| [22-wasm-hotpath.md](22-wasm-hotpath.md) | 22 | WASM hot-path & transaction overlay optimization: COW WriteSet (branch O(1) via Arc clone, 728× faster), has_any_insert skip (14× faster invoke), absorb fast-path + try_unwrap. Harness loop 411 µs → 119 µs (3.5×). Profile C @ 1K p99 573 ms → 57.5 ms (10×). |
 
 ## CCU summary (Phases 16–18)
 

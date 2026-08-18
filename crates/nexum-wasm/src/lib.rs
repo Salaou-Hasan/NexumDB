@@ -78,7 +78,7 @@ mod registry;
 
 pub use limits::{ABI_IN_CAP, ABI_OUT_CAP, WasmLimits};
 pub use module::WasmReducerModule;
-pub use registry::WasmModuleRegistry;
+pub use registry::{WasmModuleRegistry, WasmStageTimes};
 
 #[cfg(test)]
 mod tests;

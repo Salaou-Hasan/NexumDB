@@ -109,6 +109,7 @@ dependencies = [
  "nexum-simulation",
  "nexum-subscription",
  "nexum-table",
+ "nexum-tx",
  "nexum-wasm",
  "wat",
 ]

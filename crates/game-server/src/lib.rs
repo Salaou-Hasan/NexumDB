@@ -41,6 +41,7 @@ pub use shutdown::ShutdownHandle;
 pub use game::{
     game_factory, move_args, spawn, CLIENT_REDUCERS, COL_ALIVE, COL_AMMO, COL_COOLDOWN,
     COL_CONNECTED, COL_FACING, COL_HP, COL_ID, COL_MAX_HP, COL_SCORE, COL_X, COL_Y, TABLE,
-    ARENA_HEIGHT, ARENA_WIDTH, FIRE_COOLDOWN, FIRE_DAMAGE, START_AMMO, START_HP,
+    ARENA_HEIGHT, ARENA_WIDTH, FIRE_COOLDOWN, FIRE_DAMAGE, POS_INDEX, START_AMMO, START_HP,
 };
+pub use wasm::fire_weapon_module;
 pub use server::{run_server, ServerArgs};

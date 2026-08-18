@@ -389,6 +389,39 @@ cargo run --release -p game-server --example ccu -- --clients 1000 --profile E -
 cargo run --release -p game-server --example ccu --features ccu-alloc -- --clients 5000 --profile B --ticks 100 --count-alloc
 ```
 
+## WASM & Transaction Overlay Optimization (Phase 22)
+
+Phase 22 (see the [full report](docs/reports/22-wasm-hotpath.md),
+[design](docs/design/22-wasm-hotpath.md)) discovered that the dominant
+gameplay bottleneck was NOT WASM execution itself, but the **transaction
+overlay path** that WASM host calls traverse. The isolated WASM cost
+(~13 µs/call) was dwarfed by the per-call branch/absorb overhead under
+burst load (~411 µs/call → 119 µs/call, **3.5× faster**).
+
+Three structural changes to the transaction engine:
+
+1. **COW WriteSet with Arc-based own layer** — `branch()` is now O(1)
+   via `Arc::clone` instead of O(parent-writes) BTreeMap deep-copy
+   (728× faster: 79 µs → 109 ns).
+2. **`has_any_insert()` skip** — `lookup_unique`/`lookup_index` skip the
+   O(N) pending-insert scan when no Insert entries exist (14× faster:
+   315 µs → 22 µs per invoke).
+3. **Absorb fast-path + `try_unwrap`** — for update-only workloads (no
+   Deletes), skip the logical-view check and move entries instead of
+   cloning.
+
+Measured results (release, 8 workers × 8 partitions):
+
+- **fire_weapon**: 65–69 µs → 47–56 µs/call (1.2–1.5×)
+- **Profile C @ 1K p99**: ~573 ms → 57.5 ms (**10× faster**, now DEGRADED
+  instead of SATURATED)
+- **Profile E @ 1K p99**: ~1,094 ms → 71.9 ms (**15× faster**)
+- **Harness loop total**: 411 µs → 119 µs (**3.5× faster**)
+
+Current honest ceiling: realistic gameplay ~1K CCU (Profile C DEGRADED at
+p99 = 57.5 ms, just above 50 ms budget). The remaining bottleneck is
+subscription fan-out at higher CCU levels.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

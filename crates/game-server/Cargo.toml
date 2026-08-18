@@ -11,6 +11,7 @@ nexum-core.workspace = true
 nexum-table.workspace = true
 nexum-reducer.workspace = true
 nexum-simulation.workspace = true
+nexum-tx.workspace = true
 nexum-runtime.workspace = true
 nexum-network.workspace = true
 nexum-game-server.workspace = true

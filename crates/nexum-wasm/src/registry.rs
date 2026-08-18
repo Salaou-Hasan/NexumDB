@@ -130,7 +130,7 @@ impl WasmModuleRegistry {
         let mut tx = Transaction::begin(store);
         let (events, outcome) = {
             let mut ctx = ReducerContext::new(&mut tx, store);
-            let outcome = run_module(&self.engine, module, &mut ctx, &self.limits, args);
+            let outcome = run_module(&self.engine, module, &mut ctx, &self.limits, args, None);
             let events = ctx.take_events();
             (events, outcome)
         };
@@ -138,6 +138,30 @@ impl WasmModuleRegistry {
         // The single commit/abort decision point shared with the native
         // registry: `Error::Conflict` from commit propagates unchanged.
         finish_invocation(store, tx, events, outcome)
+    }
+
+    /// Runs the named WASM reducer against **an existing transaction**
+    /// without committing, collecting a per-stage time breakdown (Phase 22
+    /// instrumentation; the hot-path entry points pass `None` and pay zero
+    /// cost). Returns the outcome plus the stage times.
+    pub fn invoke_in_tx_timed(
+        &self,
+        store: &TableStore,
+        tx: &mut Transaction,
+        name: &str,
+        args: &ReducerArgs,
+    ) -> Result<(Value, Vec<ReducerEvent>, WasmStageTimes)> {
+        let module = self.lookup(name).ok_or_else(|| {
+            Error::not_found(format!("wasm module '{name}' is not registered"))
+        })?;
+        let mut ctx = ReducerContext::new(tx, store);
+        let mut times = WasmStageTimes::default();
+        let outcome = run_module(&self.engine, module, &mut ctx, &self.limits, args, Some(&mut times));
+        let events = ctx.take_events();
+        match outcome {
+            Ok(value) => Ok((value, events, times)),
+            Err(error) => Err(error),
+        }
     }
 
     /// Runs the named WASM reducer against **an existing transaction**
@@ -166,7 +190,7 @@ impl WasmModuleRegistry {
             Error::not_found(format!("wasm module '{name}' is not registered"))
         })?;
         let mut ctx = ReducerContext::new(tx, store);
-        let outcome = run_module(&self.engine, module, &mut ctx, &self.limits, args);
+        let outcome = run_module(&self.engine, module, &mut ctx, &self.limits, args, None);
         let events = ctx.take_events();
         match outcome {
             Ok(value) => Ok((value, events)),
@@ -175,19 +199,47 @@ impl WasmModuleRegistry {
     }
 }
 
+/// A per-invocation stage-time breakdown (Phase 22 instrumentation).
+///
+/// `store_setup` covers `Store` + host-state construction; `instantiate`
+/// covers `Linker` + `define_host` + module instantiation + start; `encode`
+/// covers argument encoding and the guest-memory copy; `exec` covers the
+/// guest entry call (including every host ABI call); `result` covers the
+/// return-value read and decode. Filled only by `invoke_in_tx_timed`;
+/// hot-path entries pass `None` and the stages are skipped.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct WasmStageTimes {
+    /// Store + host state construction.
+    pub store_setup_ns: u64,
+    /// Linker + host-function definition + instantiate + start.
+    pub instantiate_ns: u64,
+    /// Argument encoding + guest-memory write.
+    pub encode_ns: u64,
+    /// The guest entry call (guest instructions + all host ABI calls).
+    pub exec_ns: u64,
+    /// Return-value read + decode.
+    pub result_ns: u64,
+    /// Total wall time of the invocation.
+    pub total_ns: u64,
+}
+
 /// Runs one module invocation against `ctx`'s transaction.
 ///
 /// Every instantiation is fresh: a new `Store` holds the new host state
 /// (which borrows the invocation's context), the fuel budget is armed before
 /// any guest code runs, and the entry point is the only guest function ever
 /// called. `args` are encoded deterministically into the guest input buffer.
+/// When `times` is `Some`, each stage is timed (Phase 22 instrumentation).
 fn run_module(
     engine: &Engine,
     module: &WasmReducerModule,
     ctx: &mut ReducerContext<'_>,
     limits: &WasmLimits,
     args: &ReducerArgs,
+    mut times: Option<&mut WasmStageTimes>,
 ) -> Result<Value> {
+    let total_start = std::time::Instant::now();
+    let stage_start = total_start;
     let mut store = Store::new(engine, HostState::new(Some(ctx), limits));
     store.limiter(|state: &mut HostState<'_, '_>| &mut state.memory_limiter);
     // Arm the fuel budget before instantiation: a module start function (if
@@ -195,6 +247,10 @@ fn run_module(
     store
         .set_fuel(limits.max_fuel)
         .map_err(|e| Error::internal(format!("cannot arm fuel: {e}")))?;
+    if let Some(ref mut t) = times {
+        t.store_setup_ns = stage_start.elapsed().as_nanos() as u64;
+    }
+    let instantiate_start = std::time::Instant::now();
     let mut linker = Linker::new(engine);
     define_host(&mut linker)
         .map_err(|e| Error::internal(format!("cannot define host functions: {e}")))?;
@@ -207,9 +263,13 @@ fn run_module(
         .get_export(&store, "memory")
         .and_then(|export| export.into_memory())
         .ok_or_else(|| Error::internal("validated module has no memory export"))?;
+    if let Some(ref mut t) = times {
+        t.instantiate_ns = instantiate_start.elapsed().as_nanos() as u64;
+    }
 
     // Write the encoded arguments into the guest input buffer, bounded by
     // the configured budget before any guest code runs.
+    let encode_start = std::time::Instant::now();
     let mut args_bytes = Vec::new();
     encode_args(&mut args_bytes, args);
     if args_bytes.len() > limits.max_args_bytes {
@@ -225,7 +285,11 @@ fn run_module(
     let run = instance
         .get_typed_func::<(), i32>(&store, ENTRY_NAME)
         .map_err(|e| Error::internal(format!("cannot access the reducer entry point: {e}")))?;
+    if let Some(ref mut t) = times {
+        t.encode_ns = encode_start.elapsed().as_nanos() as u64;
+    }
 
+    let exec_start = std::time::Instant::now();
     let returned = match run.call(&mut store, ()) {
         Ok(returned) => returned,
         Err(error) if error.as_trap_code() == Some(TrapCode::OutOfFuel) => {
@@ -239,6 +303,9 @@ fn run_module(
             )));
         }
     };
+    if let Some(ref mut t) = times {
+        t.exec_ns = exec_start.elapsed().as_nanos() as u64;
+    }
 
     // A sticky ABI error can never be ignored: even if the guest returned
     // normally, a failed op means the invocation aborts.
@@ -268,6 +335,7 @@ fn run_module(
     }
 
     // Success: `returned` bytes of a single encoded `Value` at out_ptr.
+    let result_start = std::time::Instant::now();
     let n = returned as usize;
     if n > limits.max_result_bytes {
         return Err(Error::capacity(format!(
@@ -282,5 +350,9 @@ fn run_module(
     let mut cursor: &[u8] = &buf;
     let value = get_value(&mut cursor)
         .map_err(|_| Error::invalid_argument("reducer return value is malformed"))?;
+    if let Some(ref mut t) = times {
+        t.result_ns = result_start.elapsed().as_nanos() as u64;
+        t.total_ns = total_start.elapsed().as_nanos() as u64;
+    }
     Ok(value)
 }

@@ -32,7 +32,8 @@
 use std::time::{Duration, Instant};
 
 use game_server::{
-    game_factory, move_args, CLIENT_REDUCERS, ARENA_HEIGHT, ARENA_WIDTH,
+    fire_weapon_module, game_factory, move_args, CLIENT_REDUCERS, ARENA_HEIGHT,
+    ARENA_WIDTH, POS_INDEX, TABLE,
 };
 use nexum_game_server::{
     GameInstanceConfig, GameServer, GameServerConfig, JoinOutcome,
@@ -77,6 +78,10 @@ struct Args {
     /// Enable the counting allocator (requires the `ccu-alloc` feature) and
     /// report allocs/tick and bytes/tick over the measured phase.
     count_alloc: bool,
+    /// Phase 22: print a per-stage breakdown of one real `fire_weapon` WASM
+    /// invocation (store setup / instantiate / encode / exec / result) and
+    /// exit. Requires no clients; ignores the rest of the harness.
+    wasm_stages: bool,
 }
 
 fn parse_args() -> Args {
@@ -92,6 +97,7 @@ fn parse_args() -> Args {
         profile_detail: false,
         reducer_profile: false,
         count_alloc: false,
+        wasm_stages: false,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -108,12 +114,13 @@ fn parse_args() -> Args {
             "--profile-detail" => args.profile_detail = true,
             "--reducer-profile" => args.reducer_profile = true,
             "--count-alloc" => args.count_alloc = true,
+            "--wasm-stages" => args.wasm_stages = true,
             "--help" | "-h" => {
                 println!(
                     "usage: ccu [--clients N] [--profile A|B|C|D|E] [--ticks N] \
                      [--hz N] [--partitions N] [--workers N] [--window N] \
                      [--queue N] [--profile-detail] [--reducer-profile] \
-                     [--count-alloc]"
+                     [--count-alloc] [--wasm-stages]"
                 );
                 std::process::exit(0);
             }
@@ -400,9 +407,151 @@ fn drive_profile(profile: char, tick: u64, clients: &mut [SimClient], hz: u64) {
     }
 }
 
+/// Phase 22: per-stage cost of one real `fire_weapon` WASM invocation.
+///
+/// Uses the production module bytes and the exact game schema, populated
+/// with a dense arena so the combat lookup path is exercised (not the
+/// early-reject path). Each invocation runs against a fresh transaction via
+/// the timed entry point; the stage totals are aggregated over `n` calls.
+fn wasm_stage_breakdown() {
+    use nexum_core::{row, ColumnType, TableSchema};
+    use nexum_reducer::ReducerArgs;
+    use nexum_table::TableStore;
+    use nexum_tx::Transaction;
+    use nexum_wasm::{WasmLimits, WasmModuleRegistry};
+
+    let mut store = TableStore::new();
+    let schema = TableSchema::builder(TABLE)
+        .column("id", ColumnType::U64)
+        .column("x", ColumnType::I64)
+        .column("y", ColumnType::I64)
+        .column("hp", ColumnType::I64)
+        .column("max_hp", ColumnType::I64)
+        .column("alive", ColumnType::I64)
+        .column("score", ColumnType::I64)
+        .column("cooldown", ColumnType::I64)
+        .column("facing", ColumnType::I64)
+        .column("ammo", ColumnType::I64)
+        .column("connected", ColumnType::I64)
+        .primary_key(&["id"])
+        .index(POS_INDEX, &["x", "y"])
+        .build()
+        .expect("valid players schema");
+    store.create_table(schema).expect("players table created");
+
+    // Dense arena: every cell occupied, alive, ready to fire, so the combat
+    // target lookup always finds a candidate.
+    const PLAYERS: u64 = 4_000;
+    for id in 1..=PLAYERS {
+        // 1-based ids (the game's player ids start at 1); dense placement.
+        let n = id - 1;
+        let (x, y) = (n % ARENA_WIDTH as u64, (n / ARENA_WIDTH as u64) % ARENA_HEIGHT as u64);
+        let mut tx = Transaction::begin(&mut store);
+        tx.insert(
+            &store,
+            TABLE,
+            row![id, x as i64, y as i64, 100i64, 100i64, 1i64, 0i64, 0i64, 1i64, 10i64, 1i64],
+        )
+        .unwrap();
+        tx.commit(&mut store).unwrap();
+    }
+
+    let mut registry = WasmModuleRegistry::new(WasmLimits::default()).unwrap();
+    registry
+        .register("fire_weapon", 1, fire_weapon_module())
+        .unwrap();
+
+    let iterations = 20_000usize;
+    let warmup = 2_000usize;
+    let mut acc = nexum_wasm::WasmStageTimes::default();
+    let mut n = 0u64;
+    for i in 0..(iterations + warmup) {
+        let caller = (i as u64 % PLAYERS) + 1; // ids are 1-based in the game
+        let args = ReducerArgs::new().insert("target", caller);
+        let mut tx = Transaction::begin(&mut store);
+        let outcome = registry
+            .invoke_in_tx_timed(&store, &mut tx, "fire_weapon", &args);
+        let _ = tx.abort();
+        let (_, _, times) = outcome.expect("real fire_weapon invocation succeeds");
+        if i >= warmup {
+            acc.store_setup_ns += times.store_setup_ns;
+            acc.instantiate_ns += times.instantiate_ns;
+            acc.encode_ns += times.encode_ns;
+            acc.exec_ns += times.exec_ns;
+            acc.result_ns += times.result_ns;
+            acc.total_ns += times.total_ns;
+            n += 1;
+        }
+    }
+    let ns = |v: u64| v as f64 / n as f64;
+    let total = ns(acc.total_ns).max(1.0);
+    println!("\n=== WASM STAGE BREAKDOWN (real fire_weapon, {} calls) ===", n);
+    println!("  store_setup {:>9.1} ns  ({:>5.1}%)", ns(acc.store_setup_ns), ns(acc.store_setup_ns) / total * 100.0);
+    println!("  instantiate {:>9.1} ns  ({:>5.1}%)", ns(acc.instantiate_ns), ns(acc.instantiate_ns) / total * 100.0);
+    println!("  encode      {:>9.1} ns  ({:>5.1}%)", ns(acc.encode_ns), ns(acc.encode_ns) / total * 100.0);
+    println!("  exec        {:>9.1} ns  ({:>5.1}%)", ns(acc.exec_ns), ns(acc.exec_ns) / total * 100.0);
+    println!("  result      {:>9.1} ns  ({:>5.1}%)", ns(acc.result_ns), ns(acc.result_ns) / total * 100.0);
+    println!("  total       {:>9.1} ns/call", total);
+
+    // Harness-style loop: one tick transaction; each call branches off it,
+    // invokes, and absorbs back (exactly the World Phase 0c pattern). This
+    // isolates the transaction branch/absorb cost from the rest of the
+    // pipeline: if it is far above the isolated per-call cost above, the
+    // O(parent-writes) copy per call is the measured harness bottleneck.
+    // One tick tx with CALLS_PER_TICK branch/invoke/absorb calls (the World
+    // Phase 0c pattern at harness burst scale). With the write set growing
+    // every call, an O(parent-writes) branch copy shows up as a per-call
+    // cost that grows with burst position; the average over the burst is
+    // reported.
+    const CALLS_PER_TICK: usize = 2_000;
+    let mut total_ns = 0u64;
+    let mut branch_ns = 0u64;
+    let mut invoke_ns = 0u64;
+    let mut absorb_ns = 0u64;
+    let mut total_n = 0u64;
+    for _ in 0..200 {
+        let mut tick_tx = Transaction::begin(&mut store);
+        for i in 0..CALLS_PER_TICK {
+            let caller = (i as u64 % PLAYERS) + 1;
+            let args = ReducerArgs::new().insert("target", caller);
+            let t0 = std::time::Instant::now();
+            let mut child = Transaction::new(tick_tx.id());
+            child.branch_of(&tick_tx).expect("branch");
+            let t1 = std::time::Instant::now();
+            let outcome = registry.invoke_in_tx(&store, &mut child, "fire_weapon", &args);
+            let t2 = std::time::Instant::now();
+            match outcome {
+                Ok((_, _events)) => {
+                    tick_tx.absorb(child).expect("absorb");
+                }
+                Err(_) => {
+                    let _ = child.abort();
+                }
+            }
+            let t3 = std::time::Instant::now();
+            branch_ns += t1.duration_since(t0).as_nanos() as u64;
+            invoke_ns += t2.duration_since(t1).as_nanos() as u64;
+            absorb_ns += t3.duration_since(t2).as_nanos() as u64;
+            total_ns += t3.duration_since(t0).as_nanos() as u64;
+            total_n += 1;
+        }
+        let _ = tick_tx.abort();
+    }
+    println!("\n=== HARNESS-STYLE LOOP ({CALLS_PER_TICK} branch/invoke/absorb per tick tx, {total_n} calls) ===");
+    println!("  branch    {:>9.1} ns/call", branch_ns as f64 / total_n as f64);
+    println!("  invoke    {:>9.1} ns/call", invoke_ns as f64 / total_n as f64);
+    println!("  absorb    {:>9.1} ns/call", absorb_ns as f64 / total_n as f64);
+    println!("  total     {:>9.1} ns/call", total_ns as f64 / total_n as f64);
+    println!();
+}
+
 /// Runs the harness and classifies the result honestly.
 fn main() {
     let args = parse_args();
+    if args.wasm_stages {
+        wasm_stage_breakdown();
+        return;
+    }
     println!(
         "CCU harness: clients={} profile={} ticks={} hz={} partitions={} workers={} window={}",
         args.clients, args.profile, args.ticks, args.hz, args.partitions, args.workers, args.window

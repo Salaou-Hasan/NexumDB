@@ -30,6 +30,7 @@ pub fn run(subcommands: &[String]) {
     }
     if all || subcommands.iter().any(|s| s == "wasm") {
         reducers(true);
+        wasm_stages();
     }
     if all || subcommands.iter().any(|s| s == "sub") {
         subscriptions();
@@ -362,6 +363,127 @@ fn reducers(wasm_mode: bool) {
             1e9 / ns
         );
     }
+    println!();
+}
+
+/// A WASM reducer with the same host-call pattern as the game's
+/// `fire_weapon` (lookup_unique → get → update → emit) for the Phase 22
+/// per-stage breakdown.
+const WASM_FIRELIKE_WAT: &str = r#"(module
+  (import "nexum" "op" (func $op (param i32 i32 i32 i32 i32) (result i32)))
+  (memory (export "memory") 16)
+  (global (export "_nexum_in_ptr") i32 (i32.const 0))
+  (global (export "_nexum_out_ptr") i32 (i32.const 16384))
+  (data (i32.const 90000) "players")
+  (data (i32.const 90100) "primary")
+  (func $put_str (param $dst i32) (param $src i32) (param $len i32) (result i32)
+    (local $k i32)
+    (i64.store align=1 (local.get $dst) (i64.extend_i32_u (local.get $len)))
+    (block $done (loop $l
+      (br_if $done (i32.ge_u (local.get $k) (local.get $len)))
+      (i32.store8 align=1 (i32.add (i32.add (local.get $dst) (i32.const 8)) (local.get $k))
+        (i32.load8_u align=1 (i32.add (local.get $src) (local.get $k))))
+      (local.set $k (i32.add (local.get $k) (i32.const 1)))
+      (br $l)))
+    (i32.add (local.get $dst) (i32.add (i32.const 8) (local.get $len))))
+  (func $put_u64 (param $dst i32) (param $v i64) (result i32)
+    (i64.store align=1 (local.get $dst) (local.get $v))
+    (i32.add (local.get $dst) (i32.const 8)))
+  (func $put_value_u64 (param $dst i32) (param $v i64) (result i32)
+    (i32.store8 align=1 (local.get $dst) (i32.const 8))
+    (i64.store align=1 (i32.add (local.get $dst) (i32.const 1)) (local.get $v))
+    (i32.add (local.get $dst) (i32.const 9)))
+  (func $put_value_i64 (param $dst i32) (param $v i64) (result i32)
+    (i32.store8 align=1 (local.get $dst) (i32.const 4))
+    (i64.store align=1 (i32.add (local.get $dst) (i32.const 1)) (local.get $v))
+    (i32.add (local.get $dst) (i32.const 9)))
+  (func $call_op (param $op i32) (param $len i32) (result i32)
+    (call $op (local.get $op) (i32.const 0) (local.get $len) (i32.const 16384) (i32.const 65536)))
+  (func (export "_nexum_reducer_run") (result i32)
+    (local $p i32)
+    (local.set $p (call $put_str (i32.const 0) (i32.const 90000) (i32.const 7)))
+    (local.set $p (call $put_str (local.get $p) (i32.const 90100) (i32.const 7)))
+    (local.set $p (call $put_u64 (local.get $p) (i64.const 1)))
+    (local.set $p (call $put_value_u64 (local.get $p) (i64.const 7)))
+    (drop (call $call_op (i32.const 4) (local.get $p)))
+    ;; get the row
+    (local.set $p (call $put_str (i32.const 0) (i32.const 90000) (i32.const 7)))
+    (local.set $p (call $put_u64 (local.get $p) (i64.const 1)))
+    (drop (call $call_op (i32.const 1) (local.get $p)))
+    ;; update the row
+    (local.set $p (call $put_str (i32.const 0) (i32.const 90000) (i32.const 7)))
+    (local.set $p (call $put_u64 (local.get $p) (i64.const 1)))
+    (local.set $p (call $put_u64 (local.get $p) (i64.const 3)))
+    (local.set $p (call $put_value_u64 (local.get $p) (i64.const 1)))
+    (local.set $p (call $put_value_u64 (local.get $p) (i64.const 2)))
+    (local.set $p (call $put_value_i64 (local.get $p) (i64.const 90)))
+    (drop (call $call_op (i32.const 6) (local.get $p)))
+    ;; emit
+    (local.set $p (call $put_str (i32.const 0) (i32.const 90100) (i32.const 7)))
+    (local.set $p (call $put_value_u64 (local.get $p) (i64.const 7)))
+    (drop (call $call_op (i32.const 8) (local.get $p)))
+    (i32.store8 align=1 (i32.const 16384) (i32.const 4))
+    (i64.store align=1 (i32.const 16385) (i64.const 25))
+    (i32.const 9))
+)"#;
+
+/// Phase 22: per-stage WASM invocation cost breakdown (store setup,
+/// instantiate, encode, exec incl. host calls, result decode). Uses the
+/// `invoke_in_tx_timed` instrumentation.
+fn wasm_stages() {
+    println!("== wasm stages (per-call breakdown) ==");
+    let mut store = nexum_table::TableStore::new();
+    store
+        .create_table(
+            nexum_core::TableSchema::builder("players")
+                .column("id", nexum_core::ColumnType::U64)
+                .column("zone", nexum_core::ColumnType::U64)
+                .column("health", nexum_core::ColumnType::I64)
+                .primary_key(&["id"])
+                .build()
+                .expect("schema builds"),
+        )
+        .expect("table created");
+    let mut tx = Transaction::begin(&mut store);
+    tx.insert(&store, "players", nexum_core::row![7u64, 7u64, 100i64])
+        .unwrap();
+    tx.commit(&mut store).unwrap();
+
+    let mut registry = WasmModuleRegistry::new(WasmLimits::default()).unwrap();
+    registry
+        .register("firelike", 1, wat::parse_str(WASM_FIRELIKE_WAT).unwrap())
+        .unwrap();
+
+    let args = ReducerArgs::new().insert("__caller", 7u64);
+    let iterations = 20_000;
+    let warmup = 2_000;
+
+    // Warmup + steady-state loop, accumulating stage times.
+    let mut acc = nexum_wasm::WasmStageTimes::default();
+    let mut n = 0u64;
+    for i in 0..(iterations + warmup) {
+        let mut tx = Transaction::begin(&mut store);
+        let (_, _, times) = registry
+            .invoke_in_tx_timed(&store, &mut tx, "firelike", &args)
+            .unwrap();
+        if i >= warmup {
+            acc.store_setup_ns += times.store_setup_ns;
+            acc.instantiate_ns += times.instantiate_ns;
+            acc.encode_ns += times.encode_ns;
+            acc.exec_ns += times.exec_ns;
+            acc.result_ns += times.result_ns;
+            acc.total_ns += times.total_ns;
+            n += 1;
+        }
+    }
+    let ns = |v: u64| v as f64 / n as f64;
+    let total = ns(acc.total_ns).max(1.0);
+    println!("  store_setup {:>8.1} ns  ({:>5.1}%)", ns(acc.store_setup_ns), ns(acc.store_setup_ns) / total * 100.0);
+    println!("  instantiate {:>8.1} ns  ({:>5.1}%)", ns(acc.instantiate_ns), ns(acc.instantiate_ns) / total * 100.0);
+    println!("  encode      {:>8.1} ns  ({:>5.1}%)", ns(acc.encode_ns), ns(acc.encode_ns) / total * 100.0);
+    println!("  exec        {:>8.1} ns  ({:>5.1}%)", ns(acc.exec_ns), ns(acc.exec_ns) / total * 100.0);
+    println!("  result      {:>8.1} ns  ({:>5.1}%)", ns(acc.result_ns), ns(acc.result_ns) / total * 100.0);
+    println!("  total       {:>8.1} ns/call", total);
     println!();
 }
 

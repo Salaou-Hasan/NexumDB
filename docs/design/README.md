@@ -179,10 +179,23 @@ is implemented.
   movement tick 62.3ms → 31.7ms (8 workers), runtime step 15.3ms →
   7.4ms. Report: [reports/18-multi-core.md](../reports/18-multi-core.md).
 
+## Completed (Phase 22)
+
+- [22-wasm-hotpath.md](22-wasm-hotpath.md) — Transaction overlay optimization
+  (canonical Phase 22): COW WriteSet with Arc-based own layer (branch
+  O(1) via Arc clone instead of O(N) BTreeMap deep-copy), `has_any_insert()`
+  skip (lookup_unique/lookup_index skip the O(N) pending-insert scan when
+  no Insert entries exist — the common case for update-heavy workloads),
+  absorb fast-path + `Arc::try_unwrap` (skip logical-view check for
+  non-Delete workloads, move entries instead of cloning). Measured: harness
+  loop 411 µs → 119 µs (3.5×), Profile C @ 1K p99 573 ms → 57.5 ms
+  (10×). Report:
+  [reports/22-wasm-hotpath.md](../reports/22-wasm-hotpath.md).
+
 ## Planned topics
 
-- **Phase 22 — WASM reducer optimization** — the measured #1 remaining
-  cost: the fire burst re-instantiates wasmi per call (~550ms for 1,000
-  calls at 1K). Instance/linker reuse, batched host calls.
-- **Phase 23 — networking/transport** — inbound frame batching, real
+- **Phase 23 — WASM instance reuse** — the isolated WASM cost (13.8 µs/call)
+  is dominated by instantiate (47%, 6.5 µs). Caching the compiled Linker
+  and using pre-instantiated modules.
+- **Phase 24 — networking/transport** — inbound frame batching, real
   (non-in-process) transport benchmarking.
