@@ -232,16 +232,24 @@ fn step_server_timed(server: &mut GameServer, t: &mut PhaseTimers) {
     let t0 = Instant::now();
     server.gateway_mut().process_inbound();
     let t1 = Instant::now();
-    let _ = server.step();
+    // Split the game-server step into its public halves: the authoritative
+    // runtime tick (parallel worlds) and the gateway fan-out (TickUpdate
+    // broadcast + subscription pumps + reducer-result routing).
+    let results = server
+        .runtime_mut()
+        .step_detailed()
+        .expect("runtime tick");
     let t2 = Instant::now();
-    server.gateway_mut().pump_subscriptions();
+    let _ = server.gateway_mut().fan_out_results(&results);
     let t3 = Instant::now();
-    server.gateway_mut().flush_outbound().expect("flush outbound");
+    server.gateway_mut().pump_subscriptions();
     let t4 = Instant::now();
+    server.gateway_mut().flush_outbound().expect("flush outbound");
+    let t5 = Instant::now();
     t.inbound_ns += t1.duration_since(t0).as_nanos() as u64;
     t.tick_ns += t2.duration_since(t1).as_nanos() as u64;
-    t.fanout_ns += t3.duration_since(t2).as_nanos() as u64;
-    t.flush_ns += t4.duration_since(t3).as_nanos() as u64;
+    t.fanout_ns += (t3.duration_since(t2) + t4.duration_since(t3)).as_nanos() as u64;
+    t.flush_ns += t5.duration_since(t4).as_nanos() as u64;
     t.count += 1;
     // Read the runtime's per-tick sub-phase profile (world tick / WAL /
     // subscription apply) from the last committed tick.
@@ -372,6 +380,9 @@ fn main() {
     let dropped_before = server.gateway().metrics().messages_dropped;
     let rejected_before = server.gateway().metrics().inputs_rejected
         + server.gateway().metrics().reducer_calls_rejected;
+    let tick_before = server.gateway().metrics().tick_updates_sent;
+    let sub_msg_before = server.gateway().metrics().subscription_messages_sent;
+    let result_before = server.gateway().metrics().reducer_results_sent;
 
     let mut phase_timers = PhaseTimers::default();
     for tick in 0..args.ticks {
@@ -424,9 +435,18 @@ fn main() {
     let per_change = subs_eval as f64 / (runtime_metrics.changes_committed.max(1)) as f64;
     println!("subs:  evaluations={subs_eval} deltas={subs_deltas} per_change={per_change:.2} views={}",
         runtime_metrics.subscription_views);
+    let tick_delta = metrics.tick_updates_sent.saturating_sub(tick_before);
+    let sub_msg_delta = metrics
+        .subscription_messages_sent
+        .saturating_sub(sub_msg_before);
+    let result_delta = metrics
+        .reducer_results_sent
+        .saturating_sub(result_before);
     println!("net:   conns={} sessions={} subs={} frames={} rate_limited={}",
         metrics.connections, metrics.sessions, metrics.subscriptions,
         metrics.frames_received, metrics.rate_limited);
+    println!("out:   tick_updates={tick_delta} sub_deltas={sub_msg_delta} reducer_results={result_delta} total={}",
+        tick_delta + sub_msg_delta + result_delta);
     println!("game:  players_active={} games={} reducer_calls={}",
         game_metrics.players_active, game_metrics.games_active, game_metrics.reducer_calls);
     // Calibrated to measured steady-state RSS (Phase 18 follow-up): the

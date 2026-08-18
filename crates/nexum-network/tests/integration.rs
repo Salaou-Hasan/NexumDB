@@ -114,7 +114,7 @@ fn connect_client(gateway: &mut NetworkGateway) -> MemoryConnection {
 
 fn send_client(client: &mut MemoryConnection, message: &ClientMessage, max: u32) {
     let frame = protocol::encode_client(message, max).unwrap();
-    client.try_send_frame(frame).unwrap();
+    client.try_send_frame(Arc::from(frame)).unwrap();
 }
 
 fn recv_server(client: &mut MemoryConnection, max: u32) -> ServerMessage {

@@ -19,6 +19,7 @@ and architecture decisions (ADRs) live in
 | [19-hotpath-profiling.md](19-hotpath-profiling.md) | 19 | Execution hot-path profiling: measured ranked bottlenecks (subscription fan-out 72% of tick), Arc-shared row payloads — sub_apply 30.5ms → 11.4ms (2.7×). |
 | [20-interest-management.md](20-interest-management.md) | 20 | Interest management / AOI: duplicate-subscription grouping (evaluations/change ~1,000 → 1.00, sub_apply 57×) + bounded TickUpdate; measured ladder A@10K & B@1K PASS. |
 | [18-multi-core.md](18-multi-core.md) | 18 | Multi-core runtime: parallel world/partition ticks (ADR-018, deterministic — exact trace equality vs serial) + gateway inbound O(N²) fix. 8K×8p movement p95 62.3ms → 31.7ms; inbound 25.5ms → 2.3ms. |
+| [21-networking-hotpath.md](21-networking-hotpath.md) | 21 | Networking/serialization hot-path: Arc-shared broadcast frames (zero-copy TU, 10K allocs/tick saved) + per-world attached index (O(worlds×CCU) → O(CCU) scans); D2 batching measured net-negative and reverted. Movement fan-out −23…27%, p99 72.9 → 64.7 ms @ 10K. |
 
 ## CCU summary (Phases 16–18)
 
@@ -29,7 +30,10 @@ Post-Phase-18 ladder (8–16 partitions × 8–16 workers, release, 20 Hz):
 - **Movement (profile B): 10K DEGRADED** (p95 40 ms, p99 73 ms), **15K
   SATURATED** (p95 65 ms, p99 98–115 ms) — bounded by the O(clients)
   gateway reducer-result fan-out + SDK decode/drain (Phase 21), not the
-  multi-core world tick (~2 ms avg at 15K).
+  multi-core world tick (~2 ms avg at 15K). Phase 21 (Arc frames + attached
+  index) improved the movement fan-out phase −23…27% and movement p99
+  72.9 → 64.7 ms @ 10K (B@15K 16×16: p95 64.6 → 59.0, p99 97.6 → 92.4 ms),
+  but the movement tick remains bound by the sum of O(CCU) per-client work.
 - **Realistic (profile C):** movement plus the simultaneous fire burst
   (wasmi re-instantiation per call): 10K ≈ 0.8 s, 15K ≈ 1.0 s fire tick
   (Phase 22). 15–20K *gameplay* CCU is NOT yet claimed.

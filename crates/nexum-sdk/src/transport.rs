@@ -15,6 +15,7 @@
 //! ready for them.
 
 use std::net::ToSocketAddrs;
+use std::sync::Arc;
 
 use nexum_network::transport::{
     Connection, MemoryConnection, MemoryTransport, TcpConnection, TransportError,
@@ -80,7 +81,10 @@ impl ClientTransport {
 
     /// Returns the next buffered inbound frame, or `None` when none is
     /// ready. `Err(SdkError::TransportClosed)` means the link is gone.
-    pub fn recv_frame(&mut self) -> Result<Option<Vec<u8>>, SdkError> {
+    ///
+    /// Frames are `Arc<[u8]>` (ADR-021 D1): the shared broadcast frame is
+    /// never copied per client; decoding reads `&frame[..]`.
+    pub fn recv_frame(&mut self) -> Result<Option<Arc<[u8]>>, SdkError> {
         if self.closed {
             return Ok(None);
         }
@@ -105,7 +109,7 @@ impl ClientTransport {
         if self.closed {
             return Err(SdkError::TransportClosed);
         }
-        match self.inner.try_send_frame(frame) {
+        match self.inner.try_send_frame(Arc::from(frame)) {
             Ok(()) => {}
             Err(TransportError::Full) => return Err(SdkError::TransportFull),
             Err(TransportError::Closed) => {

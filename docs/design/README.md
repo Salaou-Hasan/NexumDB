@@ -133,6 +133,23 @@ is implemented.
   (per-call wasmi instantiation) — Phase 22. Report:
   [reports/20-interest-management.md](../reports/20-interest-management.md).
 
+## Completed (Phase 21)
+
+- [21-networking-hotpath.md](21-networking-hotpath.md) — Networking /
+  serialization hot-path (ADR-021): profiled the gateway/SDK delivery
+  path with the real CCU harness and ranked the measured costs. Shipped
+  D1 — `Arc<[u8]>` transport frames (per-world TickUpdate encoded once,
+  delivered to every attached session by refcount bump: zero per-client
+  encode/copy; 10K allocs/tick saved at 10K) — and D3 — a per-world
+  attached index turning the fan-out pass's O(worlds × CCU) connection
+  scans into O(CCU). D2 (per-connection outbound batching) was
+  implemented, measured **net-negative** (B@10K p95 44.6 vs 39.5 ms
+  baseline), and reverted per the phase rule. Measured: idle fan-out
+  5.2 → 4.2 ms (−19%), movement fan-out −23…27%, movement p99 72.9 →
+  64.7 ms @ 10K; the movement tick is still bound by the sum of O(CCU)
+  per-client work. Report:
+  [reports/21-networking-hotpath.md](../reports/21-networking-hotpath.md).
+
 ## Completed (Phase 18)
 
 - [18-multi-core.md](18-multi-core.md) — Multi-core runtime (ADR-018):
@@ -152,5 +169,5 @@ is implemented.
 - **Phase 22 — WASM reducer optimization** — the measured #1 remaining
   cost: the fire burst re-instantiates wasmi per call (~550ms for 1,000
   calls at 1K). Instance/linker reuse, batched host calls.
-- **Phase 21 — Memory/alloc** — per-tick allocation reduction; also the
-  remaining O(clients) gateway fan-out / SDK decode path.
+- **Phase 23 — networking/transport** — inbound frame batching, real
+  (non-in-process) transport benchmarking.

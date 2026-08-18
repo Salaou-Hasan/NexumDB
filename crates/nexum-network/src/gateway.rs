@@ -50,7 +50,6 @@ pub const SERVER_REQUEST_MSB: u64 = 1 << 63;
 /// own invocations) stamp the same key with the player id they act for.
 pub const CALLER_SOURCE_ARG: &str = "__caller";
 
-/// One registered connection and its operational state.
 pub(crate) struct ConnectionEntry {
     connection: Box<dyn Connection>,
     session: Option<Session>,
@@ -161,6 +160,11 @@ pub struct NetworkGateway {
     /// `Initial` snapshot: `(connection, subscription) -> request_id`
     /// (ADR-013). Entries live for one `pump_subscription` call.
     snapshot_requests: BTreeMap<(ConnectionId, SubscriptionId), u64>,
+    /// Attached sessions indexed by world (ADR-021 D3): the fan-out path
+    /// iterates a world's attached set directly instead of scanning every
+    /// connection per world — O(CCU) per pass instead of O(worlds × CCU).
+    /// Maintained on attach / detach / disconnect; never authoritative.
+    attached_by_world: BTreeMap<WorldId, BTreeSet<ConnectionId>>,
     events: VecDeque<NetworkEvent>,
     metrics: NetworkMetrics,
 }
@@ -188,6 +192,7 @@ impl NetworkGateway {
             pending_by_connection: BTreeMap::new(),
             next_gateway_request: 1,
             snapshot_requests: BTreeMap::new(),
+            attached_by_world: BTreeMap::new(),
             events: VecDeque::new(),
             metrics: NetworkMetrics::empty(),
         })
@@ -262,7 +267,7 @@ impl NetworkGateway {
                 },
                 self.config.max_frame_payload(),
             ) {
-                let _ = entry.connection.try_send_frame(frame);
+                let _ = entry.connection.try_send_frame(Arc::from(frame));
             }
             let _ = entry.connection.flush_outbound();
         }
@@ -471,6 +476,10 @@ impl NetworkGateway {
                     return;
                 }
                 session.attach(world);
+                self.attached_by_world
+                    .entry(world)
+                    .or_default()
+                    .insert(connection);
                 Self::push_event(
                     &mut self.events,
                     self.config.event_log_limit(),
@@ -548,7 +557,14 @@ impl NetworkGateway {
                     let _ = self.send_error(connection, 21, "session is not attached to a world");
                     return;
                 }
+                let detached_world = session.attached_world().expect("attached");
                 session.detach();
+                if let Some(set) = self.attached_by_world.get_mut(&detached_world) {
+                    set.remove(&connection);
+                    if set.is_empty() {
+                        self.attached_by_world.remove(&detached_world);
+                    }
+                }
                 // End every session subscription on the runtime registry.
                 let subs: Vec<(WorldId, SubscriptionId)> = self
                     .connections
@@ -919,8 +935,12 @@ impl NetworkGateway {
                 changes,
                 events: result.events().to_vec(),
             };
-            let frame = match protocol::encode_server(&message, self.config.max_frame_payload()) {
-                Ok(frame) => frame,
+            // Encode the TickUpdate once per world, then deliver the shared
+            // `Arc<[u8]>` frame to every attached session by refcount bump —
+            // zero per-client encode AND zero per-client copy (ADR-021 D1,
+            // building on ADR-017 D4's encode-once).
+            let tu_frame = match protocol::encode_server(&message, self.config.max_frame_payload()) {
+                Ok(frame) => Arc::from(frame),
                 Err(_) => {
                     // An encode failure (oversized frame) drops the whole
                     // broadcast rather than failing the tick: the change set
@@ -931,18 +951,15 @@ impl NetworkGateway {
                 }
             };
             let attached: Vec<ConnectionId> = self
-                .connections
-                .iter()
-                .filter(|(_, entry)| {
-                    entry
-                        .session
-                        .as_ref()
-                        .is_some_and(|session| session.attached_world() == Some(world))
-                })
-                .map(|(id, _)| *id)
-                .collect();
+                .attached_by_world
+                .get(&world)
+                .map(|set| set.iter().copied().collect())
+                .unwrap_or_default();
             for connection in attached {
-                if self.send_encoded(connection, frame.clone(), &message).unwrap_or(false) {
+                if self
+                    .send_encoded(connection, Arc::clone(&tu_frame), is_stale_signal(&message))
+                    .unwrap_or(false)
+                {
                     report.tick_updates_sent += 1;
                     self.metrics.tick_updates_sent += 1;
                 } else {
@@ -953,16 +970,21 @@ impl NetworkGateway {
             // Deliver subscription deltas for this world (deterministic:
             // connections ascending, then subscriptions ascending).
             let subscribers: Vec<(ConnectionId, SubscriptionId)> = self
-                .connections
-                .iter()
-                .flat_map(|(id, entry)| {
-                    entry
-                        .subscriptions
-                        .iter()
-                        .filter(|(_, sub)| sub.world == world)
-                        .map(move |(sub_id, _)| (*id, *sub_id))
+                .attached_by_world
+                .get(&world)
+                .map(|set| {
+                    set.iter()
+                        .flat_map(|id| {
+                            self.connections
+                                .get(id)
+                                .into_iter()
+                                .flat_map(|entry| entry.subscriptions.iter())
+                                .filter(|(_, sub)| sub.world == world)
+                                .map(move |(sub_id, _)| (*id, *sub_id))
+                        })
+                        .collect()
                 })
-                .collect();
+                .unwrap_or_default();
             for (connection, subscription) in subscribers {
                 let before = self.metrics.subscription_messages_sent;
                 self.pump_subscription(connection, world, subscription);
@@ -1082,20 +1104,20 @@ impl NetworkGateway {
         message: &ServerMessage,
     ) -> Result<bool, NetworkError> {
         let frame = protocol::encode_server(message, self.config.max_frame_payload())?;
-        self.send_encoded(connection, frame, message)
+        self.send_encoded(connection, Arc::from(frame), is_stale_signal(message))
     }
 
     /// Sends a **pre-encoded** frame to a connection, applying the same
-    /// stale/overflow policy as [`send`](Self::send) (the message is used
-    /// only for the stale-signal classification). Encoding once and cloning
-    /// the bytes to every recipient avoids re-serializing a large message
-    /// (e.g. a `TickUpdate` carrying the whole change set) once per
-    /// connection — ADR-017 D4.
+    /// stale/overflow policy as [`send`](Self::send) (`stale_signal` is the
+    /// message's classification — see [`is_stale_signal`]). Encoding once
+    /// and sharing the immutable bytes (an `Arc<[u8]>`, ADR-021 D1) with
+    /// every recipient avoids re-serializing and re-copying a large message
+    /// (e.g. a `TickUpdate` broadcast) once per connection.
     fn send_encoded(
         &mut self,
         connection: ConnectionId,
-        frame: Vec<u8>,
-        message: &ServerMessage,
+        frame: Arc<[u8]>,
+        stale_signal: bool,
     ) -> Result<bool, NetworkError> {
         let entry = self
             .connections
@@ -1104,7 +1126,7 @@ impl NetworkGateway {
 
         // Flush any pending stale notifications.
         while let Some(pending) = entry.pending_stale.front().cloned() {
-            match entry.connection.try_send_frame(pending) {
+            match entry.connection.try_send_frame(Arc::from(pending)) {
                 Ok(()) => {
                     entry.pending_stale.pop_front();
                     self.metrics.messages_outbound += 1;
@@ -1114,7 +1136,7 @@ impl NetworkGateway {
             }
         }
 
-        if entry.stale && !is_stale_signal(message) {
+        if entry.stale && !stale_signal {
             self.metrics.messages_dropped += 1;
             return Ok(false);
         }
@@ -1258,6 +1280,15 @@ impl NetworkGateway {
         // accepted calls (fire-and-forget); the correlation state is gone.
         self.pending_calls.retain(|_, pending| pending.connection != *connection);
         self.pending_by_connection.remove(connection);
+        // Remove the connection from its world's attached index (ADR-021 D3).
+        if let Some(world) = entry.session.as_ref().and_then(Session::attached_world)
+            && let Some(set) = self.attached_by_world.get_mut(&world)
+        {
+            set.remove(connection);
+            if set.is_empty() {
+                self.attached_by_world.remove(&world);
+            }
+        }
         entry.connection.close();
         self.metrics.clients_dropped += 1;
         Self::push_event(

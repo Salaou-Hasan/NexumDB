@@ -1,6 +1,8 @@
 //! SDK unit tests (ADR-013): view logic, the connection state machine,
 //! request correlation, and client-side bounds.
 
+use std::sync::Arc;
+
 use nexum_core::{RowId, SubscriptionId, TickId, Value, WorldId};
 use nexum_network::auth::Principal;
 use nexum_network::transport::{Connection, TransportError};
@@ -48,13 +50,13 @@ impl Connection for TestConnection {
     fn peer(&self) -> &str {
         &self.peer
     }
-    fn try_recv_frame(&mut self) -> Result<Option<Vec<u8>>, TransportError> {
+    fn try_recv_frame(&mut self) -> Result<Option<Arc<[u8]>>, TransportError> {
         if self.closed {
             return Err(TransportError::Closed);
         }
-        Ok(self.inbound.pop_front())
+        Ok(self.inbound.pop_front().map(Arc::from))
     }
-    fn try_send_frame(&mut self, _frame: Vec<u8>) -> Result<(), TransportError> {
+    fn try_send_frame(&mut self, _frame: Arc<[u8]>) -> Result<(), TransportError> {
         if self.closed {
             Err(TransportError::Closed)
         } else {
@@ -80,10 +82,10 @@ impl Connection for BrokenConnection {
     fn peer(&self) -> &str {
         "broken"
     }
-    fn try_recv_frame(&mut self) -> Result<Option<Vec<u8>>, TransportError> {
+    fn try_recv_frame(&mut self) -> Result<Option<Arc<[u8]>>, TransportError> {
         Err(TransportError::Closed)
     }
-    fn try_send_frame(&mut self, _frame: Vec<u8>) -> Result<(), TransportError> {
+    fn try_send_frame(&mut self, _frame: Arc<[u8]>) -> Result<(), TransportError> {
         Err(TransportError::Closed)
     }
     fn flush_outbound(&mut self) -> Result<(), TransportError> {
@@ -573,11 +575,11 @@ fn send_frame_flushes_the_outbound_transport() {
         fn peer(&self) -> &str {
             "recording"
         }
-        fn try_recv_frame(&mut self) -> Result<Option<Vec<u8>>, TransportError> {
-            Ok(self.queue.pop_front())
+        fn try_recv_frame(&mut self) -> Result<Option<Arc<[u8]>>, TransportError> {
+            Ok(self.queue.pop_front().map(Arc::from))
         }
-        fn try_send_frame(&mut self, frame: Vec<u8>) -> Result<(), TransportError> {
-            self.queue.push_back(frame);
+        fn try_send_frame(&mut self, frame: Arc<[u8]>) -> Result<(), TransportError> {
+            self.queue.push_back(frame.to_vec());
             Ok(())
         }
         fn flush_outbound(&mut self) -> Result<(), TransportError> {

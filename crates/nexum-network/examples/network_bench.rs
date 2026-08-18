@@ -122,7 +122,7 @@ fn join_world(gateway: &mut NetworkGateway, client: &mut MemoryConnection, max: 
         max,
     )
     .unwrap();
-    client.try_send_frame(frame).unwrap();
+    client.try_send_frame(Arc::from(frame)).unwrap();
     gateway.process_inbound();
     let _ = client.try_recv_frame().unwrap().unwrap();
 
@@ -131,7 +131,7 @@ fn join_world(gateway: &mut NetworkGateway, client: &mut MemoryConnection, max: 
         max,
     )
     .unwrap();
-    client.try_send_frame(frame).unwrap();
+    client.try_send_frame(Arc::from(frame)).unwrap();
     gateway.process_inbound();
     let _ = client.try_recv_frame().unwrap().unwrap();
 
@@ -140,7 +140,7 @@ fn join_world(gateway: &mut NetworkGateway, client: &mut MemoryConnection, max: 
         max,
     )
     .unwrap();
-    client.try_send_frame(frame).unwrap();
+    client.try_send_frame(Arc::from(frame)).unwrap();
     gateway.process_inbound();
     let _ = client.try_recv_frame().unwrap().unwrap();
 }
@@ -211,7 +211,7 @@ fn main() {
             let mut frame = InputFrame::new(TickId::from_u64(tick));
             frame.push(InputCommand::new(1, "spawn", Some(nexum_core::Value::U64(tick))).unwrap());
             let encoded = protocol::encode_client(&ClientMessage::InputFrame { frame }, max).unwrap();
-            client.try_send_frame(encoded).unwrap();
+            client.try_send_frame(Arc::from(encoded)).unwrap();
             gateway.process_inbound();
             gateway.step_worlds().unwrap();
             let _ = client.try_recv_frame().unwrap(); // TickUpdate
@@ -235,7 +235,7 @@ fn main() {
             max,
         )
         .unwrap();
-        client.try_send_frame(sub_frame).unwrap();
+        client.try_send_frame(Arc::from(sub_frame)).unwrap();
         gateway.process_inbound();
         let _ = client.try_recv_frame().unwrap().unwrap(); // Initial snapshot
 
@@ -256,7 +256,7 @@ fn main() {
         let update = ServerMessage::Pong { nonce: 7 };
         bench("outbound queue insertion", iterations, || {
             let frame = protocol::encode_server(&update, max).unwrap();
-            client.try_send_frame(frame).unwrap();
+            client.try_send_frame(Arc::from(frame)).unwrap();
         });
     }
 
@@ -297,7 +297,7 @@ fn main() {
                 max,
             )
             .unwrap();
-            client.try_send_frame(frame).unwrap();
+            client.try_send_frame(Arc::from(frame)).unwrap();
         }
         gateway.process_inbound();
         for _ in 0..500 {
@@ -340,7 +340,7 @@ fn main() {
                 args: nexum_reducer::ReducerArgs::new().insert("amount", 1u64),
             };
             let encoded = protocol::encode_client(&call, max).unwrap();
-            client.try_send_frame(encoded).unwrap();
+            client.try_send_frame(Arc::from(encoded)).unwrap();
             gateway.process_inbound();
             gateway.step_worlds().unwrap();
             let _ = client.try_recv_frame().unwrap(); // TickUpdate

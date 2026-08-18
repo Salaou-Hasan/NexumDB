@@ -66,12 +66,17 @@ pub trait Connection {
     /// Returns the next complete inbound frame, or `None` when none is
     /// buffered, or an error when the transport is broken (the gateway then
     /// closes the connection).
-    fn try_recv_frame(&mut self) -> Result<Option<Vec<u8>>, TransportError>;
+    fn try_recv_frame(&mut self) -> Result<Option<Arc<[u8]>>, TransportError>;
 
     /// Buffers one outbound frame for delivery. Returns
     /// [`TransportError::Full`] when the peer's queue is at capacity (never
     /// blocks).
-    fn try_send_frame(&mut self, frame: Vec<u8>) -> Result<(), TransportError>;
+    ///
+    /// Frames are `Arc<[u8]>` so an immutable, already-encoded payload can
+    /// be delivered to many connections by refcount bump instead of a
+    /// per-recipient copy (ADR-021 D1). One-off frames convert with a single
+    /// `Arc::from` allocation — no copy.
+    fn try_send_frame(&mut self, frame: Arc<[u8]>) -> Result<(), TransportError>;
 
     /// Attempts to flush buffered outbound bytes to the transport
     /// (non-blocking). A no-op for queue-based transports.
@@ -85,8 +90,8 @@ pub trait Connection {
 
 /// The shared state of one memory link (both directions, bounded).
 struct MemoryLink {
-    to_server: VecDeque<Vec<u8>>,
-    to_client: VecDeque<Vec<u8>>,
+    to_server: VecDeque<Arc<[u8]>>,
+    to_client: VecDeque<Arc<[u8]>>,
     /// Cap for client → server (the gateway's inbound bound).
     inbound_cap: usize,
     /// Cap for server → client (the gateway's outbound bound).
@@ -147,7 +152,7 @@ impl Connection for MemoryConnection {
         &self.peer
     }
 
-    fn try_recv_frame(&mut self) -> Result<Option<Vec<u8>>, TransportError> {
+    fn try_recv_frame(&mut self) -> Result<Option<Arc<[u8]>>, TransportError> {
         let mut link = self.link.lock().expect("memory link lock");
         let queue = if self.server_side {
             &mut link.to_server
@@ -157,7 +162,7 @@ impl Connection for MemoryConnection {
         Ok(queue.pop_front())
     }
 
-    fn try_send_frame(&mut self, frame: Vec<u8>) -> Result<(), TransportError> {
+    fn try_send_frame(&mut self, frame: Arc<[u8]>) -> Result<(), TransportError> {
         let mut link = self.link.lock().expect("memory link lock");
         if link.closed {
             return Err(TransportError::Closed);
@@ -206,7 +211,7 @@ pub struct TcpConnection {
     stream: TcpStream,
     peer: String,
     read_buf: Vec<u8>,
-    outbound: VecDeque<(Vec<u8>, usize)>,
+    outbound: VecDeque<(Arc<[u8]>, usize)>,
     outbound_cap: usize,
     max_payload: u32,
     closed: bool,
@@ -263,7 +268,7 @@ impl Connection for TcpConnection {
         &self.peer
     }
 
-    fn try_recv_frame(&mut self) -> Result<Option<Vec<u8>>, TransportError> {
+    fn try_recv_frame(&mut self) -> Result<Option<Arc<[u8]>>, TransportError> {
         if self.closed {
             return Err(TransportError::Closed);
         }
@@ -290,13 +295,13 @@ impl Connection for TcpConnection {
         match parse_frame(&self.read_buf, self.max_payload)? {
             Some((frame, consumed)) => {
                 self.read_buf.drain(..consumed);
-                Ok(Some(frame))
+                Ok(Some(Arc::from(frame)))
             }
             None => Ok(None),
         }
     }
 
-    fn try_send_frame(&mut self, frame: Vec<u8>) -> Result<(), TransportError> {
+    fn try_send_frame(&mut self, frame: Arc<[u8]>) -> Result<(), TransportError> {
         if self.closed {
             return Err(TransportError::Closed);
         }

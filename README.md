@@ -43,7 +43,14 @@ The build follows a strict order: correctness first, distribution last.
 | 13 | Networking + client SDKs (realtime gateway, reducer calls, `nexum-sdk`) | ✅ Done |
 | 14 | Game server layer (games, players, exposure, command routing) | ✅ Done |
 | 15 | Performance & benchmarking (100K→10M rows, bottleneck fixes, report) | ✅ Done |
-| 16 | Production hardening & release | ⬜ |
+| 16 | Production hardening & release | ✅ Done |
+| 17 | Gameplay hot-path & CCU scaling (O(N) reducer scans → direct lookup) | ✅ Done |
+| 18 | Multi-core runtime (parallel world/partition ticks) | ✅ Done |
+| 19 | Execution hot-path profiling (ranked bottlenecks, Arc-shared rows) | ✅ Done |
+| 20 | Interest management / AOI (duplicate-subscription grouping) | ✅ Done |
+| 21 | Networking & serialization hot-path (Arc frames, attached index) | ✅ Done |
+| 22 | WASM reducer optimization | ⬜ Planned |
+| 23 | Networking/transport & inbound batching | ⬜ Planned |
 
 ## Repository layout
 
@@ -201,14 +208,16 @@ workers):**
 | 20K | 32.0 ms | ✓ | **PASS** |
 
 **Connection-only: 20K PASS** (Phase 16: 15K 63.7 ms and 20K 75.5 ms were
-DEGRADED). **Gameplay: 10K movement DEGRADED** (p95 40 ms, p99 73 ms),
-**15K movement SATURATED** (p95 65 ms, p99 98–115 ms) — bounded by the
-O(clients) gateway reducer-result fan-out + SDK decode/drain (Phase 21)
-and the WASM fire burst (Phase 22), not by the multi-core world tick
-(Phase 18). 15–20K *gameplay* CCU is NOT yet claimed. The harness also
-exposed and we fixed two real bugs: cross-client request-ID collision in
-the gateway (all SDK clients start request ids at 1) and a gateway inbound
-O(N²) (per-call `pending_calls` scans → per-connection index).
+DEGRADED). **Gameplay: 10K movement DEGRADED** (p95 39 ms, p99 65 ms),
+**15K movement SATURATED** (p95 59 ms, p99 92 ms) — bounded by the sum of
+O(CCU) per-client work (inbound decode, world tick, gateway fan-out, SDK
+decode/drain) plus the WASM fire burst (Phase 22), not by the multi-core
+world tick (Phase 18). Phase 21 (Arc-shared frames + per-world attached
+index) cut the fan-out phase 23–27% and movement p99 72.9 → 64.7 ms @ 10K.
+15–20K *gameplay* CCU is NOT yet claimed. The harness also exposed and we
+fixed real bugs: cross-client request-ID collision in the gateway (all SDK
+clients start request ids at 1) and a gateway inbound O(N²) (per-call
+`pending_calls` scans → per-connection index).
 
 **Memory (measured RSS, profile A steady state):** ≈ 5.7 MB + **24.7 KB
 private per connection** (10K 251 MB, 15K 376 MB, 20K 502 MB) — end-to-end
@@ -300,6 +309,41 @@ found and fixed a gateway inbound **O(N²)**: per-call `pending_calls`
 scans → per-connection `BTreeSet` index — inbound 25.5ms → 2.3ms. The
 remaining movement-tick cost is the O(clients) gateway fan-out / SDK
 decode path (Phase 21) and the WASM fire burst (Phase 22).
+
+## Networking Hot-Path (Phase 21)
+
+Phase 21 (see the [full report](docs/reports/21-networking-hotpath.md),
+[design](docs/design/21-networking-hotpath.md), [ADR-021](docs/architecture/21-networking-hotpath.md))
+profiled the gateway/SDK delivery path with the real CCU harness and
+shipped two measured optimizations (ADR-021):
+
+- **D1 — `Arc<[u8]>` frames**: the transport's frame type is now an Arc.
+  The per-world TickUpdate is encoded **once** per tick and delivered to
+every attached session by refcount bump — zero per-client encode, zero
+per-client copy (10K allocs/tick saved at 10K). One-off frames convert
+via a single `Arc::from` (no copy).
+- **D3 — per-world attached index**: the fan-out pass previously scanned
+  all connections for each world twice (O(worlds × CCU) per tick); a
+  per-world `BTreeSet` of attached connections makes the pass O(CCU).
+  Maintained on attach/detach/disconnect; never authoritative.
+- **D2 — per-connection batching: measured net-negative and reverted**
+  (B@10K p95 44.6 vs 39.5 ms baseline) — per the phase rule, an
+  optimization with no measured improvement is not kept.
+
+Measured (release, 8–16 partitions × 8–16 workers, 20 Hz):
+
+| Metric | before | after |
+|---|---|---|
+| idle fan-out @ 10K | 5.2 ms/tick | 4.2 ms/tick (−19%) |
+| movement fan-out @ 10K (movement ticks) | ≈15–20 ms/tick | ≈12.6 ms/tick (−27%) |
+| movement p99 @ 10K | 72.9 ms | 64.7 ms |
+| movement p95/p99 @ 15K (16×16) | 64.6 / 97.6 ms | 59.0 / 92.4 ms |
+
+654 workspace tests pass; `unsafe_code = forbid` maintained. The movement
+tick remains bound by the **sum** of O(CCU) per-client work — the next
+lever is reducing per-client work items (Phase 20 interest management
+already cut subscription evaluations; Phase 22 WASM, Phase 23 inbound
+batching), not making individual sends cheaper.
 
 ## License
 
