@@ -20,6 +20,7 @@ and architecture decisions (ADRs) live in
 | [20-interest-management.md](20-interest-management.md) | 20 | Interest management / AOI: duplicate-subscription grouping (evaluations/change ~1,000 → 1.00, sub_apply 57×) + bounded TickUpdate; measured ladder A@10K & B@1K PASS. |
 | [18-multi-core.md](18-multi-core.md) | 18 | Multi-core runtime: parallel world/partition ticks (ADR-018, deterministic — exact trace equality vs serial) + gateway inbound O(N²) fix. 8K×8p movement p95 62.3ms → 31.7ms; inbound 25.5ms → 2.3ms. |
 | [21-networking-hotpath.md](21-networking-hotpath.md) | 21 | Networking/serialization hot-path: Arc-shared broadcast frames (zero-copy TU, 10K allocs/tick saved) + per-world attached index (O(worlds×CCU) → O(CCU) scans); D2 batching measured net-negative and reverted. Movement fan-out −23…27%, p99 72.9 → 64.7 ms @ 10K. |
+| [21.5-extreme-profiling.md](21.5-extreme-profiling.md) | 21.5 | Extreme execution profiling: complete measured cost map (per-phase, per-reducer, allocation). WASM fire_weapon 65–69 µs/call ≈ 15× native (Phase 22 target); idle PASS @ 20K; no O(CCU²) remains; p99.9 ≈ p99 (no pathological tail). Two instrumentation bugs fixed. |
 
 ## CCU summary (Phases 16–18)
 

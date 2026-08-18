@@ -150,6 +150,21 @@ is implemented.
   per-client work. Report:
   [reports/21-networking-hotpath.md](../reports/21-networking-hotpath.md).
 
+## Completed (Phase 21.5 — investigation, no optimization)
+
+- [21.5-extreme-profiling.md](21.5-extreme-profiling.md) — Extreme execution
+  profiling: the full authoritative pipeline instrumented and measured at
+  phase, sub-phase, per-reducer, and allocation granularity (no code
+  optimized). New instrumentation: per-reducer timing
+  (`SimulationConfig::with_reducer_profiling`), a counting global
+  allocator (`nexum-alloc-count`, `ccu-alloc` feature), p99.9/max,
+  worst-tick spike analysis, and Profile E (extreme gameplay). Ranked cost
+  map: WASM fire_weapon 65–69 µs/call ≈ 15× native (the Phase 22 target),
+  then gateway fan-out and SDK decode; idle PASS @ 20K; p99.9 ≈ p99 (no
+  pathological tail); two measurement bugs fixed (per-world
+  `last_tick_profile` under-count, warmup backlog spike). Report:
+  [reports/21.5-extreme-profiling.md](../reports/21.5-extreme-profiling.md).
+
 ## Completed (Phase 18)
 
 - [18-multi-core.md](18-multi-core.md) — Multi-core runtime (ADR-018):

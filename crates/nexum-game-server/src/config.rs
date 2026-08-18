@@ -18,6 +18,10 @@ pub struct GameServerConfig {
     /// is the maximum number of buffered commands per world. Should not
     /// exceed the world's `max_commands_per_frame`.
     pub(crate) max_pending_commands_per_world: usize,
+    /// When true, game worlds record per-reducer execution profiles (Phase
+    /// 21.5 instrumentation). Zero cost when disabled; never influences
+    /// simulation semantics.
+    pub(crate) reducer_profiling: bool,
 }
 
 impl GameServerConfig {
@@ -69,6 +73,19 @@ impl GameServerConfig {
     pub fn with_max_pending_commands_per_world(mut self, max: usize) -> Self {
         self.max_pending_commands_per_world = max;
         self
+    }
+
+    /// Enables per-reducer execution profiling on game worlds (Phase 21.5
+    /// instrumentation). Zero overhead when disabled; never influences
+    /// simulation semantics.
+    pub fn with_reducer_profiling(mut self, enabled: bool) -> Self {
+        self.reducer_profiling = enabled;
+        self
+    }
+
+    /// Whether per-reducer execution profiling is enabled on game worlds.
+    pub fn reducer_profiling(&self) -> bool {
+        self.reducer_profiling
     }
 
     /// The default partition count for new game instances.
@@ -136,6 +153,7 @@ impl Default for GameServerConfig {
             tick_rate_hz: 20,
             // Matches the simulation default `max_commands_per_frame`.
             max_pending_commands_per_world: 10_000,
+            reducer_profiling: false,
         }
     }
 }

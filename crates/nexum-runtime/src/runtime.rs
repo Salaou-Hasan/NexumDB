@@ -511,6 +511,23 @@ impl Runtime {
         self.worlds.iter().map(|(id, entry)| (*id, entry.status())).collect()
     }
 
+    /// Aggregates the per-reducer execution profile across all worlds
+    /// (Phase 21.5 instrumentation): reducer name → (total calls, total wall
+    /// ns). Empty unless profiling is enabled in the worlds' simulation
+    /// configs. Instrumentation only — never influences semantics.
+    pub fn reducer_profile(&self) -> std::collections::BTreeMap<String, (u64, u64)> {
+        let mut aggregate: std::collections::BTreeMap<String, (u64, u64)> =
+            std::collections::BTreeMap::new();
+        for entry in self.worlds.values() {
+            for (name, (calls, ns)) in entry.world.reducer_profile() {
+                let slot = aggregate.entry(name.clone()).or_insert((0, 0));
+                slot.0 += calls;
+                slot.1 += ns;
+            }
+        }
+        aggregate
+    }
+
     /// Snapshot a world's authoritative state at its current WAL LSN
     /// (Phase 5). Requires persistence.
     pub fn snapshot_world(&mut self, world_id: WorldId) -> Result<(), RuntimeError> {
@@ -818,6 +835,9 @@ impl Runtime {
     /// path (the correctness oracle) at any worker count (ADR-018 D4).
     pub fn step(&mut self) -> Result<RuntimeStepReport, RuntimeError> {
         self.ensure_running()?;
+        // Reset the per-step sub-phase profile (Phase 21.5): it accumulates
+        // across the step's worlds and is read after the step.
+        self.metrics.last_tick_profile = (0, 0, 0);
         let started = Instant::now();
         // Deterministic execution order: workers ascending, then each
         // worker's worlds ascending (ADR-010 D2).
@@ -900,6 +920,9 @@ impl Runtime {
         &mut self,
     ) -> Result<Vec<(WorldId, nexum_simulation::TickResult)>, RuntimeError> {
         self.ensure_running()?;
+        // Reset the per-step sub-phase profile (Phase 21.5): it accumulates
+        // across the step's worlds and is read after the step.
+        self.metrics.last_tick_profile = (0, 0, 0);
         // Deterministic execution order: workers ascending, then each
         // worker's worlds ascending (ADR-010 D2).
         let order: Vec<WorldId> = self
@@ -1182,7 +1205,13 @@ impl Runtime {
         self.metrics.subscription_evaluations += subscription_evaluations;
         self.metrics.subscription_deltas += subscription_deltas;
         if ticks_succeeded > 0 {
-            self.metrics.last_tick_profile = last_tick_profile;
+            // Accumulate across the step's worlds: with N partitions the
+            // per-world sub-phase times must be summed to represent the
+            // tick (Phase 21.5 instrumentation fix — previously this kept
+            // only the last world's profile, under-reporting by ~N×).
+            self.metrics.last_tick_profile.0 += last_tick_profile.0;
+            self.metrics.last_tick_profile.1 += last_tick_profile.1;
+            self.metrics.last_tick_profile.2 += last_tick_profile.2;
         }
         Self::enqueue_outbound(
             &self.config,

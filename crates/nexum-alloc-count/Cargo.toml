@@ -1,0 +1,13 @@
+[package]
+name = "nexum-alloc-count"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Nexum: a counting global allocator for allocation profiling (Phase 21.5 instrumentation only)."
+
+# Deliberately does NOT inherit [workspace.lints]: this crate's sole purpose
+# is a `#[global_allocator]` (which requires `unsafe impl GlobalAlloc`). All
+# other Nexum crates keep `unsafe_code = forbid`; this instrumentation crate
+# is the single opt-out so the CCU harness can report allocations/tick.
+[dependencies]

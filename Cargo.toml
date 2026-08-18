@@ -16,6 +16,7 @@ members = [
     "crates/nexum-game-server",
     "crates/nexum-server",
     "crates/game-server",
+    "crates/nexum-alloc-count",
     "benchmarks/nexum-bench",
 ]
 
@@ -54,3 +55,4 @@ nexum-runtime = { path = "crates/nexum-runtime", version = "0.1.0" }
 nexum-network = { path = "crates/nexum-network", version = "0.1.0" }
 nexum-sdk = { path = "crates/nexum-sdk", version = "0.1.0" }
 nexum-game-server = { path = "crates/nexum-game-server", version = "0.1.0" }
+nexum-alloc-count = { path = "crates/nexum-alloc-count", version = "0.1.0" }

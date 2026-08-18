@@ -39,6 +39,10 @@ pub struct SimulationConfig {
     max_reducer_calls_per_tick: usize,
     max_reducer_name_len: usize,
     max_reducer_args: usize,
+    /// When true, the world accumulates per-reducer call counts and
+    /// cumulative execution time (Phase 21.5 profiling instrumentation).
+    /// Zero cost when disabled.
+    reducer_profiling: bool,
 }
 
 impl Default for SimulationConfig {
@@ -55,6 +59,7 @@ impl Default for SimulationConfig {
             max_reducer_calls_per_tick: 10_000,
             max_reducer_name_len: 256,
             max_reducer_args: 10_000,
+            reducer_profiling: false,
         }
     }
 }
@@ -116,6 +121,20 @@ impl SimulationConfig {
     pub fn with_max_message_args(mut self, max: usize) -> Self {
         self.max_message_args = max;
         self
+    }
+
+    /// Enables per-reducer execution profiling (Phase 21.5): the world
+    /// records per-reducer call counts and cumulative wall time. Zero
+    /// overhead when disabled. Instrumentation only — never influences
+    /// simulation semantics.
+    pub fn with_reducer_profiling(mut self, enabled: bool) -> Self {
+        self.reducer_profiling = enabled;
+        self
+    }
+
+    /// Whether per-reducer execution profiling is enabled.
+    pub fn reducer_profiling(&self) -> bool {
+        self.reducer_profiling
     }
 
     /// Sets the maximum number of client reducer calls one tick may execute

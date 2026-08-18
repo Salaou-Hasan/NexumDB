@@ -42,6 +42,17 @@ use nexum_runtime::{Runtime, RuntimeConfig};
 use nexum_sdk::{transport::ClientTransport, Client, SdkConfig};
 use nexum_subscription::Query;
 
+// ---------------------------------------------------------------- alloc
+
+/// Phase 21.5 allocation profiling: installs the workspace counting global
+/// allocator (`nexum-alloc-count`) only when the `ccu-alloc` feature is
+/// enabled. The timing ladder runs without this feature so measurements are
+/// unperturbed; dedicated `--count-alloc` runs report allocs/tick and
+/// bytes/tick.
+#[cfg(feature = "ccu-alloc")]
+#[global_allocator]
+static ALLOCATOR: nexum_alloc_count::CountingAlloc = nexum_alloc_count::CountingAlloc::new();
+
 // ---------------------------------------------------------------- harness
 
 struct Args {
@@ -60,6 +71,12 @@ struct Args {
     queue: usize,
     /// Print per-phase timing breakdown for every tick.
     profile_detail: bool,
+    /// Enable per-reducer execution profiling (Phase 21.5) and print the
+    /// measured per-reducer call counts and average execution time.
+    reducer_profile: bool,
+    /// Enable the counting allocator (requires the `ccu-alloc` feature) and
+    /// report allocs/tick and bytes/tick over the measured phase.
+    count_alloc: bool,
 }
 
 fn parse_args() -> Args {
@@ -73,6 +90,8 @@ fn parse_args() -> Args {
         window: 32,
         queue: 1 << 20,
         profile_detail: false,
+        reducer_profile: false,
+        count_alloc: false,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -87,11 +106,14 @@ fn parse_args() -> Args {
             "--window" => args.window = value().parse().unwrap(),
             "--queue" => args.queue = value().parse().unwrap(),
             "--profile-detail" => args.profile_detail = true,
+            "--reducer-profile" => args.reducer_profile = true,
+            "--count-alloc" => args.count_alloc = true,
             "--help" | "-h" => {
                 println!(
-                    "usage: ccu [--clients N] [--profile A|B|C|D] [--ticks N] \
+                    "usage: ccu [--clients N] [--profile A|B|C|D|E] [--ticks N] \
                      [--hz N] [--partitions N] [--workers N] [--window N] \
-                     [--queue N]"
+                     [--queue N] [--profile-detail] [--reducer-profile] \
+                     [--count-alloc]"
                 );
                 std::process::exit(0);
             }
@@ -129,7 +151,9 @@ fn boot(args: &Args) -> (GameServer, nexum_core::GameInstanceId) {
         .with_max_connections(args.clients.saturating_add(16))
         .with_max_queued_outbound_frames(args.clients.saturating_add(16))
         .with_tick_update_changes(false);
-    let server_config = GameServerConfig::new().with_tick_rate_hz(args.hz as u32);
+    let server_config = GameServerConfig::new()
+        .with_tick_rate_hz(args.hz as u32)
+        .with_reducer_profiling(args.reducer_profile);
     let mut server = GameServer::new(
         runtime,
         network,
@@ -226,6 +250,9 @@ struct PhaseTimers {
     world_tick_ns: u64,
     wal_ns: u64,
     sub_apply_ns: u64,
+    /// Per-tick phase samples (inbound, tick, fanout, pump, flush, clients,
+    /// drain) for latency-spike investigation.
+    tick_samples: Vec<(u64, u64, u64, u64, u64, u64, u64)>,
 }
 
 fn step_server_timed(server: &mut GameServer, t: &mut PhaseTimers) {
@@ -246,10 +273,16 @@ fn step_server_timed(server: &mut GameServer, t: &mut PhaseTimers) {
     let t4 = Instant::now();
     server.gateway_mut().flush_outbound().expect("flush outbound");
     let t5 = Instant::now();
-    t.inbound_ns += t1.duration_since(t0).as_nanos() as u64;
-    t.tick_ns += t2.duration_since(t1).as_nanos() as u64;
-    t.fanout_ns += (t3.duration_since(t2) + t4.duration_since(t3)).as_nanos() as u64;
-    t.flush_ns += t5.duration_since(t4).as_nanos() as u64;
+    let inbound = t1.duration_since(t0).as_nanos() as u64;
+    let tick = t2.duration_since(t1).as_nanos() as u64;
+    let fanout = t3.duration_since(t2).as_nanos() as u64;
+    let pump = t4.duration_since(t3).as_nanos() as u64;
+    let flush = t5.duration_since(t4).as_nanos() as u64;
+    t.inbound_ns += inbound;
+    t.tick_ns += tick;
+    t.fanout_ns += fanout;
+    t.pump_ns += pump;
+    t.flush_ns += flush;
     t.count += 1;
     // Read the runtime's per-tick sub-phase profile (world tick / WAL /
     // subscription apply) from the last committed tick.
@@ -257,6 +290,9 @@ fn step_server_timed(server: &mut GameServer, t: &mut PhaseTimers) {
     t.world_tick_ns += profile.0;
     t.wal_ns += profile.1;
     t.sub_apply_ns += profile.2;
+    // Keep a per-tick phase sample; the caller fills in clients/drain after
+    // the pumps.
+    t.tick_samples.push((inbound, tick, fanout, pump, flush, 0, 0));
 }
 
 fn step_server(server: &mut GameServer) {
@@ -332,6 +368,34 @@ fn drive_profile(profile: char, tick: u64, clients: &mut [SimClient], hz: u64) {
                 }
             }
         }
+        'E' => {
+            // Extreme real gameplay (Phase 21.5): every client moves every
+            // tick, fires every 10 ticks (≈2/s at 20 Hz), and reloads every
+            // 25 ticks — the full hot path (native move + WASM fire +
+            // native reload) with subscription deltas, TickUpdate decode,
+            // and drain active every tick.
+            for (i, sim) in clients.iter_mut().enumerate() {
+                let dx = if i % 2 == 0 { 1 } else { -1 };
+                let dy = if i % 3 == 0 { 1 } else { 0 };
+                let _ = sim.client.call_reducer("move_player", move_args(dx, dy));
+            }
+            if tick.is_multiple_of(10) {
+                for sim in clients.iter_mut() {
+                    let _ = sim.client.call_reducer(
+                        "fire_weapon",
+                        nexum_reducer::ReducerArgs::new(),
+                    );
+                }
+            }
+            if tick.is_multiple_of(25) {
+                for sim in clients.iter_mut() {
+                    let _ = sim.client.call_reducer(
+                        "reload_weapon",
+                        nexum_reducer::ReducerArgs::new(),
+                    );
+                }
+            }
+        }
         _ => panic!("unknown profile"),
     }
 }
@@ -365,10 +429,14 @@ fn main() {
     // Let the first join commits land.
     step(&mut server, &mut clients);
 
-    // Warmup: a few ticks to populate caches before measuring.
+    // Warmup: a few ticks to populate caches before measuring. Clients are
+    // drained too — otherwise the first measured tick pays the accumulated
+    // warmup backlog as an artificial p99.9 spike (Phase 21.5 spike
+    // investigation).
     for tick in 0..10 {
         drive_profile(args.profile, tick, &mut clients, args.hz);
         step(&mut server, &mut clients);
+        drain_clients(&mut clients);
     }
 
     // Measured phase.
@@ -383,6 +451,22 @@ fn main() {
     let tick_before = server.gateway().metrics().tick_updates_sent;
     let sub_msg_before = server.gateway().metrics().subscription_messages_sent;
     let result_before = server.gateway().metrics().reducer_results_sent;
+    // Phase 21.5: snapshot the per-reducer execution profile and (when the
+    // `ccu-alloc` feature is built) the allocation counters so the measured
+    // phase can be diffed.
+    let reducer_before = if args.reducer_profile {
+        server.runtime().reducer_profile()
+    } else {
+        std::collections::BTreeMap::new()
+    };
+    #[cfg(feature = "ccu-alloc")]
+    let alloc_before = if args.count_alloc {
+        nexum_alloc_count::enable();
+        nexum_alloc_count::reset();
+        nexum_alloc_count::snapshot()
+    } else {
+        (0, 0, 0)
+    };
 
     let mut phase_timers = PhaseTimers::default();
     for tick in 0..args.ticks {
@@ -400,17 +484,45 @@ fn main() {
         let t_end = Instant::now();
         tick_samples.push(t_end.duration_since(tick_started));
         if args.profile_detail {
-            phase_timers.client_ns += t_mid2.duration_since(t_mid1).as_nanos() as u64;
-            phase_timers.drain_ns += t_end.duration_since(t_mid2).as_nanos() as u64;
+            let client_ns = t_mid2.duration_since(t_mid1).as_nanos() as u64;
+            let drain_ns = t_end.duration_since(t_mid2).as_nanos() as u64;
+            phase_timers.client_ns += client_ns;
+            phase_timers.drain_ns += drain_ns;
+            // Complete this tick's phase sample for spike investigation.
+            if let Some(sample) = phase_timers.tick_samples.last_mut() {
+                sample.5 = client_ns;
+                sample.6 = drain_ns;
+            }
         }
     }
     let measured_elapsed = measured_started.elapsed();
+    // Diff the per-reducer profile across the measured phase.
+    let reducer_profile = if args.reducer_profile {
+        let after = server.runtime().reducer_profile();
+        let mut diff: std::collections::BTreeMap<String, (u64, u64)> =
+            std::collections::BTreeMap::new();
+        for (name, (calls, ns)) in after {
+            let before = reducer_before.get(&name).copied().unwrap_or((0, 0));
+            diff.insert(name, (calls - before.0, ns - before.1));
+        }
+        diff
+    } else {
+        std::collections::BTreeMap::new()
+    };
+    #[cfg(feature = "ccu-alloc")]
+    let alloc_after = if args.count_alloc {
+        nexum_alloc_count::snapshot()
+    } else {
+        (0, 0, 0)
+    };
 
     // ---- analysis -------------------------------------------------------
     tick_samples.sort_unstable();
     let p50 = tick_samples[tick_samples.len() / 2];
     let p95 = tick_samples[(tick_samples.len() as f64 * 0.95) as usize];
     let p99 = tick_samples[(tick_samples.len() as f64 * 0.99) as usize];
+    let p999 = tick_samples[(tick_samples.len() as f64 * 0.999) as usize];
+    let max = *tick_samples.last().unwrap();
     let avg = tick_samples.iter().sum::<Duration>() / tick_samples.len() as u32;
 
     let metrics = server.gateway().metrics();
@@ -423,13 +535,16 @@ fn main() {
         .saturating_sub(rejected_before);
 
     println!("\n=== RESULTS (measured phase: {:.1}s) ===", measured_elapsed.as_secs_f64());
-    println!("tick:  p50={:.1}us  p95={:.1}us  p99={:.1}us  avg={:.1}us  budget={:.1}ms",
-        p50.as_micros(), p95.as_micros(), p99.as_micros(), avg.as_micros(),
-        tick_budget.as_millis() as f64);
+    println!("tick:  p50={:.1}us  p95={:.1}us  p99={:.1}us  p99.9={:.1}us  max={:.1}us  avg={:.1}us  budget={:.1}ms",
+        p50.as_micros(), p95.as_micros(), p99.as_micros(), p999.as_micros(),
+        max.as_micros(), avg.as_micros(), tick_budget.as_millis() as f64);
     println!("work:  accepted={accepted_delta}  rejected={rejected_delta}  dropped={dropped_delta}");
     println!("state: ticks_ok={} ticks_failed={} worlds={} partitions={}",
         runtime_metrics.ticks_succeeded, runtime_metrics.ticks_failed,
         runtime_metrics.running_worlds, runtime_metrics.partitions);
+    println!("xpart: messages_sent={} delivered={} dropped={}",
+        runtime_metrics.messages_sent, runtime_metrics.messages_delivered,
+        runtime_metrics.messages_dropped);
     let subs_eval = runtime_metrics.subscription_evaluations;
     let subs_deltas = runtime_metrics.subscription_deltas;
     let per_change = subs_eval as f64 / (runtime_metrics.changes_committed.max(1)) as f64;
@@ -456,6 +571,66 @@ fn main() {
     // several× higher (un-drained SDK event buffers).
     println!("mem:   est.~{}MB (steady-state fit: ~24.7KB/conn + 6MB base, incl. in-process SDK clients; join storm spikes several×)",
         (args.clients as u64).saturating_mul(25 * 1024) / (1024 * 1024) + 6);
+
+    // ---- Phase 21.5: per-reducer execution profile ---------------------
+    if args.reducer_profile {
+        println!("\n=== REDUCER PROFILE (measured phase) ===");
+        println!("  {:<16} {:>10} {:>12} {:>14}", "reducer", "calls", "total ms", "avg \u{00b5}s");
+        for (name, (calls, ns)) in &reducer_profile {
+            let avg_us = if *calls > 0 { *ns as f64 / *calls as f64 / 1e3 } else { 0.0 };
+            println!("  {:<16} {:>10} {:>12.2} {:>14.2}", name, calls, *ns as f64 / 1e6, avg_us);
+        }
+    }
+
+    // ---- Phase 21.5: allocation profile (requires --count-alloc) -------
+    #[cfg(feature = "ccu-alloc")]
+    if args.count_alloc {
+        let ticks = args.ticks.max(1) as f64;
+        let (allocs, bytes, frees) = (
+            alloc_after.0.saturating_sub(alloc_before.0),
+            alloc_after.1.saturating_sub(alloc_before.1),
+            alloc_after.2.saturating_sub(alloc_before.2),
+        );
+        println!("\n=== ALLOCATION PROFILE (measured phase, counting allocator) ===");
+        println!("  allocs/tick: {:>10.0}", allocs as f64 / ticks);
+        println!("  bytes/tick:  {:>10.0}", bytes as f64 / ticks);
+        println!("  frees/tick:  {:>10.0}", frees as f64 / ticks);
+        println!("  allocs/client/tick: {:>8.2}", allocs as f64 / args.clients.max(1) as f64 / ticks);
+        println!("  bytes/client/tick:  {:>8.2}", bytes as f64 / args.clients.max(1) as f64 / ticks);
+        println!("  total allocs: {allocs}  bytes: {bytes}  frees: {frees}");
+    }
+    #[cfg(not(feature = "ccu-alloc"))]
+    if args.count_alloc {
+        println!("\nnote: --count-alloc requires building with `--features ccu-alloc`; skipping allocation profile.");
+    }
+
+    // ---- Phase 21.5: latency spike investigation ------------------------
+    if args.profile_detail && phase_timers.tick_samples.len() >= 3 {
+        // Rank ticks by total server-side time (inbound+tick+fanout+pump+
+        // flush); identify the worst few and print their phase composition.
+        let mut ranked: Vec<(u64, usize)> = phase_timers
+            .tick_samples
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (s.0 + s.1 + s.2 + s.3 + s.4, i))
+            .collect();
+        ranked.sort_unstable_by_key(|(total, _)| std::cmp::Reverse(*total));
+        println!("\n=== WORST TICKS (server-side phase composition) ===");
+        for (rank, (total, i)) in ranked.iter().take(5).enumerate() {
+            let s = &phase_timers.tick_samples[*i];
+            println!(
+                "  #{rank} tick {i}: total={:.2}ms  inbound={:.2}  tick={:.2}  fanout={:.2}  pump={:.2}  flush={:.2}  clients={:.2}  drain={:.2}",
+                *total as f64 / 1e6,
+                s.0 as f64 / 1e6,
+                s.1 as f64 / 1e6,
+                s.2 as f64 / 1e6,
+                s.3 as f64 / 1e6,
+                s.4 as f64 / 1e6,
+                s.5 as f64 / 1e6,
+                s.6 as f64 / 1e6,
+            );
+        }
+    }
 
     // ---- classification (honest, ADR-016 D4) ---------------------------
     let p99_over_budget = p99 > tick_budget;

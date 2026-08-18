@@ -19,10 +19,18 @@ nexum-subscription.workspace = true
 nexum-wasm.workspace = true
 wat = "1.256"
 ctrlc = "3.4"
+nexum-alloc-count = { workspace = true, optional = true }
 
 [[bin]]
 name = "game-server"
 path = "src/bin/main.rs"
+
+[features]
+# Phase 21.5: installs a counting global allocator in the `ccu` example so
+# the CCU harness can report allocations/tick and bytes/tick. Only used for
+# dedicated allocation-profiling runs; the timing ladder runs without it so
+# measurements are unperturbed.
+ccu-alloc = ["dep:nexum-alloc-count"]
 
 [lints]
 workspace = true

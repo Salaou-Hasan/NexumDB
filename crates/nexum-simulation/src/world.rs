@@ -46,6 +46,7 @@
 //! # Ok::<(), nexum_core::Error>(())
 //! ```
 
+use std::collections::BTreeMap;
 use std::fmt;
 
 use nexum_core::{
@@ -194,6 +195,10 @@ pub struct World {
     native: ReducerRegistry,
     wasm: Option<WasmModuleRegistry>,
     schedule: Schedule,
+    /// Per-reducer execution profile (Phase 21.5 instrumentation): name →
+    /// (calls, cumulative wall ns). Empty unless profiling is enabled in
+    /// the simulation config; never influences semantics.
+    reducer_profile: BTreeMap<String, (u64, u64)>,
 }
 
 impl World {
@@ -212,6 +217,7 @@ impl World {
             native: ReducerRegistry::new(),
             wasm: None,
             schedule,
+            reducer_profile: BTreeMap::new(),
         })
     }
 
@@ -265,6 +271,18 @@ impl World {
     /// Returns the next tick that `tick` will execute.
     pub fn tick_number(&self) -> TickId {
         TickId::from_u64(self.tick)
+    }
+
+    /// Returns the accumulated per-reducer execution profile (Phase 21.5
+    /// instrumentation): reducer name → (calls, cumulative wall ns). Empty
+    /// unless profiling is enabled in the simulation config.
+    pub fn reducer_profile(&self) -> &BTreeMap<String, (u64, u64)> {
+        &self.reducer_profile
+    }
+
+    /// Resets the accumulated per-reducer execution profile.
+    pub fn clear_reducer_profile(&mut self) {
+        self.reducer_profile.clear();
     }
 
     /// Resumes logical time at `tick` (ADR-010 D5).
@@ -519,6 +537,11 @@ impl World {
         let max_kind_len = self.config.max_message_kind_len();
         let max_args = self.config.max_message_args();
         let execution = self.config.execution();
+        // Per-reducer profiling accumulator (Phase 21.5): taken out so the
+        // tick body's `&mut self.store` borrow doesn't conflict with the
+        // instrumentation writes; restored before returning.
+        let profiling_enabled = self.config.reducer_profiling();
+        let mut reducer_profile = std::mem::take(&mut self.reducer_profile);
 
         let mut tx = Transaction::begin(&mut self.store);
         let store = &self.store;
@@ -535,15 +558,21 @@ impl World {
             // named by its kind against the tick tx (native first, WASM
             // fallback).
             for message in &batch {
+                let started = std::time::Instant::now();
                 let (_, events) = invoke_handler(store, &mut tx, native, wasm, message)?;
+                record_reducer(&mut reducer_profile, profiling_enabled, message.kind(),
+                    started.elapsed().as_nanos() as u64);
                 append_events(&mut tick_events, events, max_events)?;
             }
 
             // Phase 0b — scheduled events due this tick, in (at_tick, id)
             // order. Each is a reducer invocation against the tick tx.
             for event in &due {
+                let started = std::time::Instant::now();
                 let (_, events) =
                     native.invoke_in_tx(store, &mut tx, event.reducer(), event.args())?;
+                record_reducer(&mut reducer_profile, profiling_enabled, event.reducer(),
+                    started.elapsed().as_nanos() as u64);
                 append_events(&mut tick_events, events, max_events)?;
             }
 
@@ -558,6 +587,7 @@ impl World {
             for call in calls {
                 let mut child = Transaction::new(tx.id());
                 child.branch_of(&tx)?;
+                let started = std::time::Instant::now();
                 let outcome = invoke_reducer(
                     store,
                     &mut child,
@@ -566,6 +596,8 @@ impl World {
                     call.reducer(),
                     call.args(),
                 );
+                record_reducer(&mut reducer_profile, profiling_enabled, call.reducer(),
+                    started.elapsed().as_nanos() as u64);
                 match outcome {
                     Ok((value, events)) => {
                         tx.absorb(child)?;
@@ -668,6 +700,7 @@ impl World {
             Ok(())
         })();
 
+        self.reducer_profile = reducer_profile;
         match result {
             Ok(()) => match tx.commit(&mut self.store) {
                 Ok(changes) => Ok(TickResult::new(
@@ -688,6 +721,22 @@ impl World {
                 Err(TickError::new(tick_id, error))
             }
         }
+    }
+}
+
+/// Records one reducer invocation in the per-reducer profile (Phase 21.5
+/// instrumentation). No-op unless profiling is enabled; never influences
+/// simulation semantics.
+fn record_reducer(
+    profile: &mut BTreeMap<String, (u64, u64)>,
+    enabled: bool,
+    name: &str,
+    ns: u64,
+) {
+    if enabled {
+        let entry = profile.entry(name.to_string()).or_insert((0, 0));
+        entry.0 += 1;
+        entry.1 += ns;
     }
 }
 

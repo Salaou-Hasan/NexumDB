@@ -186,7 +186,9 @@ impl GameServer {
             self.next_world += 1;
             let partition = PartitionId::from_u64(self.next_partition);
             self.next_partition += 1;
-            let sim = SimulationConfig::new().with_seed(config.world_seed);
+            let sim = SimulationConfig::new()
+                .with_seed(config.world_seed)
+                .with_reducer_profiling(self.config.reducer_profiling());
             self.runtime_mut()
                 .create_world(world, sim)
                 .map_err(GameServerError::Runtime)?;
@@ -386,7 +388,9 @@ impl GameServer {
             self.next_world += 1;
             let partition = PartitionId::from_u64(self.next_partition);
             self.next_partition += 1;
-            let sim = SimulationConfig::new().with_seed(config.world_seed);
+            let sim = SimulationConfig::new()
+                .with_seed(config.world_seed)
+                .with_reducer_profiling(self.config.reducer_profiling());
             let recovery: RecoveryReport = self
                 .runtime_mut()
                 .recover_world(world, sim, resume_tick)

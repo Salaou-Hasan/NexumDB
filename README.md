@@ -49,6 +49,7 @@ The build follows a strict order: correctness first, distribution last.
 | 19 | Execution hot-path profiling (ranked bottlenecks, Arc-shared rows) | ✅ Done |
 | 20 | Interest management / AOI (duplicate-subscription grouping) | ✅ Done |
 | 21 | Networking & serialization hot-path (Arc frames, attached index) | ✅ Done |
+| 21.5 | Extreme execution profiling (per-reducer/allocation cost map, spike analysis) | ✅ Done |
 | 22 | WASM reducer optimization | ⬜ Planned |
 | 23 | Networking/transport & inbound batching | ⬜ Planned |
 
@@ -344,6 +345,49 @@ tick remains bound by the **sum** of O(CCU) per-client work — the next
 lever is reducing per-client work items (Phase 20 interest management
 already cut subscription evaluations; Phase 22 WASM, Phase 23 inbound
 batching), not making individual sends cheaper.
+
+## Extreme Execution Profiling (Phase 21.5)
+
+Phase 21.5 (see the [full report](docs/reports/21.5-extreme-profiling.md),
+[design](docs/design/21.5-extreme-profiling.md)) is an **investigation
+phase**: the entire authoritative pipeline was instrumented and measured
+at phase, sub-phase, per-reducer, and allocation granularity — **no code
+was optimized**. New instrumentation: per-reducer timing
+(`--reducer-profile`, native vs WASM), a counting global allocator
+(`nexum-alloc-count`, `--features ccu-alloc --count-alloc`), p99.9/max
+reporting, worst-tick spike analysis, and Profile E (extreme gameplay:
+move every tick + WASM fire 2/s + reload). Two measurement bugs were
+found and fixed: `RuntimeMetrics.last_tick_profile` kept only the last
+world's sub-phase times (under-reported ~N× at N partitions; now
+aggregated across worlds), and the harness warmup never drained client
+queues (an artificial tick-0 p99.9 spike; now drained).
+
+Measured cost map (release, in-process transport, 20 Hz):
+
+- **WASM `fire_weapon` = 65–69 µs/call ≈ 15× native** (`move_player`
+  3.9–4.8 µs, `reload_weapon` 6.6 µs) — the measured Phase 22 target.
+- **Connection-only: PASS at 20K** (p99 25 ms); no O(CCU²) remains;
+  **p99.9 ≈ p99 in every profile** (no pathological tail — the only
+  reproducible spike was the fixed warmup artifact).
+- **Idle 20K = 21.6 ms avg tick**; **movement 10K DEGRADED / 15K
+  SATURATED**; **extreme (E) 5K SATURATED at p99 1.09 s** — the fire
+  burst (5K × ~68 µs ≈ 340 ms aggregate CPU every 10th tick) dominates.
+- **Parallelism confirmed**: at E@5K the aggregate world-tick CPU is
+  166.8 ms/tick vs 25.6 ms wall (8 worlds) — the Phase 18 runtime is
+  doing real parallel work, the cost is per-world work, not serialization.
+- **Allocation**: 4 allocs/client/tick idle → 43 movement → 397 extreme
+  (WASM path dominates); churn scales with work, not table size.
+- **Cross-partition traffic = 0** in every profile: the arena workload is
+  partition-local — true horizontal sharding with independent worlds.
+
+Reproduce:
+
+```bash
+# per-reducer + per-phase cost map
+cargo run --release -p game-server --example ccu -- --clients 1000 --profile E --ticks 100 --profile-detail --reducer-profile
+# allocation profile
+cargo run --release -p game-server --example ccu --features ccu-alloc -- --clients 5000 --profile B --ticks 100 --count-alloc
+```
 
 ## License
 

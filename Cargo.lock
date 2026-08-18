@@ -99,6 +99,7 @@ name = "game-server"
 version = "0.1.0"
 dependencies = [
  "ctrlc",
+ "nexum-alloc-count",
  "nexum-core",
  "nexum-game-server",
  "nexum-network",
@@ -172,6 +173,10 @@ name = "multi-stash"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "685a9ac4b61f4e728e1d2c6a7844609c16527aeb5e6c865915c08e619c16410f"
+
+[[package]]
+name = "nexum-alloc-count"
+version = "0.1.0"
 
 [[package]]
 name = "nexum-bench"
