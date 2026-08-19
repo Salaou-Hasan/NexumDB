@@ -1,3 +1,4 @@
+#![cfg_attr(docsrs, feature(doc_auto_cfg))]
 //! Nexum simulation engine — **Phases 9, 11, 12** (ADR-009, ADR-011,
 //! ADR-012): deterministic simulation over the authoritative state model.
 //!

@@ -1,3 +1,4 @@
+#![cfg_attr(docsrs, feature(doc_auto_cfg))]
 //! Nexum core: the shared foundation of the Nexum authoritative state engine.
 //!
 //! This crate is deliberately dependency-free. It defines the *vocabulary* of

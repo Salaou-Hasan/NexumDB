@@ -1,3 +1,4 @@
+#![cfg_attr(docsrs, feature(doc_auto_cfg))]
 //! Nexum networking — **Phase 11** (ADR-011): the realtime protocol and
 //! control-plane **adapter** around the runtime.
 //!

@@ -1,3 +1,4 @@
+#![cfg_attr(docsrs, feature(doc_auto_cfg))]
 //! Nexum subscription engine — **Phase 8** (ADR-008).
 //!
 //! Subscriptions are **reactive views over authoritative table state**,

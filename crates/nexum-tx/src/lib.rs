@@ -1,3 +1,4 @@
+#![cfg_attr(docsrs, feature(doc_auto_cfg))]
 //! Nexum transaction engine — **Phase 4** (Optimistic Concurrency Control).
 //!
 //! This crate turns the table/storage layers into an **authoritative

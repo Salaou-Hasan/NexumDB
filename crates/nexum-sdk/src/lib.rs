@@ -1,3 +1,4 @@
+#![cfg_attr(docsrs, feature(doc_auto_cfg))]
 //! Nexum client SDK (Phase 13, ADR-013): the poll-driven client adapter
 //! around the canonical realtime protocol.
 //!

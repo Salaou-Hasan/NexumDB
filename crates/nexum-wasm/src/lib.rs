@@ -1,3 +1,4 @@
+#![cfg_attr(docsrs, feature(doc_auto_cfg))]
 //! Nexum WASM reducer runtime: sandboxed execution of untrusted reducers
 //! (Phase 7, ADR-007).
 //!
