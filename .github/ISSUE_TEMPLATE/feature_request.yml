@@ -1,0 +1,95 @@
+name: Feature Request
+description: Suggest a new feature or improvement for Nexum
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for suggesting a feature! Please describe what you'd like to see added.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem Statement
+      description: What problem does this feature solve? Is it related to a frustration with the current API?
+      placeholder: "I'm always frustrated when..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution
+      description: Describe the solution you'd like. Include API sketches, code examples, or design ideas if applicable.
+      placeholder: |
+        I'd like Nexum to support...
+
+        ```rust
+        // Example API sketch
+        ```
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Describe any alternative solutions or workarounds you've considered.
+      placeholder: Other approaches I've considered...
+    validations:
+      required: false
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected Area
+      description: Which part of Nexum would this feature affect?
+      options:
+        - Core types / state model
+        - Table engine
+        - Transaction engine (OCC)
+        - Storage engine
+        - WAL / snapshots / recovery
+        - Reducer API
+        - WASM reducer runtime
+        - Subscription engine
+        - Simulation engine
+        - Runtime / partition orchestration
+        - Networking / protocol
+        - Client SDK
+        - Game server layer
+        - Benchmarking
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Importance
+      description: How important is this feature to your use case?
+      options:
+        - Nice to have
+        - Important
+        - Critical (blocking my project)
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Any other context, references, or screenshots about the feature request.
+      placeholder: Add any additional context here.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I have searched existing issues to avoid duplicates
+          required: true

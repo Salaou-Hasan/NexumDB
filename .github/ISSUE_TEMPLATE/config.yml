@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://docs.rs/nexum-core
+    about: Check the docs.rs documentation for API reference
+  - name: Discussions
+    url: https://github.com/Salaou-Hasan/NexumDB/discussions
+    about: Ask questions and discuss ideas
