@@ -6,9 +6,16 @@
 //! produced it, so a consumer can order and acknowledge deliveries without
 //! inventing its own ordering (ADR-008 D3, D8).
 
+use std::sync::Arc;
+
 use nexum_core::{Row, RowId};
 
 /// A row delivered to a consumer: identity plus the (possibly projected) row.
+///
+/// Wrapped in `Arc` so that `SubscriptionUpdate` variants sharing the same
+/// logical row (e.g. across view-group members in `push_commit`) avoid deep
+/// cloning — only the refcount is bumped. The inner `Row` is immutable once
+/// constructed, so sharing is safe.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeliveredRow {
     row_id: RowId,
@@ -19,6 +26,11 @@ impl DeliveredRow {
     /// Creates a delivered row.
     pub fn new(row_id: RowId, row: Row) -> Self {
         Self { row_id, row }
+    }
+
+    /// Wraps an existing delivered row in `Arc` for cheap sharing.
+    pub fn into_shared(self) -> Arc<Self> {
+        Arc::new(self)
     }
 
     /// Returns the row's identity.
@@ -53,14 +65,14 @@ pub enum SubscriptionUpdate {
         /// Commit sequence of the transition.
         seq: u64,
         /// The new visible row.
-        row: DeliveredRow,
+        row: Arc<DeliveredRow>,
     },
     /// A visible row changed but remains visible (new state only).
     Update {
         /// Commit sequence of the transition.
         seq: u64,
         /// The row's new state.
-        row: DeliveredRow,
+        row: Arc<DeliveredRow>,
     },
     /// A visible row left the view (delete, predicate leave, or window
     /// eviction).

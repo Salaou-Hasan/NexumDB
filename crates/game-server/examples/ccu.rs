@@ -233,7 +233,7 @@ fn connect_one(
 fn step(server: &mut GameServer, clients: &mut [SimClient]) {
     server.gateway_mut().process_inbound();
     let _ = server.step();
-    server.gateway_mut().pump_subscriptions();
+    // pump_subscriptions removed: fan_out_results inside step() already drains.
     server.gateway_mut().flush_outbound().expect("flush outbound");
     for sim in clients.iter_mut() {
         sim.client.pump().expect("client pump");
@@ -275,16 +275,18 @@ fn step_server_timed(server: &mut GameServer, t: &mut PhaseTimers) {
         .expect("runtime tick");
     let t2 = Instant::now();
     let _ = server.gateway_mut().fan_out_results(&results);
+    // pump_subscriptions is NOT called here: fan_out_results already drains
+    // every subscriber's buffer during the per-world pump pass. A separate
+    // pump_subscriptions call would re-iterate all connections finding empty
+    // buffers — pure overhead.
     let t3 = Instant::now();
-    server.gateway_mut().pump_subscriptions();
-    let t4 = Instant::now();
     server.gateway_mut().flush_outbound().expect("flush outbound");
-    let t5 = Instant::now();
+    let t4 = Instant::now();
     let inbound = t1.duration_since(t0).as_nanos() as u64;
     let tick = t2.duration_since(t1).as_nanos() as u64;
     let fanout = t3.duration_since(t2).as_nanos() as u64;
-    let pump = t4.duration_since(t3).as_nanos() as u64;
-    let flush = t5.duration_since(t4).as_nanos() as u64;
+    let pump = 0u64;
+    let flush = t4.duration_since(t3).as_nanos() as u64;
     t.inbound_ns += inbound;
     t.tick_ns += tick;
     t.fanout_ns += fanout;

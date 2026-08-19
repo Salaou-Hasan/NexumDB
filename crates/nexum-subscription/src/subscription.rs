@@ -331,7 +331,7 @@ impl SharedView {
             if still_visible {
                 self.visible_keys.insert(kn);
                 if let Some(upd) = update {
-                    out.push(SubscriptionUpdate::Update { seq, row: upd });
+                    out.push(SubscriptionUpdate::Update { seq, row: Arc::new(upd) });
                 }
             } else {
                 // Demoted: Delete, then the next-best row backfills.
@@ -364,7 +364,7 @@ impl SharedView {
                 let row = self.deliverable(row_id);
                 out.push(SubscriptionUpdate::Insert {
                     seq,
-                    row: DeliveredRow::new(row_id, self.compiled.project(&row)),
+                    row: Arc::new(DeliveredRow::new(row_id, self.compiled.project(&row))),
                 });
             }
             // else: stays invisible; nothing changes.
@@ -384,7 +384,7 @@ impl SharedView {
         let row = self.deliverable(entered.row_id);
         out.push(SubscriptionUpdate::Insert {
             seq,
-            row: DeliveredRow::new(entered.row_id, self.compiled.project(&row)),
+            row: Arc::new(DeliveredRow::new(entered.row_id, self.compiled.project(&row))),
         });
     }
 

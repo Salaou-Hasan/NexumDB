@@ -14,7 +14,7 @@
 //! The same frame parser drives the TCP transport's length-delimited reader,
 //! so framing bounds are enforced at the transport too.
 
-use nexum_core::binary::{crc32, get_bool, get_row, get_str, get_u64, get_value, put_bool, put_row, put_str, put_u64, put_value};
+use nexum_core::binary::{Crc32, get_bool, get_row, get_str, get_u64, get_value, put_bool, put_row, put_str, put_u64, put_value};
 use nexum_core::{Error, Row, RowId, SubscriptionId, TickId, TransactionId, Value, Version, WorldId};
 use nexum_reducer::{ReducerArgs, ReducerEvent};
 use nexum_simulation::{InputCommand, InputFrame};
@@ -62,6 +62,7 @@ const KIND_PONG: u8 = 0x89;
 const KIND_DISCONNECT: u8 = 0x8A;
 const KIND_DETACH_RESULT: u8 = 0x8B;
 const KIND_REDUCER_RESULT: u8 = 0x8C;
+const KIND_SUB_DELTA_BATCH: u8 = 0x8D;
 
 /// A client → server message.
 // Variant payloads are self-documenting (`version`, `world`, `nonce`, ...),
@@ -171,6 +172,27 @@ pub enum ServerMessage {
         value: Option<Value>,
         error: Option<String>,
     },
+    /// A batch of subscription deltas for the same subscription in one
+    /// frame — reduces per-delta encode/decode/queue overhead from O(N)
+    /// to O(1) per pump_subscription call.
+    SubscriptionDeltaBatch {
+        subscription: SubscriptionId,
+        request_id: u64,
+        deltas: Vec<SubscriptionDeltaEntry>,
+    },
+}
+
+/// A single delta entry inside a [`SubscriptionDeltaBatch`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubscriptionDeltaEntry {
+    /// Commit sequence of the transition.
+    pub seq: u64,
+    /// Row-level change kind.
+    pub kind: DeltaKind,
+    /// Identity of the affected row.
+    pub row_id: RowId,
+    /// The row data (absent for deletes).
+    pub row: Option<DeliveredRow>,
 }
 
 /// The row-level change kind of a subscription delta.
@@ -399,6 +421,29 @@ pub fn encode_server(message: &ServerMessage, max_payload: u32) -> Result<Vec<u8
             }
             (KIND_REDUCER_RESULT, payload)
         }
+        ServerMessage::SubscriptionDeltaBatch {
+            subscription,
+            request_id,
+            deltas,
+        } => {
+            let mut payload = Vec::new();
+            put_u64(&mut payload, subscription.as_u64());
+            put_u64(&mut payload, *request_id);
+            put_u64(&mut payload, deltas.len() as u64);
+            for d in deltas {
+                put_u64(&mut payload, d.seq);
+                payload.push(delta_kind_tag(d.kind));
+                put_u64(&mut payload, d.row_id.as_u64());
+                match d.kind {
+                    DeltaKind::Delete => {}
+                    _ => {
+                        let row = d.row.as_ref().expect("insert/update deltas carry a row");
+                        put_row(&mut payload, row.row());
+                    }
+                }
+            }
+            (KIND_SUB_DELTA_BATCH, payload)
+        }
     };
     build_frame(kind, &payload, max_payload)
 }
@@ -418,11 +463,12 @@ fn build_frame(kind: u8, payload: &[u8], max_payload: u32) -> Result<Vec<u8>, Ne
     frame.push(kind);
     put_u32(&mut frame, payload.len() as u32);
     frame.extend_from_slice(payload);
-    let mut crc_input = Vec::with_capacity(2 + 1 + payload.len());
-    put_u16(&mut crc_input, PROTOCOL_VERSION);
-    crc_input.push(kind);
-    crc_input.extend_from_slice(payload);
-    put_u32(&mut frame, crc32(&crc_input));
+    let checksum = Crc32::new()
+        .chain(&PROTOCOL_VERSION.to_le_bytes())
+        .chain(&[kind])
+        .chain(payload)
+        .finalize();
+    put_u32(&mut frame, checksum);
     Ok(frame)
 }
 
@@ -701,6 +747,31 @@ pub fn decode_server(frame: &[u8], max_payload: u32) -> Result<ServerMessage, Pr
                 }
             }
         }
+        KIND_SUB_DELTA_BATCH => {
+            let mut cursor = payload.as_slice();
+            let subscription = SubscriptionId::from_u64(get_u64(&mut cursor)?);
+            let request_id = get_u64(&mut cursor)?;
+            let count = get_u64(&mut cursor)? as usize;
+            let mut deltas = Vec::with_capacity(count);
+            for _ in 0..count {
+                let seq = get_u64(&mut cursor)?;
+                let kind_tag = cursor.first().copied().ok_or(ProtocolError::Truncated)?;
+                cursor = &cursor[1..];
+                let kind = delta_kind_from_tag(kind_tag)?;
+                let row_id = RowId::from_u64(get_u64(&mut cursor)?);
+                let row = match kind {
+                    DeltaKind::Delete => None,
+                    _ => Some(DeliveredRow::new(row_id, get_row(&mut cursor)?)),
+                };
+                deltas.push(SubscriptionDeltaEntry { seq, kind, row_id, row });
+            }
+            ensure_consumed(cursor)?;
+            ServerMessage::SubscriptionDeltaBatch {
+                subscription,
+                request_id,
+                deltas,
+            }
+        }
         _ => return Err(ProtocolError::UnknownKind(kind)),
     })
 }
@@ -737,11 +808,12 @@ fn decode_frame(frame: &[u8], max_payload: u32) -> Result<(u8, Vec<u8>), Protoco
             .try_into()
             .expect("4 bytes"),
     );
-    let mut crc_input = Vec::with_capacity(2 + 1 + payload.len());
-    put_u16(&mut crc_input, version);
-    crc_input.push(kind);
-    crc_input.extend_from_slice(payload);
-    if crc32(&crc_input) != stored {
+    let computed = Crc32::new()
+        .chain(&version.to_le_bytes())
+        .chain(&[kind])
+        .chain(payload)
+        .finalize();
+    if computed != stored {
         return Err(ProtocolError::BadChecksum);
     }
     Ok((kind, payload.to_vec()))
@@ -785,11 +857,12 @@ pub fn parse_frame(
             .try_into()
             .expect("4 bytes"),
     );
-    let mut crc_input = Vec::with_capacity(2 + 1 + payload.len());
-    put_u16(&mut crc_input, version);
-    crc_input.push(kind);
-    crc_input.extend_from_slice(payload);
-    if crc32(&crc_input) != stored {
+    let computed = Crc32::new()
+        .chain(&version.to_le_bytes())
+        .chain(&[kind])
+        .chain(payload)
+        .finalize();
+    if computed != stored {
         return Err(ProtocolError::BadChecksum);
     }
     Ok(Some((frame, total)))

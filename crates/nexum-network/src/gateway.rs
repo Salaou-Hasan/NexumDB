@@ -874,11 +874,63 @@ impl NetworkGateway {
             .get(&(connection, subscription))
             .copied()
             .unwrap_or(0);
-        for update in updates {
-            if let Some(message) = serialize_update(subscription, request_id, &update)
-                && self.send(connection, &message).unwrap_or(false)
-            {
-                self.metrics.subscription_messages_sent += 1;
+        if updates.len() <= 1 {
+            // Single delta: send directly.
+            for update in &updates {
+                if let Some(message) = serialize_update(subscription, request_id, update)
+                    && self.send(connection, &message).unwrap_or(false)
+                {
+                    self.metrics.subscription_messages_sent += 1;
+                }
+            }
+        } else {
+            // Batch multiple deltas into one frame.
+            let mut deltas = Vec::with_capacity(updates.len());
+            for update in &updates {
+                match update {
+                    SubscriptionUpdate::Insert { seq, row } => {
+                        deltas.push(crate::protocol::SubscriptionDeltaEntry {
+                            seq: *seq,
+                            kind: DeltaKind::Insert,
+                            row_id: row.row_id(),
+                            row: Some((**row).clone()),
+                        });
+                    }
+                    SubscriptionUpdate::Update { seq, row } => {
+                        deltas.push(crate::protocol::SubscriptionDeltaEntry {
+                            seq: *seq,
+                            kind: DeltaKind::Update,
+                            row_id: row.row_id(),
+                            row: Some((**row).clone()),
+                        });
+                    }
+                    SubscriptionUpdate::Delete { seq, row_id } => {
+                        deltas.push(crate::protocol::SubscriptionDeltaEntry {
+                            seq: *seq,
+                            kind: DeltaKind::Delete,
+                            row_id: *row_id,
+                            row: None,
+                        });
+                    }
+                    _ => {
+                        // Initial/Resync/Stale: send individually.
+                        if let Some(message) = serialize_update(subscription, request_id, update)
+                            && self.send(connection, &message).unwrap_or(false)
+                        {
+                            self.metrics.subscription_messages_sent += 1;
+                        }
+                    }
+                }
+            }
+            if !deltas.is_empty() {
+                let message = ServerMessage::SubscriptionDeltaBatch {
+                    subscription,
+                    request_id,
+                    deltas,
+                };
+                if self.send(connection, &message).unwrap_or(false) {
+                    self.metrics.subscription_messages_sent += 1;
+                }
             }
         }
     }
@@ -1399,14 +1451,14 @@ fn serialize_update(
             seq: *seq,
             kind: DeltaKind::Insert,
             row_id: row.row_id(),
-            row: Some(row.clone()),
+            row: Some((**row).clone()),
         }),
         SubscriptionUpdate::Update { seq, row } => Some(ServerMessage::SubscriptionDelta {
             subscription,
             seq: *seq,
             kind: DeltaKind::Update,
             row_id: row.row_id(),
-            row: Some(row.clone()),
+            row: Some((**row).clone()),
         }),
         SubscriptionUpdate::Delete { seq, row_id } => Some(ServerMessage::SubscriptionDelta {
             subscription,

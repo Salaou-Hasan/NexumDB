@@ -231,14 +231,44 @@ pub fn get_schema(cursor: &mut &[u8]) -> Result<TableSchema> {
 /// deterministic. The standard polynomial catches burst errors typical of
 /// torn/corrupted tails.
 pub fn crc32(data: &[u8]) -> u32 {
-    static TABLE: OnceLock<[u32; 256]> = OnceLock::new();
-    let table = TABLE.get_or_init(build_crc_table);
-    let mut crc = 0xFFFF_FFFFu32;
-    for &byte in data {
-        let index = ((crc ^ u32::from(byte)) & 0xFF) as usize;
-        crc = table[index] ^ (crc >> 8);
+    Crc32::new().chain(data).finalize()
+}
+
+/// Incremental CRC-32 hasher — avoids building a contiguous buffer when
+/// the data to hash lives in non-contiguous slices (e.g. the protocol
+/// frame where `version+kind` and `payload` are separated by a 4-byte
+/// length field).
+pub struct Crc32 {
+    crc: u32,
+}
+
+impl Default for Crc32 {
+    fn default() -> Self {
+        Self::new()
     }
-    crc ^ 0xFFFF_FFFF
+}
+
+impl Crc32 {
+    /// Creates a new hasher in the initial state.
+    pub fn new() -> Self {
+        Self { crc: 0xFFFF_FFFFu32 }
+    }
+
+    /// Feeds a byte slice into the running CRC.
+    pub fn chain(mut self, data: &[u8]) -> Self {
+        static TABLE: OnceLock<[u32; 256]> = OnceLock::new();
+        let table = TABLE.get_or_init(build_crc_table);
+        for &byte in data {
+            let index = ((self.crc ^ u32::from(byte)) & 0xFF) as usize;
+            self.crc = table[index] ^ (self.crc >> 8);
+        }
+        self
+    }
+
+    /// Returns the final CRC-32 checksum.
+    pub fn finalize(self) -> u32 {
+        self.crc ^ 0xFFFF_FFFF
+    }
 }
 
 /// Builds the CRC-32 lookup table once.
