@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Nexum transaction engine: read/write sets, OCC validation, commit and abort."
+keywords = ["game-engine", "multiplayer", "realtime", "database", "simulation"]
 
 [dependencies]
 nexum-core.workspace = true

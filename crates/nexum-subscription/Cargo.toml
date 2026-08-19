@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Nexum subscription engine: registry, query compilation, matching, deltas, delivery."
+keywords = ["game-engine", "multiplayer", "realtime", "database", "simulation"]
 
 [dependencies]
 nexum-core.workspace = true

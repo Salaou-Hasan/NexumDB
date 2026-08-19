@@ -25,7 +25,12 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/Salaou-Hasan/NexumDB"
-description = "Nexum: an authoritative state engine for realtime multiplayer and simulation backends."
+homepage = "https://github.com/Salaou-Hasan/NexumDB"
+description = "Nexum: an authoritative state engine for realtime multiplayer games and simulation backends. OCC transactions, WASM reducers, deterministic simulation, subscriptions, and a realtime protocol — all in Rust."
+readme = "README.md"
+keywords = ["game-engine", "multiplayer", "realtime", "database", "simulation", "wasm", "transactions"]
+categories = ["game-development", "database-implementations", "wasm", "network-programming"]
+exclude = ["target/", ".git/", "docs/", "benchmarks/", "tests/"]
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

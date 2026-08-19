@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Nexum networking: the realtime protocol and control-plane adapter around the runtime (Phase 11)."
+keywords = ["game-engine", "multiplayer", "realtime", "database", "simulation"]
 
 [dependencies]
 nexum-core.workspace = true

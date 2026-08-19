@@ -1,22 +1,55 @@
-# Nexum — Authoritative State Engine
+# Nexum — Authoritative State Engine for Multiplayer Games & Simulation
+
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Rust](https://img.shields.io/badge/rust-2024-orange.svg)](https://www.rust-lang.org/)
+[![Crates.io](https://img.shields.io/crates/v/nexum-core.svg)](https://crates.io/crates/nexum-core)
+[![Docs.rs](https://docs.rs/nexum-core/badge.svg)](https://docs.rs/nexum-core)
+
+**Nexum** is an authoritative state engine for realtime multiplayer games and simulation backends, written in Rust. It provides OCC transactions, WASM-sandboxed reducers, deterministic simulation, reactive subscriptions, and a versioned binary protocol — all in a single-node, memory-first architecture.
 
 > **State is authoritative. Transactions change state. Simulation produces state transitions. Subscriptions expose state.**
 
-Nexum is a high-performance multiplayer backend and authoritative state engine written in Rust.
-It is inspired by the ideas behind SpacetimeDB, Nakama, relational databases, realtime multiplayer
-backends, and simulation engines — but it is **not** a clone of any of them. It is a new architecture.
+Nexum is inspired by SpacetimeDB, Nakama, relational databases, and simulation engines — but it is **not** a clone of any of them. It is a new architecture designed for the specific demands of authoritative multiplayer state synchronization.
+
+### Key features
+
+- **Authoritative state** — one source of truth; clients send intents, never positions
+- **OCC transactions** — optimistic concurrency control with read/write set validation
+- **WASM reducers** — sandboxed, deterministic gameplay logic with host-call ABI
+- **Deterministic simulation** — reproducible ticks, parallel world execution, partition sharding
+- **Reactive subscriptions** — committed-change observation with bounded queries and resync
+- **Realtime protocol** — versioned binary frames, sessions, auth, gateway, client SDK
+- **20K+ connection-only CCU** — measured on a single laptop, in-process transport
+- **unsafe_code = forbid** — no unsafe anywhere in the codebase
+
+## Why Nexum?
+
+Most multiplayer backends separate the database from the simulation. Nexum **unifies** them: the
+authoritative state store **is** the simulation. There is no data drift, no reconciliation, no
+catch-up sync. Every tick produces deterministic state transitions that are immediately visible to
+subscribers.
+
+**Compared to SpacetimeDB:** Nexum is Rust-native with a custom WASM reducer sandbox, OCC
+transactions, and a simulation-first architecture.
+
+**Compared to Nakama:** Nexum is not a general-purpose game server. It is a state engine where
+the simulation IS the database. No Lua/JS runtime — just authoritative state at extreme scale.
+
+**Compared to writing your own:** Nexum provides the hard parts out of the box: OCC, WAL,
+determinism, WASM sandboxing, subscriptions, and a realtime protocol. You write reducers; Nexum
+makes them fast, durable, and concurrent.
 
 ## The three primitives
 
-1. **Tables** — Tables are the authoritative state of the application/world. They carry schemas,
-   typed columns, rows, primary keys, indexes, constraints, and version metadata.
-2. **Reducers** — Reducers are authoritative state transitions. Each reducer executes inside a
-   transaction (read → execute → write → validate → commit).
-3. **Subscriptions** — Subscriptions are reactive views over authoritative table state, driven by
-   committed change sets — never by polling.
+1. **Tables** — The authoritative state of the application/world. Schemas, typed columns, rows,
+   primary keys, indexes, constraints, and version metadata.
+2. **Reducers** — Authoritative state transitions. Each reducer executes inside a transaction
+   (read → execute → write → validate → commit).
+3. **Subscriptions** — Reactive views over authoritative table state, driven by committed change
+   sets — never by polling.
 
-Everything else — transactions (OCC), the memory-first storage engine, WAL + snapshots, the WASM
-reducer sandbox, the simulation scheduler, the partition/worker runtime, and the QUIC/HTTP planes —
+Everything else — OCC transactions, the memory-first storage engine, WAL + snapshots, the WASM
+reducer sandbox, the simulation scheduler, the partition/worker runtime, and the realtime protocol —
 exists to make those three primitives reliable, deterministic, transactional, durable, scalable, and
 extremely fast.
 
@@ -50,7 +83,8 @@ The build follows a strict order: correctness first, distribution last.
 | 20 | Interest management / AOI (duplicate-subscription grouping) | ✅ Done |
 | 21 | Networking & serialization hot-path (Arc frames, attached index) | ✅ Done |
 | 21.5 | Extreme execution profiling (per-reducer/allocation cost map, spike analysis) | ✅ Done |
-| 22 | WASM reducer optimization | ⬜ Planned |
+| 22 | WASM reducer optimization (COW WriteSet, has_any_insert skip, absorb fast-path) | ✅ Done |
+| 22.5 | Networking hot-path (Arc rows, delta batching, incremental CRC, pump removal) | ✅ Done |
 | 23 | Networking/transport & inbound batching | ⬜ Planned |
 
 ## Repository layout

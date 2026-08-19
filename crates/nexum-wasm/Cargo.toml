@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Nexum WASM reducer runtime: sandboxed execution of untrusted reducer modules."
+keywords = ["game-engine", "multiplayer", "realtime", "database", "simulation"]
 
 [dependencies]
 nexum-core.workspace = true

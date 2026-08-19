@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Nexum core: ids, versions, timestamps, errors, and the foundational state interfaces."
+keywords = ["game-engine", "multiplayer", "realtime", "database", "simulation"]
 
 [dependencies]
 
