@@ -2,8 +2,6 @@
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-2024-orange.svg)](https://www.rust-lang.org/)
-[![Crates.io](https://img.shields.io/crates/v/nexum-core.svg)](https://crates.io/crates/nexum-core)
-[![Docs.rs](https://docs.rs/nexum-core/badge.svg)](https://docs.rs/nexum-core)
 
 **Nexum** is an authoritative state engine for realtime multiplayer games and simulation backends, written in Rust. It provides OCC transactions, WASM-sandboxed reducers, deterministic simulation, reactive subscriptions, and a versioned binary protocol — all in a single-node, memory-first architecture.
 
