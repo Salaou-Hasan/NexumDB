@@ -191,8 +191,8 @@ pub struct SubscriptionDeltaEntry {
     pub kind: DeltaKind,
     /// Identity of the affected row.
     pub row_id: RowId,
-    /// The row data (absent for deletes).
-    pub row: Option<DeliveredRow>,
+    /// The row data (absent for deletes). Shared via Arc to avoid deep-copy.
+    pub row: Option<std::sync::Arc<DeliveredRow>>,
 }
 
 /// The row-level change kind of a subscription delta.
@@ -761,7 +761,7 @@ pub fn decode_server(frame: &[u8], max_payload: u32) -> Result<ServerMessage, Pr
                 let row_id = RowId::from_u64(get_u64(&mut cursor)?);
                 let row = match kind {
                     DeltaKind::Delete => None,
-                    _ => Some(DeliveredRow::new(row_id, get_row(&mut cursor)?)),
+                    _ => Some(std::sync::Arc::new(DeliveredRow::new(row_id, get_row(&mut cursor)?))),
                 };
                 deltas.push(SubscriptionDeltaEntry { seq, kind, row_id, row });
             }

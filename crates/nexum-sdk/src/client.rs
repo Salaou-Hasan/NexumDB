@@ -346,7 +346,7 @@ impl Client {
                         entry.seq,
                         entry.kind,
                         entry.row_id,
-                        entry.row,
+                        entry.row.map(|arc| (*arc).clone()),
                     );
                 }
             }

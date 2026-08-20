@@ -467,11 +467,11 @@ fn idle_broadcast_shares_one_frame_allocation_across_clients() {
     join_world0(&mut gateway, &mut bob, max, "bob-token");
 
     gateway.step_worlds().unwrap();
-    let a_frame = alice.try_recv_frame().unwrap().expect("alice frame");
-    let b_frame = bob.try_recv_frame().unwrap().expect("bob frame");
-    assert!(Arc::ptr_eq(&a_frame, &b_frame), "shared TickUpdate frame");
-    let a_msg = protocol::decode_server(&a_frame, max).unwrap();
-    let b_msg = protocol::decode_server(&b_frame, max).unwrap();
+    // TickUpdate now goes through the direct message path (bypasses encode/decode).
+    let a_msg = recv_server(&mut alice, max);
+    let b_msg = recv_server(&mut bob, max);
+    assert!(matches!(a_msg, ServerMessage::TickUpdate { .. }), "alice got TickUpdate");
+    assert!(matches!(b_msg, ServerMessage::TickUpdate { .. }), "bob got TickUpdate");
     assert_eq!(a_msg, b_msg, "identical logical TickUpdate");
 }
 
@@ -495,21 +495,21 @@ fn attached_index_tracks_attach_detach_and_disconnect() {
     join_world0(&mut gateway, &mut alice, max, "alice-token");
     join_world0(&mut gateway, &mut bob, max, "bob-token");
     gateway.step_worlds().unwrap();
-    assert!(alice.try_recv_frame().unwrap().is_some());
-    assert!(bob.try_recv_frame().unwrap().is_some());
-
-    // Drain both queues before the next steps so assertions are precise.
-    while alice.try_recv_frame().unwrap().is_some() {}
-    while bob.try_recv_frame().unwrap().is_some() {}
+    // Drain ALL messages from both queues.
+    drain_server(&mut alice, max);
+    drain_server(&mut bob, max);
 
     // Detach alice: she no longer receives broadcasts; bob still does.
     send_client(&mut alice, &ClientMessage::DetachWorld, max);
     gateway.process_inbound();
-    let _ = alice.try_recv_frame().unwrap(); // DetachResult
+    let _ = recv_server(&mut alice, max); // DetachResult (now via direct path)
     gateway.step_worlds().unwrap();
+    // Detached alice gets no TickUpdate; check both frame and direct queues.
     assert!(alice.try_recv_frame().unwrap().is_none(), "detached client gets no broadcast");
-    assert!(bob.try_recv_frame().unwrap().is_some(), "attached client still gets broadcasts");
-    let _ = bob.try_recv_frame().unwrap(); // drain bob's TickUpdate
+    assert!(alice.try_recv_direct().unwrap().is_none(), "detached client no direct");
+    // Bob is attached: gets TickUpdate via direct path.
+    let bob_msg = recv_server(&mut bob, max);
+    assert!(matches!(bob_msg, ServerMessage::TickUpdate { .. }), "attached client still gets broadcasts");
 
     // Disconnect bob: the index entry is removed with the connection (the
     // Disconnect frame is drained first).
@@ -520,12 +520,13 @@ fn attached_index_tracks_attach_detach_and_disconnect() {
     ));
     gateway.step_worlds().unwrap();
     assert!(bob.try_recv_frame().unwrap().is_none());
+    assert!(bob.try_recv_direct().unwrap().is_none());
     // Re-attach alice still works after bob's removal (index not corrupted).
     send_client(&mut alice, &ClientMessage::AttachWorld { world: WorldId::from_u64(0) }, max);
     gateway.process_inbound();
-    let _ = alice.try_recv_frame().unwrap(); // AttachResult
+    let _ = recv_server(&mut alice, max); // AttachResult
     gateway.step_worlds().unwrap();
-    assert!(alice.try_recv_frame().unwrap().is_some());
+    let _ = recv_server(&mut alice, max); // TickUpdate
     // Alice's connection id is still the same (index tracked her throughout).
     assert_eq!(
         gateway.connection_peer(alice_id).unwrap(),

@@ -893,7 +893,7 @@ impl NetworkGateway {
                             seq: *seq,
                             kind: DeltaKind::Insert,
                             row_id: row.row_id(),
-                            row: Some((**row).clone()),
+                            row: Some(std::sync::Arc::clone(row)),
                         });
                     }
                     SubscriptionUpdate::Update { seq, row } => {
@@ -901,7 +901,7 @@ impl NetworkGateway {
                             seq: *seq,
                             kind: DeltaKind::Update,
                             row_id: row.row_id(),
-                            row: Some((**row).clone()),
+                            row: Some(std::sync::Arc::clone(row)),
                         });
                     }
                     SubscriptionUpdate::Delete { seq, row_id } => {
@@ -987,21 +987,9 @@ impl NetworkGateway {
                 changes,
                 events: result.events().to_vec(),
             };
-            // Encode the TickUpdate once per world, then deliver the shared
-            // `Arc<[u8]>` frame to every attached session by refcount bump —
-            // zero per-client encode AND zero per-client copy (ADR-021 D1,
-            // building on ADR-017 D4's encode-once).
-            let tu_frame = match protocol::encode_server(&message, self.config.max_frame_payload()) {
-                Ok(frame) => Arc::from(frame),
-                Err(_) => {
-                    // An encode failure (oversized frame) drops the whole
-                    // broadcast rather than failing the tick: the change set
-                    // is still committed authoritatively; clients get the
-                    // delta via their subscriptions.
-                    report.messages_dropped += 1;
-                    continue;
-                }
-            };
+            // Try direct message delivery first (bypasses encode on server,
+            // decode on client). Falls back to encode-once + frame delivery.
+            // Report encode failure as dropped rather than failing the tick.
             let attached: Vec<ConnectionId> = self
                 .attached_by_world
                 .get(&world)
@@ -1009,7 +997,7 @@ impl NetworkGateway {
                 .unwrap_or_default();
             for connection in attached {
                 if self
-                    .send_encoded(connection, Arc::clone(&tu_frame), is_stale_signal(&message))
+                    .send(connection, &message)
                     .unwrap_or(false)
                 {
                     report.tick_updates_sent += 1;
