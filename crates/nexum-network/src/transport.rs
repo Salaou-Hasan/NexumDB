@@ -111,15 +111,20 @@ pub trait Connection {
 // ------------------------------------------------------------- memory
 
 /// The shared state of one memory link (both directions, bounded).
+///
+/// Outbound capacity is shared across frame and direct-message queues so
+/// that overflow/stale policy applies uniformly regardless of which path
+/// the gateway uses.
 struct MemoryLink {
+    // --- inbound (client → server) ---
     to_server: VecDeque<Arc<[u8]>>,
+    // --- outbound (server → client): frame queue ---
     to_client: VecDeque<Arc<[u8]>>,
-    /// Direct message queues — bypass encode/decode for in-process transport.
-    to_server_msg: VecDeque<ServerMessage>,
+    /// Direct message queue — bypass encode/decode for in-process transport.
     to_client_msg: VecDeque<ServerMessage>,
     /// Cap for client → server (the gateway's inbound bound).
     inbound_cap: usize,
-    /// Cap for server → client (the gateway's outbound bound).
+    /// Cap for server → client (shared across frame + direct queues).
     outbound_cap: usize,
     closed: bool,
 }
@@ -154,7 +159,6 @@ impl MemoryTransport {
         let link = Arc::new(Mutex::new(MemoryLink {
             to_server: VecDeque::new(),
             to_client: VecDeque::new(),
-            to_server_msg: VecDeque::new(),
             to_client_msg: VecDeque::new(),
             inbound_cap,
             outbound_cap,
@@ -194,20 +198,25 @@ impl Connection for MemoryConnection {
         if link.closed {
             return Err(TransportError::Closed);
         }
+        // Unified capacity: frame + direct queues share the same cap.
+        let total = if self.server_side {
+            link.to_client.len() + link.to_client_msg.len()
+        } else {
+            link.to_server.len()
+        };
         let cap = if self.server_side {
             link.outbound_cap
         } else {
             link.inbound_cap
         };
-        let queue = if self.server_side {
-            &mut link.to_client
-        } else {
-            &mut link.to_server
-        };
-        if queue.len() >= cap {
+        if total >= cap {
             return Err(TransportError::Full);
         }
-        queue.push_back(frame);
+        if self.server_side {
+            link.to_client.push_back(frame);
+        } else {
+            link.to_server.push_back(frame);
+        }
         Ok(())
     }
 
@@ -220,31 +229,37 @@ impl Connection for MemoryConnection {
         if link.closed {
             return Err(TransportError::Closed);
         }
+        // Unified capacity: frame + direct queues share the same cap.
+        let total = if self.server_side {
+            link.to_client.len() + link.to_client_msg.len()
+        } else {
+            link.to_server.len()
+        };
         let cap = if self.server_side {
             link.outbound_cap
         } else {
             link.inbound_cap
         };
-        let queue = if self.server_side {
-            &mut link.to_client_msg
-        } else {
-            &mut link.to_server_msg
-        };
-        if queue.len() >= cap {
+        if total >= cap {
             return Err(TransportError::Full);
         }
-        queue.push_back(message.clone());
+        if self.server_side {
+            link.to_client_msg.push_back(message.clone());
+        } else {
+            // Client → server direct messages not used; fall through to frame.
+            return Err(TransportError::Closed);
+        }
         Ok(())
     }
 
     fn try_recv_direct(&mut self) -> Result<Option<ServerMessage>, TransportError> {
         let mut link = self.link.lock().expect("memory link lock");
-        let queue = if self.server_side {
-            &mut link.to_server_msg
+        // Client side receives from to_client_msg; server side has no direct inbound.
+        if self.server_side {
+            Ok(None)
         } else {
-            &mut link.to_client_msg
-        };
-        Ok(queue.pop_front())
+            Ok(link.to_client_msg.pop_front())
+        }
     }
 
     fn flush_outbound(&mut self) -> Result<(), TransportError> {

@@ -1155,8 +1155,43 @@ impl NetworkGateway {
         connection: ConnectionId,
         message: &ServerMessage,
     ) -> Result<bool, NetworkError> {
+        let stale_signal = is_stale_signal(message);
+        // Fast path: try direct message passing (bypasses encode/decode).
+        // Unified capacity ensures overflow/stale semantics are preserved.
+        {
+            let entry = self
+                .connections
+                .get_mut(&connection)
+                .ok_or(NetworkError::UnknownConnection(connection))?;
+
+            // Flush pending stale notifications via frame path.
+            while let Some(pending) = entry.pending_stale.front().cloned() {
+                match entry.connection.try_send_frame(Arc::from(pending)) {
+                    Ok(()) => { entry.pending_stale.pop_front(); }
+                    Err(TransportError::Full) | Err(TransportError::Closed) => break,
+                    Err(_) => break,
+                }
+            }
+
+            // Already stale and not a stale signal → drop.
+            if entry.stale && !stale_signal {
+                self.metrics.messages_dropped += 1;
+                return Ok(false);
+            }
+
+            // Try direct send.
+            if entry
+                .connection
+                .try_send_direct(message, self.config.max_frame_payload())
+                .is_ok()
+            {
+                self.metrics.messages_outbound += 1;
+                return Ok(true);
+            }
+        }
+        // Slow path: encode to frame bytes and send.
         let frame = protocol::encode_server(message, self.config.max_frame_payload())?;
-        self.send_encoded(connection, Arc::from(frame), is_stale_signal(message))
+        self.send_encoded(connection, Arc::from(frame), stale_signal)
     }
 
     /// Sends a **pre-encoded** frame to a connection, applying the same
