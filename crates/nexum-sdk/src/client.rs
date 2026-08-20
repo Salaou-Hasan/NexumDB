@@ -142,6 +142,20 @@ impl Client {
     pub fn pump(&mut self) -> Result<PumpReport, SdkError> {
         let mut report = PumpReport::default();
         loop {
+            // Fast path: try direct message receive (in-process transport bypasses
+            // frame decode entirely — no serialization, no allocation).
+            {
+                let Some(transport) = self.transport.as_mut() else {
+                    return Err(SdkError::NotConnected);
+                };
+                if let Some(message) = transport.recv_direct()? {
+                    report.frames += 1;
+                    report.dispatched += 1;
+                    self.dispatch(message);
+                    continue;
+                }
+            }
+            // Slow path: receive encoded frame + decode.
             let result = {
                 let Some(transport) = self.transport.as_mut() else {
                     return Err(SdkError::NotConnected);

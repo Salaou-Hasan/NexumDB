@@ -118,11 +118,15 @@ fn send_client(client: &mut MemoryConnection, message: &ClientMessage, max: u32)
 }
 
 fn recv_server(client: &mut MemoryConnection, max: u32) -> ServerMessage {
-    let frame = client
-        .try_recv_frame()
-        .unwrap()
-        .expect("expected a server frame");
-    protocol::decode_server(&frame, max).unwrap()
+    // Try frame first (TickUpdate broadcast goes through send_encoded).
+    if let Some(frame) = client.try_recv_frame().unwrap() {
+        return protocol::decode_server(&frame, max).unwrap();
+    }
+    // Then try direct (subscription deltas go through send → direct queue).
+    if let Some(msg) = client.try_recv_direct().unwrap() {
+        return msg;
+    }
+    panic!("expected a server frame");
 }
 
 fn join_world(

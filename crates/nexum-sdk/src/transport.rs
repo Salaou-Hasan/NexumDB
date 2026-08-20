@@ -17,6 +17,7 @@
 use std::net::ToSocketAddrs;
 use std::sync::Arc;
 
+use nexum_network::protocol::ServerMessage;
 use nexum_network::transport::{
     Connection, MemoryConnection, MemoryTransport, TcpConnection, TransportError,
 };
@@ -90,6 +91,24 @@ impl ClientTransport {
         }
         match self.inner.try_recv_frame() {
             Ok(Some(frame)) => Ok(Some(frame)),
+            Ok(None) => Ok(None),
+            Err(TransportError::Closed) => {
+                self.closed = true;
+                Err(SdkError::TransportClosed)
+            }
+            Err(error) => Err(SdkError::Transport(error)),
+        }
+    }
+
+    /// Tries to receive a [`ServerMessage`] directly, bypassing frame decode.
+    /// Returns `Ok(Some(msg))` when a direct message was available; `Ok(None)`
+    /// when there are none (caller should fall back to `recv_frame` + decode).
+    pub fn recv_direct(&mut self) -> Result<Option<ServerMessage>, SdkError> {
+        if self.closed {
+            return Ok(None);
+        }
+        match self.inner.try_recv_direct() {
+            Ok(Some(msg)) => Ok(Some(msg)),
             Ok(None) => Ok(None),
             Err(TransportError::Closed) => {
                 self.closed = true;

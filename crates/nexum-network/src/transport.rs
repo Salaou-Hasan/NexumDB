@@ -21,7 +21,7 @@ use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
 use std::sync::{Arc, Mutex};
 
 use crate::error::{NetworkError, ProtocolError};
-use crate::protocol::parse_frame;
+use crate::protocol::{parse_frame, ServerMessage};
 
 /// A transport-level failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,6 +84,28 @@ pub trait Connection {
 
     /// Closes the connection (idempotent).
     fn close(&mut self);
+
+    /// Send a [`ServerMessage`] directly, bypassing encode → frame.
+    /// Returns `Ok(())` when the message was stored; the caller must NOT
+    /// fall back to `try_send_frame`.
+    ///
+    /// Default: unsupported — returns `Err(TransportError::Closed)` so
+    /// callers can fall back to encode+`try_send_frame`.
+    fn try_send_direct(
+        &mut self,
+        _message: &ServerMessage,
+        _max_payload: u32,
+    ) -> Result<(), TransportError> {
+        Err(TransportError::Closed)
+    }
+
+    /// Receive a [`ServerMessage`] directly, bypassing frame → decode.
+    /// Returns `Ok(Some(msg))` when a direct message was available; `Ok(None)`
+    /// when there are no direct messages (caller should fall back to
+    /// `try_recv_frame` + decode).
+    fn try_recv_direct(&mut self) -> Result<Option<ServerMessage>, TransportError> {
+        Ok(None)
+    }
 }
 
 // ------------------------------------------------------------- memory
@@ -92,6 +114,9 @@ pub trait Connection {
 struct MemoryLink {
     to_server: VecDeque<Arc<[u8]>>,
     to_client: VecDeque<Arc<[u8]>>,
+    /// Direct message queues — bypass encode/decode for in-process transport.
+    to_server_msg: VecDeque<ServerMessage>,
+    to_client_msg: VecDeque<ServerMessage>,
     /// Cap for client → server (the gateway's inbound bound).
     inbound_cap: usize,
     /// Cap for server → client (the gateway's outbound bound).
@@ -129,6 +154,8 @@ impl MemoryTransport {
         let link = Arc::new(Mutex::new(MemoryLink {
             to_server: VecDeque::new(),
             to_client: VecDeque::new(),
+            to_server_msg: VecDeque::new(),
+            to_client_msg: VecDeque::new(),
             inbound_cap,
             outbound_cap,
             closed: false,
@@ -182,6 +209,42 @@ impl Connection for MemoryConnection {
         }
         queue.push_back(frame);
         Ok(())
+    }
+
+    fn try_send_direct(
+        &mut self,
+        message: &ServerMessage,
+        _max_payload: u32,
+    ) -> Result<(), TransportError> {
+        let mut link = self.link.lock().expect("memory link lock");
+        if link.closed {
+            return Err(TransportError::Closed);
+        }
+        let cap = if self.server_side {
+            link.outbound_cap
+        } else {
+            link.inbound_cap
+        };
+        let queue = if self.server_side {
+            &mut link.to_client_msg
+        } else {
+            &mut link.to_server_msg
+        };
+        if queue.len() >= cap {
+            return Err(TransportError::Full);
+        }
+        queue.push_back(message.clone());
+        Ok(())
+    }
+
+    fn try_recv_direct(&mut self) -> Result<Option<ServerMessage>, TransportError> {
+        let mut link = self.link.lock().expect("memory link lock");
+        let queue = if self.server_side {
+            &mut link.to_server_msg
+        } else {
+            &mut link.to_client_msg
+        };
+        Ok(queue.pop_front())
     }
 
     fn flush_outbound(&mut self) -> Result<(), TransportError> {
