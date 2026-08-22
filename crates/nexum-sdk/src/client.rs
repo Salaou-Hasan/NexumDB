@@ -142,39 +142,33 @@ impl Client {
     pub fn pump(&mut self) -> Result<PumpReport, SdkError> {
         let mut report = PumpReport::default();
         loop {
-            // Fast path: try direct message receive (in-process transport bypasses
-            // frame decode entirely — no serialization, no allocation).
-            {
+            // Combined receive: tries direct then frame in a single lock.
+            let (msg_opt, frame_opt) = {
                 let Some(transport) = self.transport.as_mut() else {
                     return Err(SdkError::NotConnected);
                 };
-                if let Some(message) = transport.recv_direct()? {
-                    report.frames += 1;
-                    report.dispatched += 1;
-                    self.dispatch(message);
-                    continue;
+                match transport.recv_any() {
+                    Ok(pair) => pair,
+                    Err(SdkError::TransportClosed) | Err(SdkError::TransportFull) => {
+                        self.transition_to_closed("transport closed");
+                        report.closed = true;
+                        break;
+                    }
+                    Err(error) => {
+                        self.last_error = Some(error.clone());
+                        report.rejected += 1;
+                        break;
+                    }
                 }
-            }
-            // Slow path: receive encoded frame + decode.
-            let result = {
-                let Some(transport) = self.transport.as_mut() else {
-                    return Err(SdkError::NotConnected);
-                };
-                transport.recv_frame()
             };
-            let frame = match result {
-                Ok(Some(frame)) => frame,
-                Ok(None) => break,
-                Err(SdkError::TransportClosed) | Err(SdkError::TransportFull) => {
-                    self.transition_to_closed("transport closed");
-                    report.closed = true;
-                    break;
-                }
-                Err(error) => {
-                    self.last_error = Some(error.clone());
-                    report.rejected += 1;
-                    break;
-                }
+            if let Some(message) = msg_opt {
+                report.frames += 1;
+                report.dispatched += 1;
+                self.dispatch(message);
+                continue;
+            }
+            let Some(frame) = frame_opt else {
+                break;
             };
             report.frames += 1;
             match crate::protocol::decode_server(&frame, self.config.max_frame_payload()) {

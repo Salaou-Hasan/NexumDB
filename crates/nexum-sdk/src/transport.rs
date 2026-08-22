@@ -24,6 +24,9 @@ use nexum_network::transport::{
 
 use crate::error::SdkError;
 
+/// Result of a combined direct+frame receive.
+pub type RecvAnyResult = (Option<ServerMessage>, Option<Arc<[u8]>>);
+
 /// A client-side transport: a bounded, non-blocking frame queue.
 ///
 /// Both directions are bounded by the underlying transport; a full outbound
@@ -159,6 +162,24 @@ impl ClientTransport {
     /// Returns `true` once the transport has closed.
     pub fn is_closed(&self) -> bool {
         self.closed
+    }
+
+    /// Combined receive: tries direct then frame in a single lock.
+    pub fn recv_any(&mut self) -> Result<RecvAnyResult, SdkError> {
+        if self.closed {
+            return Ok((None, None));
+        }
+        let mut msg = None;
+        let mut frame = None;
+        match self.inner.try_recv_any_combined(&mut msg, &mut frame) {
+            Ok(true) => Ok((msg, frame)),
+            Ok(false) => Ok((None, None)),
+            Err(TransportError::Closed) => {
+                self.closed = true;
+                Err(SdkError::TransportClosed)
+            }
+            Err(error) => Err(SdkError::Transport(error)),
+        }
     }
 
     /// Consumes the transport, returning the underlying `Connection` (e.g.

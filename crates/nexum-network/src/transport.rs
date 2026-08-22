@@ -106,6 +106,21 @@ pub trait Connection {
     fn try_recv_direct(&mut self) -> Result<Option<ServerMessage>, TransportError> {
         Ok(None)
     }
+
+    /// Combined receive: tries direct then frame in one call.
+    /// Returns true if a message was received (either direct or frame).
+    fn try_recv_any_combined(&mut self, _msg_out: &mut Option<ServerMessage>, _frame_out: &mut Option<Arc<[u8]>>) -> Result<bool, TransportError> {
+        // Default: try direct, then frame separately.
+        if let Some(msg) = self.try_recv_direct()? {
+            *_msg_out = Some(msg);
+            return Ok(true);
+        }
+        if let Some(frame) = self.try_recv_frame()? {
+            *_frame_out = Some(frame);
+            return Ok(true);
+        }
+        Ok(false)
+    }
 }
 
 // ------------------------------------------------------------- memory
@@ -254,12 +269,27 @@ impl Connection for MemoryConnection {
 
     fn try_recv_direct(&mut self) -> Result<Option<ServerMessage>, TransportError> {
         let mut link = self.link.lock().expect("memory link lock");
-        // Client side receives from to_client_msg; server side has no direct inbound.
         if self.server_side {
             Ok(None)
         } else {
             Ok(link.to_client_msg.pop_front())
         }
+    }
+
+    fn try_recv_any_combined(&mut self, msg_out: &mut Option<ServerMessage>, frame_out: &mut Option<Arc<[u8]>>) -> Result<bool, TransportError> {
+        let mut link = self.link.lock().expect("memory link lock");
+        if self.server_side {
+            return Ok(false);
+        }
+        if let Some(msg) = link.to_client_msg.pop_front() {
+            *msg_out = Some(msg);
+            return Ok(true);
+        }
+        if let Some(frame) = link.to_client.pop_front() {
+            *frame_out = Some(frame);
+            return Ok(true);
+        }
+        Ok(false)
     }
 
     fn flush_outbound(&mut self) -> Result<(), TransportError> {
