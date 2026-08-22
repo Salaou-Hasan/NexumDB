@@ -256,7 +256,7 @@ fn run_module(
         .map_err(|e| Error::internal(format!("cannot define host functions: {e}")))?;
     let instance = linker
         .instantiate(&mut store, module.compiled())
-        .and_then(|instance| instance.start(&mut store))
+        .and_then(|pre| pre.start(&mut store))
         .map_err(|e| Error::internal(format!("cannot instantiate module: {e}")))?;
 
     let memory = instance
