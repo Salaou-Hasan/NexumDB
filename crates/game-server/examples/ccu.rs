@@ -157,7 +157,8 @@ fn boot(args: &Args) -> (GameServer, nexum_core::GameInstanceId) {
     let network = NetworkConfig::new()
         .with_max_connections(args.clients.saturating_add(16))
         .with_max_queued_outbound_frames(args.clients.saturating_add(16))
-        .with_tick_update_changes(false);
+        .with_tick_update_changes(false)
+        .with_skip_empty_broadcast(true);
     let server_config = GameServerConfig::new()
         .with_tick_rate_hz(args.hz as u32)
         .with_reducer_profiling(args.reducer_profile);

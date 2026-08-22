@@ -72,6 +72,10 @@ pub struct NetworkConfig {
     /// clients) redundant decode. Opt in for per-tick full-change
     /// diagnostics.
     pub(crate) tick_update_changes: bool,
+    /// When `true`, `TickUpdate` broadcasts with empty changes AND empty
+    /// events are suppressed entirely, eliminating O(CCU) message sends
+    /// per tick that carry zero useful payload.
+    pub(crate) skip_empty_broadcast: bool,
 }
 
 impl Default for NetworkConfig {
@@ -90,6 +94,7 @@ impl Default for NetworkConfig {
             event_log_limit: 1_024,
             rate_limits: RateLimitConfig::default(),
             tick_update_changes: false,
+            skip_empty_broadcast: false,
         }
     }
 }
@@ -124,6 +129,13 @@ impl NetworkConfig {
     /// list (ADR-020 D2). Bounded by default (`false`).
     pub fn with_tick_update_changes(mut self, enabled: bool) -> Self {
         self.tick_update_changes = enabled;
+        self
+    }
+
+    /// When enabled, `TickUpdate` broadcasts with empty changes AND empty
+    /// events are suppressed, eliminating O(CCU) message sends per tick.
+    pub fn with_skip_empty_broadcast(mut self, enabled: bool) -> Self {
+        self.skip_empty_broadcast = enabled;
         self
     }
 
@@ -287,6 +299,16 @@ impl NetworkConfig {
     /// The bounded event log size.
     pub fn event_log_limit(&self) -> usize {
         self.event_log_limit
+    }
+
+    /// Whether empty TickUpdate broadcasts are suppressed.
+    pub fn skip_empty_broadcast(&self) -> bool {
+        self.skip_empty_broadcast
+    }
+
+    /// Whether TickUpdate carries the full change list.
+    pub fn tick_update_changes(&self) -> bool {
+        self.tick_update_changes
     }
 
     /// The per-connection rate limits.

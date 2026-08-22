@@ -165,6 +165,10 @@ pub struct NetworkGateway {
     /// connection per world — O(CCU) per pass instead of O(worlds × CCU).
     /// Maintained on attach / detach / disconnect; never authoritative.
     attached_by_world: BTreeMap<WorldId, BTreeSet<ConnectionId>>,
+    /// Pre-computed per-world subscriber list: the fan-out path iterates
+    /// this instead of scanning every connection's subscriptions per world.
+    /// O(subscribers_with_data) per tick instead of O(CCU).
+    world_subscribers: BTreeMap<WorldId, Vec<(ConnectionId, SubscriptionId)>>,
     events: VecDeque<NetworkEvent>,
     metrics: NetworkMetrics,
 }
@@ -193,6 +197,7 @@ impl NetworkGateway {
             next_gateway_request: 1,
             snapshot_requests: BTreeMap::new(),
             attached_by_world: BTreeMap::new(),
+            world_subscribers: BTreeMap::new(),
             events: VecDeque::new(),
             metrics: NetworkMetrics::empty(),
         })
@@ -511,6 +516,9 @@ impl NetworkGateway {
                 match removed {
                     Some(net_sub) => {
                         let _ = self.runtime.unsubscribe(net_sub.world, net_sub.server);
+                        if let Some(subs) = self.world_subscribers.get_mut(&net_sub.world) {
+                            subs.retain(|(c, s)| !(*c == connection && *s == subscription));
+                        }
                     }
                     None => {
                         let _ = self.send_error(connection, 22, "unknown subscription");
@@ -579,8 +587,11 @@ impl NetworkGateway {
                     .expect("session exists")
                     .subscriptions
                     .clear();
-                for (world, subscription) in subs {
-                    let _ = self.runtime.unsubscribe(world, subscription);
+                for (world, subscription) in &subs {
+                    let _ = self.runtime.unsubscribe(*world, *subscription);
+                    if let Some(world_subs) = self.world_subscribers.get_mut(world) {
+                        world_subs.retain(|(c, s)| !(*c == connection && *s == *subscription));
+                    }
                 }
                 // Pending reducer calls die with the attachment.
                 self.pending_calls.retain(|_, pending| pending.connection != connection);
@@ -838,6 +849,10 @@ impl NetworkGateway {
                         NetworkSubscription { world, server: server_sub },
                     );
                 }
+                self.world_subscribers
+                    .entry(world)
+                    .or_default()
+                    .push((connection, server_sub));
                 // The next `Initial` snapshot of this subscription carries
                 // the client's request id (removed after the pump).
                 self.snapshot_requests
@@ -865,6 +880,14 @@ impl NetworkGateway {
         world: WorldId,
         subscription: SubscriptionId,
     ) {
+        // Fast path: skip drain entirely when no pending updates.
+        let has_data = self
+            .runtime
+            .has_pending(world, subscription)
+            .unwrap_or(false);
+        if !has_data {
+            return;
+        }
         let updates = match self.runtime.drain(world, subscription) {
             Ok(updates) => updates,
             Err(_) => return,
@@ -980,56 +1003,51 @@ impl NetworkGateway {
             } else {
                 Vec::new()
             };
-            let message = ServerMessage::TickUpdate {
-                world,
-                tick: result.tick(),
-                tx_id: result.tx_id(),
-                changes,
-                events: result.events().to_vec(),
-            };
-            // Try direct message delivery first (bypasses encode on server,
-            // decode on client). Falls back to encode-once + frame delivery.
-            // Report encode failure as dropped rather than failing the tick.
-            let attached: Vec<ConnectionId> = self
-                .attached_by_world
-                .get(&world)
-                .map(|set| set.iter().copied().collect())
-                .unwrap_or_default();
-            for connection in attached {
-                if self
-                    .send(connection, &message)
-                    .unwrap_or(false)
-                {
-                    report.tick_updates_sent += 1;
-                    self.metrics.tick_updates_sent += 1;
-                } else {
-                    report.messages_dropped += 1;
+            let events = result.events().to_vec();
+            // When skip_empty_broadcast is enabled and the TickUpdate carries
+            // zero useful payload (no changes, no events), skip the O(CCU)
+            // broadcast entirely.  Clients learn about state changes via
+            // SubscriptionDelta.  This eliminates ~10K message sends per tick
+            // at high CCU.
+            let has_content = !changes.is_empty() || !events.is_empty();
+            if has_content || !self.config.skip_empty_broadcast() {
+                let message = ServerMessage::TickUpdate {
+                    world,
+                    tick: result.tick(),
+                    tx_id: result.tx_id(),
+                    changes,
+                    events,
+                };
+                let attached: Vec<ConnectionId> = self
+                    .attached_by_world
+                    .get(&world)
+                    .map(|set| set.iter().copied().collect())
+                    .unwrap_or_default();
+                for connection in attached {
+                    if self
+                        .send(connection, &message)
+                        .unwrap_or(false)
+                    {
+                        report.tick_updates_sent += 1;
+                        self.metrics.tick_updates_sent += 1;
+                    } else {
+                        report.messages_dropped += 1;
+                    }
                 }
             }
 
             // Deliver subscription deltas for this world (deterministic:
-            // connections ascending, then subscriptions ascending).
-            let subscribers: Vec<(ConnectionId, SubscriptionId)> = self
-                .attached_by_world
-                .get(&world)
-                .map(|set| {
-                    set.iter()
-                        .flat_map(|id| {
-                            self.connections
-                                .get(id)
-                                .into_iter()
-                                .flat_map(|entry| entry.subscriptions.iter())
-                                .filter(|(_, sub)| sub.world == world)
-                                .map(move |(sub_id, _)| (*id, *sub_id))
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-            for (connection, subscription) in subscribers {
-                let before = self.metrics.subscription_messages_sent;
-                self.pump_subscription(connection, world, subscription);
-                report.subscription_messages_sent +=
-                    self.metrics.subscription_messages_sent - before;
+            // connections ascending, then subscriptions ascending). Use the
+            // pre-computed world_subscribers list instead of scanning every
+            // connection — O(subscribers) instead of O(CCU).
+            if let Some(subscribers) = self.world_subscribers.get(&world) {
+                let subs = subscribers.clone();
+                for (connection, subscription) in subs {
+                    let before = self.metrics.subscription_messages_sent;
+                    self.pump_subscription(connection, world, subscription);
+                    report.subscription_messages_sent +=
+                        self.metrics.subscription_messages_sent - before;
+                }
             }
 
             // Route committed reducer-call results (ADR-013 D3) to their
@@ -1347,8 +1365,11 @@ impl NetworkGateway {
             .values()
             .map(|sub| (sub.world, sub.server))
             .collect();
-        for (world, sub) in subs {
-            let _ = self.runtime.unsubscribe(world, sub);
+        for (world, sub) in &subs {
+            let _ = self.runtime.unsubscribe(*world, *sub);
+            if let Some(world_subs) = self.world_subscribers.get_mut(world) {
+                world_subs.retain(|(c, s)| !(*c == *connection && *s == *sub));
+            }
         }
         // Drop the connection's pending reducer calls (ADR-013 D3): the
         // results can no longer be delivered. The runtime may still execute

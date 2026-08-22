@@ -1374,6 +1374,20 @@ impl Runtime {
             .map_err(RuntimeError::Core)
     }
 
+    /// Returns `true` when the subscription has buffered updates waiting.
+    pub fn has_pending(
+        &self,
+        world_id: WorldId,
+        subscription: SubscriptionId,
+    ) -> Result<bool, RuntimeError> {
+        self.ensure_running()?;
+        let entry = self.worlds.get(&world_id).ok_or(RuntimeError::UnknownWorld(world_id))?;
+        entry
+            .subscriptions
+            .has_pending(subscription)
+            .map_err(RuntimeError::Core)
+    }
+
     /// Ends a subscription.
     pub fn unsubscribe(
         &mut self,

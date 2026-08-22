@@ -375,6 +375,14 @@ impl SubscriptionRegistry {
         }
     }
 
+    /// Returns `true` when the subscription has buffered updates waiting.
+    pub fn has_pending(&self, id: SubscriptionId) -> Result<bool> {
+        let subscription = self.subscriptions.get(&id).ok_or_else(|| {
+            Error::not_found(format!("subscription {id} does not exist"))
+        })?;
+        Ok(subscription.has_pending())
+    }
+
     /// Takes the pending updates of one subscription, leaving its buffer
     /// empty. Returns [`Error::not_found`] for an unknown subscription.
     pub fn drain(&mut self, id: SubscriptionId) -> Result<Vec<SubscriptionUpdate>> {

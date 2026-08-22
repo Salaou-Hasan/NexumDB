@@ -544,6 +544,13 @@ impl Subscription {
         std::mem::take(&mut self.buffer)
     }
 
+    /// Returns `true` when the subscription has buffered updates waiting to
+    /// be delivered.  Use this to skip `take_buffer()` calls that would
+    /// merely return an empty Vec.
+    pub(crate) fn has_pending(&self) -> bool {
+        !self.buffer.is_empty()
+    }
+
     /// Appends one commit's delta stream — produced once by the shared view
     /// (ADR-020 D1) — to this member's buffer, replicating the historical
     /// per-subscription overflow/stale behavior exactly: deltas are appended
