@@ -146,8 +146,7 @@ pub(crate) fn define_host<'a, 'b>(linker: &mut Linker<HostState<'a, 'b>>) -> Res
             // then driven with no further guest-memory access.
             // Use a stack buffer for small args (common case) to avoid Vec allocation.
             const STACK_BUF_SIZE: usize = 256;
-            let envelope;
-            if (in_len as usize) <= STACK_BUF_SIZE {
+            let envelope = if (in_len as usize) <= STACK_BUF_SIZE {
                 let mut stack_buf = [0u8; STACK_BUF_SIZE];
                 let slice = &mut stack_buf[..in_len as usize];
                 if !slice.is_empty() {
@@ -155,20 +154,16 @@ pub(crate) fn define_host<'a, 'b>(linker: &mut Linker<HostState<'a, 'b>>) -> Res
                         .read(&caller, in_ptr as usize, slice)
                         .map_err(|e| WasmError::new(format!("nexum: cannot read args: {e}")))?;
                 }
-                envelope = {
-                    let state = caller.data_mut();
-                    handle_op(state, op, slice)
-                };
+                let state = caller.data_mut();
+                handle_op(state, op, slice)
             } else {
                 let mut heap_buf = vec![0u8; in_len as usize];
                 memory
                     .read(&caller, in_ptr as usize, &mut heap_buf)
                     .map_err(|e| WasmError::new(format!("nexum: cannot read args: {e}")))?;
-                envelope = {
-                    let state = caller.data_mut();
-                    handle_op(state, op, &heap_buf)
-                };
-            }
+                let state = caller.data_mut();
+                handle_op(state, op, &heap_buf)
+            };
 
             write_envelope(&mut caller, &memory, &envelope, out_ptr, out_cap)
         },
