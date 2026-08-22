@@ -1310,15 +1310,14 @@ impl NetworkGateway {
 
     /// Flushes buffered outbound bytes to every transport.
     pub fn flush_outbound(&mut self) -> Result<(), NetworkError> {
-        let ids: Vec<ConnectionId> = self.connections.keys().copied().collect();
-        for connection in ids {
-            let broken = match self.connections.get_mut(&connection) {
-                Some(entry) => entry.connection.flush_outbound().is_err(),
-                None => false,
-            };
-            if broken {
-                self.drop_connection(&connection, "transport write failure");
+        let mut to_drop: Vec<ConnectionId> = Vec::new();
+        for (id, entry) in self.connections.iter_mut() {
+            if entry.connection.flush_outbound().is_err() {
+                to_drop.push(*id);
             }
+        }
+        for id in to_drop {
+            self.drop_connection(&id, "transport write failure");
         }
         Ok(())
     }
