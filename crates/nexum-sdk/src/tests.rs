@@ -131,10 +131,10 @@ fn view_applies_snapshot_and_contiguous_deltas() {
         1,
         DeltaKind::Insert,
         RowId::from_u64(3),
-        Some(DeliveredRow::new(
+        Some(std::sync::Arc::new(DeliveredRow::new(
             RowId::from_u64(3),
             nexum_core::row![3u64, 30u64, 80i32],
-        )),
+        ))),
     )
     .unwrap();
     assert_eq!(view.len(), 3);
@@ -145,10 +145,10 @@ fn view_applies_snapshot_and_contiguous_deltas() {
         2,
         DeltaKind::Update,
         RowId::from_u64(1),
-        Some(DeliveredRow::new(
+        Some(std::sync::Arc::new(DeliveredRow::new(
             RowId::from_u64(1),
             nexum_core::row![1u64, 10u64, 1i32],
-        )),
+        ))),
     )
     .unwrap();
     assert_eq!(
@@ -170,19 +170,39 @@ fn view_detects_sequence_gaps() {
     view.apply_snapshot(0, vec![]);
     // A commit that skipped sequences means missed commits.
     let err = view
-        .apply_delta(2, DeltaKind::Insert, RowId::from_u64(1), Some(row_a()))
+        .apply_delta(
+            2,
+            DeltaKind::Insert,
+            RowId::from_u64(1),
+            Some(std::sync::Arc::new(row_a())),
+        )
         .unwrap_err();
     assert_eq!(err.expected, 1);
     assert_eq!(err.got, 2);
     // The first commit sits at the observation point (seq == snapshot seq).
-    view.apply_delta(0, DeltaKind::Insert, RowId::from_u64(1), Some(row_a()))
-        .unwrap();
+    view.apply_delta(
+        0,
+        DeltaKind::Insert,
+        RowId::from_u64(1),
+        Some(std::sync::Arc::new(row_a())),
+    )
+    .unwrap();
     // Several deltas of the same commit share its sequence.
-    view.apply_delta(0, DeltaKind::Insert, RowId::from_u64(2), Some(row_b()))
-        .unwrap();
+    view.apply_delta(
+        0,
+        DeltaKind::Insert,
+        RowId::from_u64(2),
+        Some(std::sync::Arc::new(row_b())),
+    )
+    .unwrap();
     // The next commit advances the cursor by one.
-    view.apply_delta(1, DeltaKind::Insert, RowId::from_u64(3), Some(row_b()))
-        .unwrap();
+    view.apply_delta(
+        1,
+        DeltaKind::Insert,
+        RowId::from_u64(3),
+        Some(std::sync::Arc::new(row_b())),
+    )
+    .unwrap();
     assert_eq!(view.seq(), 1);
     // A delta from an older commit after the cursor advanced is a reorder.
     let err = view

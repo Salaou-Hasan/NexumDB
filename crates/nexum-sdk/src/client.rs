@@ -289,7 +289,13 @@ impl Client {
                 kind,
                 row_id,
                 row,
-            } => self.apply_delta(subscription, seq, kind, row_id, row),
+            } => self.apply_delta(
+                subscription,
+                seq,
+                kind,
+                row_id,
+                row.map(std::sync::Arc::new),
+            ),
             ServerMessage::StaleNotification { subscription, seq } => {
                 if let Some(local) = self.local_of_server(subscription) {
                     if let Some(handle) = self.subscriptions.get_mut(&local) {
@@ -341,13 +347,7 @@ impl Client {
                 deltas,
             } => {
                 for entry in deltas {
-                    self.apply_delta(
-                        subscription,
-                        entry.seq,
-                        entry.kind,
-                        entry.row_id,
-                        entry.row.map(|arc| (*arc).clone()),
-                    );
+                    self.apply_delta(subscription, entry.seq, entry.kind, entry.row_id, entry.row);
                 }
             }
         }
@@ -403,7 +403,7 @@ impl Client {
         seq: u64,
         kind: DeltaKind,
         row_id: RowId,
-        row: Option<nexum_subscription::DeliveredRow>,
+        row: Option<std::sync::Arc<nexum_subscription::DeliveredRow>>,
     ) {
         let Some(local) = self.local_of_server(subscription) else {
             self.push_event(ServerEvent::Error {

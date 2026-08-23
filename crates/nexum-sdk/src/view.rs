@@ -9,6 +9,7 @@
 //! (the caller must `resync`).
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use nexum_core::RowId;
 use nexum_subscription::DeliveredRow;
@@ -27,7 +28,7 @@ pub struct ViewGap {
 /// The derived view of one subscription.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct View {
-    rows: BTreeMap<RowId, DeliveredRow>,
+    rows: BTreeMap<RowId, Arc<DeliveredRow>>,
     seq: u64,
 }
 
@@ -62,19 +63,22 @@ impl View {
 
     /// Returns the delivered row for `row_id`, if visible.
     pub fn get(&self, row_id: RowId) -> Option<&DeliveredRow> {
-        self.rows.get(&row_id)
+        self.rows.get(&row_id).map(|arc| arc.as_ref())
     }
 
     /// Iterates the visible rows in ascending row-id order (the
     /// deterministic order established by the server's snapshot).
     pub fn rows(&self) -> impl Iterator<Item = &DeliveredRow> {
-        self.rows.values()
+        self.rows.values().map(|arc| arc.as_ref())
     }
 
     /// Replaces the whole view with a snapshot (initial establishment or
     /// resync). Always succeeds.
     pub fn apply_snapshot(&mut self, seq: u64, rows: Vec<DeliveredRow>) {
-        self.rows = rows.into_iter().map(|row| (row.row_id(), row)).collect();
+        self.rows = rows
+            .into_iter()
+            .map(|row| (row.row_id(), Arc::new(row)))
+            .collect();
         self.seq = seq;
     }
 
@@ -94,7 +98,7 @@ impl View {
         seq: u64,
         kind: DeltaKind,
         row_id: RowId,
-        row: Option<DeliveredRow>,
+        row: Option<Arc<DeliveredRow>>,
     ) -> Result<(), ViewGap> {
         if seq < self.seq || seq > self.seq + 1 {
             return Err(ViewGap {
