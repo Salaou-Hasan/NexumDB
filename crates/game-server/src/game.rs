@@ -9,6 +9,9 @@
 //! reducers read the caller from the gateway-stamped `__caller` argument
 //! (ADR-014 D8), so identity cannot be forged.
 
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet};
+
 use nexum_core::{
     Error, ReducerId, Result, Row, RowId, SystemId, TableSchema, Value, WorldId, row,
 };
@@ -350,21 +353,95 @@ pub fn set_position(ctx: &mut ReducerContext, args: &ReducerArgs) -> Result<Valu
 
 // -------------------------------------------------------------- systems
 
-/// The per-tick cooldown system: every alive player's weapon cooldown ticks
-/// down by one per tick. Runs on every world, every tick, through the tick
-/// transaction (a cooldown change is a committed `Vec<Change>` the clients
-/// observe).
+// Per-thread cooldown tracking map. Each world runs on its own thread
+// (parallel via `std::thread::scope`, serial by definition), so a
+// thread-local provides natural isolation without cross-world or
+// cross-test contamination.
+//
+// Using a tracked set avoids the O(N) full-table scan that was the
+// dominant cost at high CCU. With 10K players, only the handful who
+// recently fired are tracked — reducing tick cost from O(total_players)
+// to O(active_cooldowns).
+thread_local! {
+    static COOLDOWN_MAP: RefCell<BTreeMap<WorldId, BTreeSet<RowId>>> =
+        const { RefCell::new(BTreeMap::new()) };
+}
+
+/// The per-tick cooldown system: weapon cooldowns tick down by one per tick.
+/// Runs on every world, every tick, through the tick transaction.
+///
+/// **Optimization (tick-23):** Instead of scanning every player row (O(N)),
+/// we maintain a per-world set of players with active cooldowns. The set is
+/// populated from the transaction's pending writes (fire_weapon sets
+/// cooldown > 0 via WASM) and pruned when cooldown reaches zero.
+/// Complexity: O(active_cooldowns) instead of O(total_players).
 fn cooldown_tick(ctx: &mut SimulationContext, _frame: &InputFrame) -> Result<()> {
-    let rows = ctx.scan(TABLE)?;
-    for (row_id, row) in rows {
-        let cooldown = get(&row, COL_COOLDOWN);
-        if cooldown > 0 {
-            ctx.update(
-                TABLE,
-                row_id,
-                with(row.clone(), COL_COOLDOWN, Value::I64(cooldown - 1)),
-            )?;
+    let world = ctx.world_id();
+
+    // 1. Discover newly-fired players from this tick's pending writes.
+    //    fire_weapon (WASM) calls ctx.update which buffers the write;
+    //    we inspect the buffer to find cooldown > 0 without a full scan.
+    {
+        let pending = ctx.pending_writes_for_table(TABLE);
+        COOLDOWN_MAP.with(|cell| {
+            let mut map = cell.borrow_mut();
+            let set = map.entry(world).or_default();
+            for (row_id, entry) in &pending {
+                if let nexum_tx::WriteEntry::Update(row) = entry {
+                    let cd = get(row, COL_COOLDOWN);
+                    if cd > 0 {
+                        set.insert(*row_id);
+                    }
+                }
+            }
+        });
+    }
+
+    // 2. Iterate only tracked players — O(active_cooldowns).
+    let to_process: Vec<RowId> = COOLDOWN_MAP.with(|cell| {
+        let map = cell.borrow();
+        match map.get(&world) {
+            Some(set) => set.iter().copied().collect(),
+            None => Vec::new(),
         }
+    });
+    if to_process.is_empty() {
+        return Ok(());
+    }
+    let mut to_remove = Vec::new();
+    for row_id in to_process {
+        // Read through the transaction's logical view (read-your-writes)
+        // to see the latest cooldown value including any in-tick mutation.
+        match ctx.get(TABLE, row_id)? {
+            Some(row) => {
+                let cd = get(&row, COL_COOLDOWN);
+                if cd > 0 {
+                    ctx.update(
+                        TABLE,
+                        row_id,
+                        with(row, COL_COOLDOWN, Value::I64(cd - 1)),
+                    )?;
+                }
+                if cd <= 1 {
+                    // Will reach zero after this decrement (or was already zero).
+                    to_remove.push(row_id);
+                }
+            }
+            None => {
+                // Player no longer exists (killed/dropped).
+                to_remove.push(row_id);
+            }
+        }
+    }
+    if !to_remove.is_empty() {
+        COOLDOWN_MAP.with(|cell| {
+            let mut map = cell.borrow_mut();
+            if let Some(set) = map.get_mut(&world) {
+                for id in &to_remove {
+                    set.remove(id);
+                }
+            }
+        });
     }
     Ok(())
 }

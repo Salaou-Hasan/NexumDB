@@ -26,7 +26,7 @@
 use nexum_core::{Error, PartitionId, Result, Row, RowId, SystemId, TickId, Value, WorldId};
 use nexum_reducer::{ReducerArgs, ReducerEvent, ReducerRegistry};
 use nexum_table::TableStore;
-use nexum_tx::Transaction;
+use nexum_tx::{Transaction, WriteEntry};
 use nexum_wasm::WasmModuleRegistry;
 
 use crate::partition::PartitionMessage;
@@ -113,6 +113,20 @@ impl<'a> SimulationContext<'a> {
     /// table mutation-epoch observation (conservative phantom protection).
     pub fn scan(&mut self, table: &str) -> Result<Vec<(RowId, Row)>> {
         self.tx.scan(self.store, table)
+    }
+
+    /// Returns pending write entries for a specific table, allowing systems
+    /// to inspect in-tick mutations without a full table scan.
+    pub fn pending_writes_for_table(&self, table: &str) -> Vec<(RowId, &WriteEntry)> {
+        let table_id = match self.store.table(table) {
+            Some(t) => t.id(),
+            None => return Vec::new(),
+        };
+        self.tx
+            .writes()
+            .filter(move |(tid, _, _)| *tid == table_id)
+            .map(|(_, row_id, entry)| (row_id, entry))
+            .collect()
     }
 
     /// Looks up the owners of `key` in the named unique index, through the
