@@ -22,6 +22,7 @@ and architecture decisions (ADRs) live in
 | [21-networking-hotpath.md](21-networking-hotpath.md) | 21 | Networking/serialization hot-path: Arc-shared broadcast frames (zero-copy TU, 10K allocs/tick saved) + per-world attached index (O(worlds×CCU) → O(CCU) scans); D2 batching measured net-negative and reverted. Movement fan-out −23…27%, p99 72.9 → 64.7 ms @ 10K. |
 | [21.5-extreme-profiling.md](21.5-extreme-profiling.md) | 21.5 | Extreme execution profiling: complete measured cost map (per-phase, per-reducer, allocation). WASM fire_weapon 65–69 µs/call ≈ 15× native (Phase 22 target); idle PASS @ 20K; no O(CCU²) remains; p99.9 ≈ p99 (no pathological tail). Two instrumentation bugs fixed. |
 | [22-wasm-hotpath.md](22-wasm-hotpath.md) | 22 | WASM hot-path & transaction overlay optimization: COW WriteSet (branch O(1) via Arc clone, 728× faster), has_any_insert skip (14× faster invoke), absorb fast-path + try_unwrap. Harness loop 411 µs → 119 µs (3.5×). Profile C @ 1K p99 573 ms → 57.5 ms (10×). |
+| [23-25-performance-campaign.md](23-25-performance-campaign.md) | 23–25 | Full-system performance campaign: rayon thread pool (tick −52%), atomic fast-paths (client pump −20%), subscription pump skip (fanout −100% idle), zero-copy Arc<DeliveredRow> (clients −58%, world_tick −49%). 20K idle p50=2.5ms PASS; 10K gameplay p50=1.4ms PASS; 20K gameplay p50=3.3ms. |
 
 ## CCU summary (Phases 16–18)
 

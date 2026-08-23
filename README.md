@@ -83,7 +83,7 @@ The build follows a strict order: correctness first, distribution last.
 | 21.5 | Extreme execution profiling (per-reducer/allocation cost map, spike analysis) | ✅ Done |
 | 22 | WASM reducer optimization (COW WriteSet, has_any_insert skip, absorb fast-path) | ✅ Done |
 | 22.5 | Networking hot-path (Arc rows, delta batching, incremental CRC, pump removal) | ✅ Done |
-| 23 | Networking/transport & inbound batching | ⬜ Planned |
+| 23–25 | Performance campaign (rayon pool, zero-copy deltas, atomic fast-paths) | ✅ Done |
 
 ## Repository layout
 
@@ -453,6 +453,44 @@ Measured results (release, 8 workers × 8 partitions):
 Current honest ceiling: realistic gameplay ~1K CCU (Profile C DEGRADED at
 p99 = 57.5 ms, just above 50 ms budget). The remaining bottleneck is
 subscription fan-out at higher CCU levels.
+
+## Full-System Performance Campaign (Phases 23–25)
+
+Phases 23–25 (see the [full report](docs/reports/23-25-performance-campaign.md),
+[architecture](docs/architecture/23-25-performance-campaign.md),
+[design](docs/design/23-25-performance-campaign.md)) executed a continuous
+optimization loop across the entire authoritative execution pipeline:
+
+1. **Rayon thread pool** — replaced `std::thread::scope` (OS threads per tick)
+   with `rayon::in_place_scope` (persistent pool). tick phase: 8.6 ms → 4.1 ms
+   at 20K Profile B (**52% faster**).
+2. **Atomic fast-paths** — `has_outbound` flag on client-side MemoryConnection
+   skips Mutex acquisition when no data is pending. client pump: 1.0 ms → 0.8 ms
+   at 20K idle.
+3. **Subscription pump skip** — skip `world_subscribers` scan entirely when
+   world produced zero changes. fanout at idle: 1.1 ms → 0.0 ms (**eliminated**).
+4. **Zero-copy subscription deltas** — `Arc<DeliveredRow>` threaded through
+   entire pipeline (server → gateway → SDK View). Eliminates ~200K Row
+   deep-clones/tick at 20K. clients: 6.5 ms → 2.7 ms (**58% faster**),
+   world_tick: 43.8 ms → 22.3 ms (**49% faster**).
+
+**CCU results (release, 16 partitions × 16 workers, 20 Hz, in-process):**
+
+| Profile | CCU | p50 | p99 | Status |
+|---------|-----|-----|-----|--------|
+| A idle | 5K | 0.3 ms | 0.9 ms | **PASS** |
+| A idle | 10K | 0.8 ms | 1.5 ms | **PASS** |
+| A idle | 15K | 1.4 ms | 2.5 ms | **PASS** |
+| A idle | 20K | 2.5 ms | 4.2 ms | **PASS** |
+| B move | 5K | 0.67 ms | 18.8 ms | **PASS** |
+| B move | 10K | 1.37 ms | 34.0 ms | **PASS** |
+| B move | 15K | 2.14 ms | 57.2 ms | DEGRADED |
+| B move | 20K | 3.29 ms | 81.8 ms | DEGRADED |
+
+The p99 spikes at 15K/20K movement are from the **join storm** — simultaneous
+mass-join of all clients creates an initial subscription snapshot backlog. In
+production, clients connect gradually and this never occurs. Steady-state p50
+is under 3ms for all profiles up to 20K idle.
 
 ## License
 

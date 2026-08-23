@@ -192,10 +192,20 @@ is implemented.
   (10×). Report:
   [reports/22-wasm-hotpath.md](../reports/22-wasm-hotpath.md).
 
+## Completed (Phases 23–25)
+
+- [23-25-performance-campaign.md](23-25-performance-campaign.md) — Full-system
+  performance campaign: rayon thread pool (eliminate per-tick OS thread
+  creation), atomic fast-paths for in-process transport, subscription pump
+  skip when no changes, zero-copy Arc<DeliveredRow> through the subscription
+  pipeline. 20K idle p50=2.5ms; 10K gameplay p50=1.4ms; 20K gameplay
+  p50=3.3ms. Report:
+  [reports/23-25-performance-campaign.md](../reports/23-25-performance-campaign.md).
+
 ## Planned topics
 
-- **Phase 23 — WASM instance reuse** — the isolated WASM cost (13.8 µs/call)
+- **Phase 26 — WASM instance reuse** — the isolated WASM cost (13.8 µs/call)
   is dominated by instantiate (47%, 6.5 µs). Caching the compiled Linker
   and using pre-instantiated modules.
-- **Phase 24 — networking/transport** — inbound frame batching, real
-  (non-in-process) transport benchmarking.
+- **Phase 27 — networking/transport** — inbound frame batching, real
+  (non-in-process) transport benchmarking, lock-free SPSC queues.
