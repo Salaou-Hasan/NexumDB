@@ -18,6 +18,7 @@ use std::collections::VecDeque;
 use std::fmt;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::error::{NetworkError, ProtocolError};
@@ -151,6 +152,9 @@ pub struct MemoryConnection {
     peer: String,
     link: Arc<Mutex<MemoryLink>>,
     server_side: bool,
+    /// Shared atomic flag: true when `to_server` has pending frames.
+    /// Lives outside the Mutex so the gateway can check without locking.
+    has_inbound: Arc<AtomicBool>,
 }
 
 impl fmt::Debug for MemoryConnection {
@@ -171,6 +175,7 @@ pub struct MemoryTransport;
 impl MemoryTransport {
     /// Opens a fresh server/client pair.
     pub fn connect(inbound_cap: usize, outbound_cap: usize) -> (MemoryConnection, MemoryConnection) {
+        let has_inbound = Arc::new(AtomicBool::new(false));
         let link = Arc::new(Mutex::new(MemoryLink {
             to_server: VecDeque::new(),
             to_client: VecDeque::new(),
@@ -183,11 +188,13 @@ impl MemoryTransport {
             peer: "memory:server".to_string(),
             link: Arc::clone(&link),
             server_side: true,
+            has_inbound: Arc::clone(&has_inbound),
         };
         let client = MemoryConnection {
             peer: "memory:client".to_string(),
             link,
             server_side: false,
+            has_inbound,
         };
         (server, client)
     }
@@ -199,13 +206,21 @@ impl Connection for MemoryConnection {
     }
 
     fn try_recv_frame(&mut self) -> Result<Option<Arc<[u8]>>, TransportError> {
+        // Fast path: skip Mutex acquisition when no data is pending.
+        if self.server_side && !self.has_inbound.load(Ordering::Relaxed) {
+            return Ok(None);
+        }
         let mut link = self.link.lock().expect("memory link lock");
         let queue = if self.server_side {
             &mut link.to_server
         } else {
             &mut link.to_client
         };
-        Ok(queue.pop_front())
+        let result = queue.pop_front();
+        if self.server_side && result.is_none() {
+            self.has_inbound.store(false, Ordering::Relaxed);
+        }
+        Ok(result)
     }
 
     fn try_send_frame(&mut self, frame: Arc<[u8]>) -> Result<(), TransportError> {
@@ -231,6 +246,7 @@ impl Connection for MemoryConnection {
             link.to_client.push_back(frame);
         } else {
             link.to_server.push_back(frame);
+            self.has_inbound.store(true, Ordering::Relaxed);
         }
         Ok(())
     }

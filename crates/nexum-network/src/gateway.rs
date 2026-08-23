@@ -133,8 +133,11 @@ pub struct NetworkGateway {
     /// (Phase 13 semantics); a host may install a game-aware policy.
     policy: Box<dyn GamePolicy>,
     server_name: String,
-    connections: BTreeMap<ConnectionId, ConnectionEntry>,
+    connections: Vec<Option<ConnectionEntry>>,
+    /// Monotonic connection id counter.
     next_connection: u64,
+    /// Number of live (non-None) slots in `connections`.
+    active_connections: usize,
     next_session: u64,
     /// Pending reducer calls awaiting their world's next tick (ADR-013 D3),
     /// keyed by a **gateway-allocated** request id: `(world, gateway_id) ->
@@ -189,8 +192,9 @@ impl NetworkGateway {
             authenticator,
             policy: Box::new(AllowAllPolicy),
             server_name: "nexum".to_string(),
-            connections: BTreeMap::new(),
+            connections: Vec::new(),
             next_connection: 0,
+            active_connections: 0,
             next_session: 0,
             pending_calls: BTreeMap::new(),
             pending_by_connection: BTreeMap::new(),
@@ -242,19 +246,33 @@ impl NetworkGateway {
 
     // --------------------------------------------------------- connections
 
+    /// O(1) slab access — ConnectionId is a u64 used directly as Vec index.
+    fn conn_get(&self, id: ConnectionId) -> Option<&ConnectionEntry> {
+        self.connections.get(id.as_u64() as usize).and_then(|o| o.as_ref())
+    }
+
+    fn conn_get_mut(&mut self, id: ConnectionId) -> Option<&mut ConnectionEntry> {
+        self.connections.get_mut(id.as_u64() as usize).and_then(|o| o.as_mut())
+    }
+
     /// Registers a transport connection (bounded by `max_connections`).
     /// Returns its connection id.
     pub fn register_connection(
         &mut self,
         connection: Box<dyn Connection>,
     ) -> Result<ConnectionId, NetworkError> {
-        if self.connections.len() >= self.config.max_connections() {
+        if self.active_connections >= self.config.max_connections() {
             return Err(NetworkError::ConnectionLimit);
         }
+        let idx = self.next_connection as usize;
         let id = ConnectionId::from_u64(self.next_connection);
         self.next_connection += 1;
-        self.connections
-            .insert(id, ConnectionEntry::new(connection, &self.config.rate_limits));
+        if idx < self.connections.len() {
+            self.connections[idx] = Some(ConnectionEntry::new(connection, &self.config.rate_limits));
+        } else {
+            self.connections.push(Some(ConnectionEntry::new(connection, &self.config.rate_limits)));
+        }
+        self.active_connections += 1;
         Self::push_event(
             &mut self.events,
             self.config.event_log_limit(),
@@ -265,12 +283,13 @@ impl NetworkGateway {
 
     /// Closes a connection, best-effort-delivering a `Disconnect` reason.
     pub fn disconnect(&mut self, connection: ConnectionId, reason: &str) -> Result<(), NetworkError> {
-        if let Some(entry) = self.connections.get_mut(&connection) {
+        let max_payload = self.config.max_frame_payload();
+        if let Some(entry) = self.conn_get_mut(connection) {
             if let Ok(frame) = protocol::encode_server(
                 &ServerMessage::Disconnect {
                     reason: reason.to_string(),
                 },
-                self.config.max_frame_payload(),
+                max_payload,
             ) {
                 let _ = entry.connection.try_send_frame(Arc::from(frame));
             }
@@ -282,21 +301,19 @@ impl NetworkGateway {
 
     /// Returns the number of registered connections.
     pub fn connection_count(&self) -> usize {
-        self.connections.len()
+        self.active_connections
     }
 
     /// Returns a connection's peer label.
     pub fn connection_peer(&self, connection: ConnectionId) -> Result<&str, NetworkError> {
-        self.connections
-            .get(&connection)
+        self.conn_get(connection)
             .map(|entry| entry.connection.peer())
             .ok_or(NetworkError::UnknownConnection(connection))
     }
 
     /// Returns a connection's session, if authenticated.
     pub fn session_of(&self, connection: ConnectionId) -> Option<&Session> {
-        self.connections
-            .get(&connection)
+        self.conn_get(connection)
             .and_then(|entry| entry.session.as_ref())
     }
 
@@ -305,23 +322,33 @@ impl NetworkGateway {
     /// Drains every connection's inbound frames, decodes and dispatches
     /// them, then flushes outbound to the transports. Never blocks; a
     /// protocol violation closes the offending connection.
-    #[allow(clippy::while_let_loop)] // per-frame `self.dispatch` needs `&mut self` while the pull borrows `self.connections`
     pub fn process_inbound(&mut self) -> ProcessReport {
         let mut report = ProcessReport::default();
-        let ids: Vec<ConnectionId> = self.connections.keys().copied().collect();
-        for connection in ids {
+        // Iterate the slab directly — O(1) indexed access, zero allocation.
+        let len = self.connections.len();
+        for idx in 0..len {
+            // Skip empty slots.
+            if self.connections[idx].is_none() {
+                continue;
+            }
+            let connection = ConnectionId::from_u64(idx as u64);
             loop {
-                let frame = match self.connections.get_mut(&connection) {
-                    Some(entry) => match entry.connection.try_recv_frame() {
-                        Ok(Some(frame)) => frame,
-                        Ok(None) => break,
-                        Err(_) => {
-                            self.drop_connection(&connection, "transport closed");
-                            report.disconnected += 1;
-                            break;
-                        }
-                    },
-                    None => break,
+                // Extract frame in a scoped block so conn_get_mut borrow drops
+                // before we call dispatch/send/drop_connection.
+                let frame_result = {
+                    match self.conn_get_mut(connection) {
+                        Some(entry) => entry.connection.try_recv_frame(),
+                        None => break,
+                    }
+                };
+                let frame = match frame_result {
+                    Ok(Some(frame)) => frame,
+                    Ok(None) => break,
+                    Err(_) => {
+                        self.drop_connection(&connection, "transport closed");
+                        report.disconnected += 1;
+                        break;
+                    }
                 };
                 report.frames_received += 1;
                 self.metrics.frames_received += 1;
@@ -374,9 +401,7 @@ impl NetworkGateway {
                 if !self.check_rate(connection, RateBucket::Auth) {
                     return;
                 }
-                if self
-                    .connections
-                    .get(&connection)
+                if self.conn_get(connection)
                     .is_some_and(|entry| entry.session.is_some())
                 {
                     let _ = self.send_error(connection, 20, "already authenticated");
@@ -390,7 +415,7 @@ impl NetworkGateway {
                             principal.clone(),
                         );
                         self.next_session += 1;
-                        if let Some(entry) = self.connections.get_mut(&connection) {
+                        if let Some(entry) = self.conn_get_mut(connection) {
                             entry.session = Some(session);
                         }
                         Self::push_event(
@@ -429,16 +454,23 @@ impl NetworkGateway {
                 }
             }
             ClientMessage::AttachWorld { world } => {
-                let Some(session) = self
-                    .connections
-                    .get_mut(&connection)
-                    .and_then(|entry| entry.session.as_mut())
-                else {
+                // Use immutable borrow to check session state without holding &mut self.
+                let (already_attached, attached_to, is_authenticated) = {
+                    match self.conn_get(connection) {
+                        Some(entry) => (
+                            entry.session.as_ref().is_some_and(Session::is_attached),
+                            entry.session.as_ref().and_then(Session::attached_world),
+                            entry.session.is_some(),
+                        ),
+                        None => (false, None, false),
+                    }
+                };
+                if !is_authenticated {
                     let _ = self.send_error(connection, 20, "authentication required");
                     return;
-                };
-                if let Some(current) = session.attached_world() {
-                    if current == world {
+                }
+                if already_attached {
+                    if attached_to == Some(world) {
                         let _ = self.send(
                             connection,
                             &ServerMessage::AttachResult {
@@ -468,7 +500,15 @@ impl NetworkGateway {
                     );
                     return;
                 }
-                if !self.policy.authorize_attach(session.principal(), world) {
+                // Get principal from immutable borrow.
+                let principal = self.conn_get(connection)
+                    .and_then(|entry| entry.session.as_ref())
+                    .map(|s| s.principal().clone());
+                let Some(principal) = principal else {
+                    let _ = self.send_error(connection, 20, "authentication required");
+                    return;
+                };
+                if !self.policy.authorize_attach(&principal, world) {
                     self.metrics.policy_rejections += 1;
                     let _ = self.send(
                         connection,
@@ -480,7 +520,11 @@ impl NetworkGateway {
                     );
                     return;
                 }
-                session.attach(world);
+                if let Some(session) = self.conn_get_mut(connection)
+                    .and_then(|e| e.session.as_mut())
+                {
+                    session.attach(world);
+                }
                 self.attached_by_world
                     .entry(world)
                     .or_default()
@@ -509,9 +553,7 @@ impl NetworkGateway {
                 self.handle_subscribe(connection, request_id, query)
             }
             ClientMessage::Unsubscribe { subscription } => {
-                let removed = self
-                    .connections
-                    .get_mut(&connection)
+                let removed = self.conn_get_mut(connection)
                     .and_then(|entry| entry.subscriptions.remove(&subscription));
                 match removed {
                     Some(net_sub) => {
@@ -529,15 +571,13 @@ impl NetworkGateway {
                 if !self.check_rate(connection, RateBucket::Resync) {
                     return;
                 }
-                let Some(net_sub) = self
-                    .connections
-                    .get_mut(&connection)
+                let Some(net_sub) = self.conn_get_mut(connection)
                     .and_then(|entry| entry.subscriptions.get(&subscription).cloned())
                 else {
                     let _ = self.send_error(connection, 22, "unknown subscription");
                     return;
                 };
-                if let Some(entry) = self.connections.get_mut(&connection) {
+                if let Some(entry) = self.conn_get_mut(connection) {
                     entry.stale = false;
                     entry.pending_stale.clear();
                 }
@@ -553,9 +593,7 @@ impl NetworkGateway {
                 }
             }
             ClientMessage::DetachWorld => {
-                let Some(session) = self
-                    .connections
-                    .get_mut(&connection)
+                let Some(session) = self.conn_get_mut(connection)
                     .and_then(|entry| entry.session.as_mut())
                 else {
                     let _ = self.send_error(connection, 20, "authentication required");
@@ -574,16 +612,13 @@ impl NetworkGateway {
                     }
                 }
                 // End every session subscription on the runtime registry.
-                let subs: Vec<(WorldId, SubscriptionId)> = self
-                    .connections
-                    .get_mut(&connection)
+                let subs: Vec<(WorldId, SubscriptionId)> = self.conn_get_mut(connection)
                     .expect("session exists")
                     .subscriptions
                     .values()
                     .map(|sub| (sub.world, sub.server))
                     .collect();
-                self.connections
-                    .get_mut(&connection)
+                self.conn_get_mut(connection)
                     .expect("session exists")
                     .subscriptions
                     .clear();
@@ -639,9 +674,7 @@ impl NetworkGateway {
             self.metrics.reducer_calls_rejected += 1;
             return;
         }
-        let Some(session) = self
-            .connections
-            .get(&connection)
+        let Some(session) = self.conn_get(connection)
             .and_then(|entry| entry.session.as_ref())
             .cloned()
         else {
@@ -756,9 +789,7 @@ impl NetworkGateway {
     /// (anti-spoofing) and hands the frame to the runtime, which owns
     /// late/capacity/world rejection.
     fn handle_input(&mut self, connection: ConnectionId, frame: InputFrame) {
-        let Some(session) = self
-            .connections
-            .get(&connection)
+        let Some(session) = self.conn_get(connection)
             .and_then(|entry| entry.session.as_ref())
             .cloned()
         else {
@@ -822,9 +853,7 @@ impl NetworkGateway {
         if !self.check_rate_for(connection, RateBucket::Subscribe, request_id) {
             return;
         }
-        let Some(session) = self
-            .connections
-            .get(&connection)
+        let Some(session) = self.conn_get(connection)
             .and_then(|entry| entry.session.as_ref())
             .cloned()
         else {
@@ -835,7 +864,7 @@ impl NetworkGateway {
             let _ = self.send_error_for(connection, 21, "attach to a world before subscribing", request_id);
             return;
         };
-        if self.connections.get(&connection).is_some_and(|entry| {
+        if self.conn_get(connection).is_some_and(|entry| {
             entry.subscriptions.len() >= self.config.max_subscriptions_per_session()
         }) {
             let _ = self.send_error_for(connection, 17, "subscription limit reached", request_id);
@@ -843,7 +872,7 @@ impl NetworkGateway {
         }
         match self.runtime.subscribe(world, query) {
             Ok(server_sub) => {
-                if let Some(entry) = self.connections.get_mut(&connection) {
+                if let Some(entry) = self.conn_get_mut(connection) {
                     entry.subscriptions.insert(
                         server_sub,
                         NetworkSubscription { world, server: server_sub },
@@ -1131,11 +1160,13 @@ impl NetworkGateway {
         let subs: Vec<(ConnectionId, WorldId, SubscriptionId)> = self
             .connections
             .iter()
+            .enumerate()
+            .filter_map(|(idx, slot)| slot.as_ref().map(|e| (ConnectionId::from_u64(idx as u64), e)))
             .flat_map(|(id, entry)| {
                 entry
                     .subscriptions
                     .iter()
-                    .map(move |(sub_id, sub)| (*id, sub.world, *sub_id))
+                    .map(move |(sub_id, sub)| (id, sub.world, *sub_id))
             })
             .collect();
         let mut sent = 0;
@@ -1162,12 +1193,11 @@ impl NetworkGateway {
         message: &ServerMessage,
     ) -> Result<bool, NetworkError> {
         let stale_signal = is_stale_signal(message);
+        let max_payload = self.config.max_frame_payload();
         // Fast path: try direct message passing (bypasses encode/decode).
         // Unified capacity ensures overflow/stale semantics are preserved.
         {
-            let entry = self
-                .connections
-                .get_mut(&connection)
+            let entry = self.conn_get_mut(connection)
                 .ok_or(NetworkError::UnknownConnection(connection))?;
 
             // Flush pending stale notifications via frame path.
@@ -1188,7 +1218,7 @@ impl NetworkGateway {
             // Try direct send.
             if entry
                 .connection
-                .try_send_direct(message, self.config.max_frame_payload())
+                .try_send_direct(message, max_payload)
                 .is_ok()
             {
                 self.metrics.messages_outbound += 1;
@@ -1196,7 +1226,7 @@ impl NetworkGateway {
             }
         }
         // Slow path: encode to frame bytes and send.
-        let frame = protocol::encode_server(message, self.config.max_frame_payload())?;
+        let frame = protocol::encode_server(message, max_payload)?;
         self.send_encoded(connection, Arc::from(frame), stale_signal)
     }
 
@@ -1212,53 +1242,67 @@ impl NetworkGateway {
         frame: Arc<[u8]>,
         stale_signal: bool,
     ) -> Result<bool, NetworkError> {
-        let entry = self
-            .connections
-            .get_mut(&connection)
-            .ok_or(NetworkError::UnknownConnection(connection))?;
+        let overflow_policy = self.config.overflow_policy();
+        let max_payload = self.config.max_frame_payload();
+        let event_limit = self.config.event_log_limit();
 
-        // Flush any pending stale notifications.
-        while let Some(pending) = entry.pending_stale.front().cloned() {
-            match entry.connection.try_send_frame(Arc::from(pending)) {
-                Ok(()) => {
-                    entry.pending_stale.pop_front();
-                    self.metrics.messages_outbound += 1;
+        // Phase 1: flush stale + try send (entry-scoped borrow).
+        let send_result: Result<(), TransportError>;
+        let is_stale: bool;
+        let stale_subs: Vec<SubscriptionId>;
+        {
+            let entry = self.conn_get_mut(connection)
+                .ok_or(NetworkError::UnknownConnection(connection))?;
+
+            // Flush any pending stale notifications.
+            while let Some(pending) = entry.pending_stale.front().cloned() {
+                match entry.connection.try_send_frame(Arc::from(pending)) {
+                    Ok(()) => { entry.pending_stale.pop_front(); }
+                    Err(TransportError::Full) | Err(TransportError::Closed) => break,
+                    Err(_) => break,
                 }
-                Err(TransportError::Full) | Err(TransportError::Closed) => break,
-                Err(_) => break,
             }
-        }
 
-        if entry.stale && !stale_signal {
-            self.metrics.messages_dropped += 1;
-            return Ok(false);
-        }
+            if entry.stale && !stale_signal {
+                return Ok(false);
+            }
 
-        match entry.connection.try_send_frame(frame) {
+            send_result = entry.connection.try_send_frame(frame);
+            is_stale = entry.stale;
+            stale_subs = if send_result.is_err() && !entry.stale {
+                entry.subscriptions.keys().copied().collect()
+            } else {
+                Vec::new()
+            };
+        }
+        // entry borrow dropped — safe to access self.metrics etc.
+        match send_result {
             Ok(()) => {
                 self.metrics.messages_outbound += 1;
                 Ok(true)
             }
             Err(TransportError::Full) => {
                 self.metrics.messages_dropped += 1;
-                match self.config.overflow_policy() {
+                match overflow_policy {
                     OutboundOverflowPolicy::Stale => {
-                        if !entry.stale {
-                            entry.stale = true;
-                            for sub in entry.subscriptions.keys() {
-                                if let Ok(notify) = protocol::encode_server(
-                                    &ServerMessage::StaleNotification {
-                                        subscription: *sub,
-                                        seq: 0,
-                                    },
-                                    self.config.max_frame_payload(),
-                                ) {
-                                    entry.pending_stale.push_back(notify);
+                        if !is_stale {
+                            if let Some(entry) = self.conn_get_mut(connection) {
+                                entry.stale = true;
+                                for sub in &stale_subs {
+                                    if let Ok(notify) = protocol::encode_server(
+                                        &ServerMessage::StaleNotification {
+                                            subscription: *sub,
+                                            seq: 0,
+                                        },
+                                        max_payload,
+                                    ) {
+                                        entry.pending_stale.push_back(notify);
+                                    }
                                 }
                             }
                             Self::push_event(
                                 &mut self.events,
-                                self.config.event_log_limit(),
+                                event_limit,
                                 NetworkEvent::SessionStale { connection },
                             );
                         }
@@ -1311,9 +1355,11 @@ impl NetworkGateway {
     /// Flushes buffered outbound bytes to every transport.
     pub fn flush_outbound(&mut self) -> Result<(), NetworkError> {
         let mut to_drop: Vec<ConnectionId> = Vec::new();
-        for (id, entry) in self.connections.iter_mut() {
-            if entry.connection.flush_outbound().is_err() {
-                to_drop.push(*id);
+        for (idx, slot) in self.connections.iter_mut().enumerate() {
+            if let Some(entry) = slot.as_mut()
+                && entry.connection.flush_outbound().is_err()
+            {
+                to_drop.push(ConnectionId::from_u64(idx as u64));
             }
         }
         for id in to_drop {
@@ -1338,9 +1384,7 @@ impl NetworkGateway {
         bucket: RateBucket,
         request_id: u64,
     ) -> bool {
-        let allowed = self
-            .connections
-            .get_mut(&connection)
+        let allowed = self.conn_get_mut(connection)
             .is_some_and(|entry| entry.rate.try_take(bucket, std::time::Instant::now()));
         if !allowed {
             self.metrics.rate_limited += 1;
@@ -1355,9 +1399,11 @@ impl NetworkGateway {
     /// session's subscriptions from the runtime registries, and records the
     /// drop.
     fn drop_connection(&mut self, connection: &ConnectionId, reason: &str) {
-        let Some(mut entry) = self.connections.remove(connection) else {
+        let idx = connection.as_u64() as usize;
+        let Some(mut entry) = self.connections.get_mut(idx).and_then(|slot| slot.take()) else {
             return;
         };
+        self.active_connections = self.active_connections.saturating_sub(1);
         // Best-effort cleanup of the session's runtime subscriptions.
         let subs: Vec<(WorldId, SubscriptionId)> = entry
             .subscriptions
@@ -1419,31 +1465,35 @@ impl NetworkGateway {
     /// derived from live connections; counters are monotonic).
     pub fn metrics(&self) -> NetworkMetrics {
         let mut metrics = self.metrics.clone();
-        metrics.connections = self.connections.len();
+        metrics.connections = self.active_connections;
         metrics.sessions = self
             .connections
-            .values()
+            .iter()
+            .filter_map(|o| o.as_ref())
             .filter(|entry| entry.session.is_some())
             .count();
         metrics.attached = self
             .connections
-            .values()
+            .iter()
+            .filter_map(|o| o.as_ref())
             .filter(|entry| entry.session.as_ref().is_some_and(Session::is_attached))
             .count();
         metrics.connections_per_world.clear();
-        for entry in self.connections.values() {
+        for entry in self.connections.iter().filter_map(|o| o.as_ref()) {
             if let Some(world) = entry.session.as_ref().and_then(Session::attached_world) {
                 *metrics.connections_per_world.entry(world).or_insert(0) += 1;
             }
         }
         metrics.subscriptions = self
             .connections
-            .values()
+            .iter()
+            .filter_map(|o| o.as_ref())
             .map(|entry| entry.subscriptions.len())
             .sum();
         metrics.sessions_stale = self
             .connections
-            .values()
+            .iter()
+            .filter_map(|o| o.as_ref())
             .filter(|entry| entry.stale)
             .count();
         metrics
@@ -1453,7 +1503,7 @@ impl NetworkGateway {
 impl std::fmt::Debug for NetworkGateway {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("NetworkGateway")
-            .field("connections", &self.connections.len())
+            .field("connections", &self.active_connections)
             .field("server_name", &self.server_name)
             .finish()
     }
