@@ -416,11 +416,7 @@ fn cooldown_tick(ctx: &mut SimulationContext, _frame: &InputFrame) -> Result<()>
             Some(row) => {
                 let cd = get(&row, COL_COOLDOWN);
                 if cd > 0 {
-                    ctx.update(
-                        TABLE,
-                        row_id,
-                        with(row, COL_COOLDOWN, Value::I64(cd - 1)),
-                    )?;
+                    ctx.update(TABLE, row_id, with(row, COL_COOLDOWN, Value::I64(cd - 1)))?;
                 }
                 if cd <= 1 {
                     // Will reach zero after this decrement (or was already zero).
