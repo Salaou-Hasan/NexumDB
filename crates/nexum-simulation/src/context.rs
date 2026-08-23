@@ -30,7 +30,7 @@ use nexum_tx::Transaction;
 use nexum_wasm::WasmModuleRegistry;
 
 use crate::partition::PartitionMessage;
-use crate::rng::{rng_seed, DeterministicRng};
+use crate::rng::{DeterministicRng, rng_seed};
 
 /// The controlled execution surface handed to a simulation system.
 pub struct SimulationContext<'a> {
@@ -172,12 +172,7 @@ impl<'a> SimulationContext<'a> {
     /// `kind` must be non-empty and bounded, the payload must be bounded, and
     /// the tick's outbound budget must not be exceeded. Any violation fails
     /// the tick with zero mutation.
-    pub fn send_to(
-        &mut self,
-        to: PartitionId,
-        kind: &str,
-        payload: ReducerArgs,
-    ) -> Result<()> {
+    pub fn send_to(&mut self, to: PartitionId, kind: &str, payload: ReducerArgs) -> Result<()> {
         if to == self.partition {
             return Err(Error::invalid_argument(
                 "cannot send a partition message to the sending partition itself",

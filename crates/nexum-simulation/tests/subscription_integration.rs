@@ -27,7 +27,9 @@ fn fixture() -> World {
     World::new(WorldId::from_u64(0), store, SimulationConfig::new()).unwrap()
 }
 
-fn subscribe_zone10(store: &TableStore) -> (SubscriptionRegistry, nexum_subscription::SubscriptionId) {
+fn subscribe_zone10(
+    store: &TableStore,
+) -> (SubscriptionRegistry, nexum_subscription::SubscriptionId) {
     let mut registry = SubscriptionRegistry::new();
     let sub = registry
         .subscribe(
@@ -70,7 +72,10 @@ fn tick_commits_flow_to_subscriptions_as_one_atomic_transition() {
     world
         .add_system(
             SystemDefinition::new(SystemId::from_u64(1), "invoker", 20, |ctx, _| {
-                ctx.invoke_reducer("spawn", &ReducerArgs::new().insert("id", 200 + ctx.tick().as_u64()))?;
+                ctx.invoke_reducer(
+                    "spawn",
+                    &ReducerArgs::new().insert("id", 200 + ctx.tick().as_u64()),
+                )?;
                 Ok(())
             })
             .unwrap(),
@@ -121,8 +126,13 @@ fn failed_ticks_produce_no_subscription_updates() {
 
     let (mut registry, sub) = subscribe_zone10(world.store());
 
-    let error = world.tick(&InputFrame::new(TickId::from_u64(0))).unwrap_err();
-    assert!(matches!(error.error(), nexum_core::Error::InvalidArgument(_)));
+    let error = world
+        .tick(&InputFrame::new(TickId::from_u64(0)))
+        .unwrap_err();
+    assert!(matches!(
+        error.error(),
+        nexum_core::Error::InvalidArgument(_)
+    ));
     // Nothing committed, so nothing reached the subscription engine.
     assert!(registry.drain(sub).unwrap().is_empty());
     assert_eq!(registry.next_seq(), 0);
@@ -147,7 +157,9 @@ fn resync_after_ticks_matches_authoritative_state() {
 
     let (mut registry, sub) = subscribe_zone10(world.store());
     for tick in 0..4u64 {
-        let result = world.tick(&InputFrame::new(TickId::from_u64(tick))).unwrap();
+        let result = world
+            .tick(&InputFrame::new(TickId::from_u64(tick)))
+            .unwrap();
         let _ = registry.apply_changes(world.store(), result.changes());
     }
     registry.drain(sub).unwrap(); // 4 live inserts (the non-matching rows never appeared)
@@ -203,10 +215,7 @@ fn multi_table_tick_is_observed_atomically() {
 
     let mut registry = SubscriptionRegistry::new();
     let players_sub = registry
-        .subscribe(
-            world.store(),
-            Query::builder("players").build().unwrap(),
-        )
+        .subscribe(world.store(), Query::builder("players").build().unwrap())
         .unwrap();
     let items_sub = registry
         .subscribe(world.store(), Query::builder("items").build().unwrap())

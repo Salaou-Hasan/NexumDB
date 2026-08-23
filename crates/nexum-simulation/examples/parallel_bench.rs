@@ -15,7 +15,7 @@
 
 use std::time::Instant;
 
-use nexum_core::{row, ColumnType, SystemId, TableSchema, TickId, WorldId};
+use nexum_core::{ColumnType, SystemId, TableSchema, TickId, WorldId, row};
 use nexum_simulation::{
     ExecutionMode, InputFrame, SimulationConfig, SystemAccess, SystemDefinition, World,
 };
@@ -28,7 +28,10 @@ fn main() {
         .unwrap_or(300);
 
     println!("Phase 11 parallel benchmark — {ticks} ticks per cell\n");
-    println!("{:<13} {:>8} {:>10} {:>10} {:>10} {:>10}", "scenario", "mode", "ns/tick", "chg/tick", "par(2)", "par(4)");
+    println!(
+        "{:<13} {:>8} {:>10} {:>10} {:>10} {:>10}",
+        "scenario", "mode", "ns/tick", "chg/tick", "par(2)", "par(4)"
+    );
     println!("{}", "-".repeat(66));
 
     bench("disjoint10", ticks, disjoint_world, 10);
@@ -53,7 +56,10 @@ fn run(world: &mut World, ticks: u64) -> (u128, usize) {
 }
 
 fn bench(label: &str, ticks: u64, build: Build, count: usize) {
-    let mut serial = build(SimulationConfig::new().with_execution(ExecutionMode::Serial), count);
+    let mut serial = build(
+        SimulationConfig::new().with_execution(ExecutionMode::Serial),
+        count,
+    );
     let (serial_ns, changes) = run(&mut serial, ticks);
     let serial_avg = serial_ns as u64 / ticks;
 

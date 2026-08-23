@@ -147,7 +147,10 @@ mod tests {
     fn version_checked_next_saturates_at_max() {
         let max = Version::from_u64(u64::MAX);
         assert_eq!(max.checked_next(), None);
-        assert_eq!(Version::from_u64(5).checked_next(), Some(Version::from_u64(6)));
+        assert_eq!(
+            Version::from_u64(5).checked_next(),
+            Some(Version::from_u64(6))
+        );
     }
 
     #[test]

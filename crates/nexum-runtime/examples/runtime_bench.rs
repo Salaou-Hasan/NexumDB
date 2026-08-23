@@ -50,103 +50,112 @@ fn ensure_players(store: &mut TableStore) {
 
 /// A world with no systems — the empty tick.
 fn noop_factory() -> WorldFactory {
-    Box::new(|id: WorldId, store: TableStore, sim: SimulationConfig| {
-        World::new(id, store, sim)
-    })
+    Box::new(|id: WorldId, store: TableStore, sim: SimulationConfig| World::new(id, store, sim))
 }
 
 /// A world whose single system inserts one player row per tick.
 fn writer_factory() -> WorldFactory {
-    Box::new(|id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-        ensure_players(&mut store);
-        let mut world = World::new(id, store, sim)?;
-        world
-            .add_system(
-                SystemDefinition::new(SystemId::from_u64(0), "writer", 0, |ctx, _| {
-                    ctx.insert("players", row![ctx.tick().as_u64(), 10u64, 100i32])?;
-                    Ok(())
-                })
-                .unwrap(),
-            )
-            .unwrap();
-        Ok(world)
-    })
+    Box::new(
+        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
+            ensure_players(&mut store);
+            let mut world = World::new(id, store, sim)?;
+            world
+                .add_system(
+                    SystemDefinition::new(SystemId::from_u64(0), "writer", 0, |ctx, _| {
+                        ctx.insert("players", row![ctx.tick().as_u64(), 10u64, 100i32])?;
+                        Ok(())
+                    })
+                    .unwrap(),
+                )
+                .unwrap();
+            Ok(world)
+        },
+    )
 }
 
 /// A world whose system inserts ten rows per tick.
 fn bulk_factory() -> WorldFactory {
-    Box::new(|id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-        ensure_players(&mut store);
-        let mut world = World::new(id, store, sim)?;
-        world
-            .add_system(
-                SystemDefinition::new(SystemId::from_u64(0), "bulk", 0, |ctx, _| {
-                    let base = ctx.tick().as_u64() * 10;
-                    for i in 0..10u64 {
-                        ctx.insert("players", row![base + i, 10u64, 100i32])?;
-                    }
-                    Ok(())
-                })
-                .unwrap(),
-            )
-            .unwrap();
-        Ok(world)
-    })
+    Box::new(
+        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
+            ensure_players(&mut store);
+            let mut world = World::new(id, store, sim)?;
+            world
+                .add_system(
+                    SystemDefinition::new(SystemId::from_u64(0), "bulk", 0, |ctx, _| {
+                        let base = ctx.tick().as_u64() * 10;
+                        for i in 0..10u64 {
+                            ctx.insert("players", row![base + i, 10u64, 100i32])?;
+                        }
+                        Ok(())
+                    })
+                    .unwrap(),
+                )
+                .unwrap();
+            Ok(world)
+        },
+    )
 }
 
 /// A world whose system consumes `spawn` input commands as player rows.
 fn input_factory() -> WorldFactory {
-    Box::new(|id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-        ensure_players(&mut store);
-        let mut world = World::new(id, store, sim)?;
-        world
-            .add_system(
-                SystemDefinition::new(SystemId::from_u64(0), "consumer", 0, |ctx, frame| {
-                    for command in frame.commands() {
-                        if command.kind() == "spawn" {
-                            let id = command.payload().and_then(nexum_core::Value::as_u64).unwrap();
-                            ctx.insert("players", row![id, 10u64, 100i32])?;
+    Box::new(
+        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
+            ensure_players(&mut store);
+            let mut world = World::new(id, store, sim)?;
+            world
+                .add_system(
+                    SystemDefinition::new(SystemId::from_u64(0), "consumer", 0, |ctx, frame| {
+                        for command in frame.commands() {
+                            if command.kind() == "spawn" {
+                                let id = command
+                                    .payload()
+                                    .and_then(nexum_core::Value::as_u64)
+                                    .unwrap();
+                                ctx.insert("players", row![id, 10u64, 100i32])?;
+                            }
                         }
-                    }
-                    Ok(())
-                })
-                .unwrap(),
-            )
-            .unwrap();
-        Ok(world)
-    })
+                        Ok(())
+                    })
+                    .unwrap(),
+                )
+                .unwrap();
+            Ok(world)
+        },
+    )
 }
 
 /// A world whose system invokes a native reducer every tick.
 fn reducer_factory() -> WorldFactory {
-    Box::new(|id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-        ensure_players(&mut store);
-        let mut world = World::new(id, store, sim)?;
-        world
-            .native_mut()
-            .register(
-                ReducerDefinition::new(ReducerId::from_u64(0), "spawn", |ctx, args| {
-                    let id = args.require_u64("id")?;
-                    ctx.insert("players", row![id, 10u64, 50i32])?;
-                    Ok(nexum_core::Value::U64(id))
-                })
-                .unwrap(),
-            )
-            .unwrap();
-        world
-            .add_system(
-                SystemDefinition::new(SystemId::from_u64(0), "invoker", 0, |ctx, _| {
-                    ctx.invoke_reducer(
-                        "spawn",
-                        &ReducerArgs::new().insert("id", 1_000_000 + ctx.tick().as_u64()),
-                    )?;
-                    Ok(())
-                })
-                .unwrap(),
-            )
-            .unwrap();
-        Ok(world)
-    })
+    Box::new(
+        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
+            ensure_players(&mut store);
+            let mut world = World::new(id, store, sim)?;
+            world
+                .native_mut()
+                .register(
+                    ReducerDefinition::new(ReducerId::from_u64(0), "spawn", |ctx, args| {
+                        let id = args.require_u64("id")?;
+                        ctx.insert("players", row![id, 10u64, 50i32])?;
+                        Ok(nexum_core::Value::U64(id))
+                    })
+                    .unwrap(),
+                )
+                .unwrap();
+            world
+                .add_system(
+                    SystemDefinition::new(SystemId::from_u64(0), "invoker", 0, |ctx, _| {
+                        ctx.invoke_reducer(
+                            "spawn",
+                            &ReducerArgs::new().insert("id", 1_000_000 + ctx.tick().as_u64()),
+                        )?;
+                        Ok(())
+                    })
+                    .unwrap(),
+                )
+                .unwrap();
+            Ok(world)
+        },
+    )
 }
 
 /// The WASM module used by the WASM-heavy scenario: reads its single `id`
@@ -197,26 +206,28 @@ fn wasm_module() -> Vec<u8> {
 /// A world whose system invokes a WASM reducer every tick.
 fn wasm_factory() -> WorldFactory {
     let module = wasm_module();
-    Box::new(move |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-        ensure_players(&mut store);
-        let mut world = World::new(id, store, sim)?;
-        let mut wasm = WasmModuleRegistry::new(WasmLimits::default()).unwrap();
-        wasm.register("wspawn", 1, module.clone()).unwrap();
-        world.set_wasm(wasm);
-        world
-            .add_system(
-                SystemDefinition::new(SystemId::from_u64(0), "wasm_invoker", 0, |ctx, _| {
-                    ctx.invoke_wasm(
-                        "wspawn",
-                        &ReducerArgs::new().insert("id", 2_000_000 + ctx.tick().as_u64()),
-                    )?;
-                    Ok(())
-                })
-                .unwrap(),
-            )
-            .unwrap();
-        Ok(world)
-    })
+    Box::new(
+        move |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
+            ensure_players(&mut store);
+            let mut world = World::new(id, store, sim)?;
+            let mut wasm = WasmModuleRegistry::new(WasmLimits::default()).unwrap();
+            wasm.register("wspawn", 1, module.clone()).unwrap();
+            world.set_wasm(wasm);
+            world
+                .add_system(
+                    SystemDefinition::new(SystemId::from_u64(0), "wasm_invoker", 0, |ctx, _| {
+                        ctx.invoke_wasm(
+                            "wspawn",
+                            &ReducerArgs::new().insert("id", 2_000_000 + ctx.tick().as_u64()),
+                        )?;
+                        Ok(())
+                    })
+                    .unwrap(),
+                )
+                .unwrap();
+            Ok(world)
+        },
+    )
 }
 
 fn temp_dir(name: &str) -> std::path::PathBuf {
@@ -234,10 +245,8 @@ fn main() {
 
     // 1. Runtime scheduling overhead — an empty step (no worlds).
     {
-        let mut runtime = Runtime::new(
-            RuntimeConfig::new(noop_factory()).with_worker_count(8),
-        )
-        .unwrap();
+        let mut runtime =
+            Runtime::new(RuntimeConfig::new(noop_factory()).with_worker_count(8)).unwrap();
         bench("scheduler overhead (empty step)", iterations, || {
             runtime.step().unwrap();
         });
@@ -246,7 +255,9 @@ fn main() {
     // 2. One world — one empty tick per step.
     {
         let mut runtime = Runtime::new(RuntimeConfig::new(noop_factory())).unwrap();
-        runtime.create_world(WorldId::from_u64(0), SimulationConfig::new()).unwrap();
+        runtime
+            .create_world(WorldId::from_u64(0), SimulationConfig::new())
+            .unwrap();
         runtime.start_world(WorldId::from_u64(0)).unwrap();
         bench("one world (empty tick)", iterations, || {
             runtime.step().unwrap();
@@ -257,19 +268,27 @@ fn main() {
     for (count, divisor) in [(10usize, 1usize), (100, 5), (1_000, 50)] {
         let mut runtime = Runtime::new(RuntimeConfig::new(noop_factory())).unwrap();
         for w in 0..count as u64 {
-            runtime.create_world(WorldId::from_u64(w), SimulationConfig::new()).unwrap();
+            runtime
+                .create_world(WorldId::from_u64(w), SimulationConfig::new())
+                .unwrap();
             runtime.start_world(WorldId::from_u64(w)).unwrap();
         }
-        bench(&format!("{count} worlds (empty ticks)"), iterations / divisor, || {
-            runtime.step().unwrap();
-        });
+        bench(
+            &format!("{count} worlds (empty ticks)"),
+            iterations / divisor,
+            || {
+                runtime.step().unwrap();
+            },
+        );
     }
 
     // 6. Input-heavy tick — 10 routed commands per frame.
     {
         let mut runtime = Runtime::new(RuntimeConfig::new(input_factory())).unwrap();
         let world = WorldId::from_u64(0);
-        runtime.create_world(world, SimulationConfig::new()).unwrap();
+        runtime
+            .create_world(world, SimulationConfig::new())
+            .unwrap();
         runtime.start_world(world).unwrap();
         let mut tick = 0u64;
         bench("input-heavy tick (10 cmds)", iterations / 2, || {
@@ -290,7 +309,9 @@ fn main() {
     {
         let mut runtime = Runtime::new(RuntimeConfig::new(bulk_factory())).unwrap();
         let world = WorldId::from_u64(0);
-        runtime.create_world(world, SimulationConfig::new()).unwrap();
+        runtime
+            .create_world(world, SimulationConfig::new())
+            .unwrap();
         runtime.start_world(world).unwrap();
         bench("transaction-heavy tick (10 rows)", iterations / 2, || {
             runtime.step().unwrap();
@@ -301,7 +322,9 @@ fn main() {
     {
         let mut runtime = Runtime::new(RuntimeConfig::new(reducer_factory())).unwrap();
         let world = WorldId::from_u64(0);
-        runtime.create_world(world, SimulationConfig::new()).unwrap();
+        runtime
+            .create_world(world, SimulationConfig::new())
+            .unwrap();
         runtime.start_world(world).unwrap();
         bench("reducer-heavy tick (native)", iterations / 2, || {
             runtime.step().unwrap();
@@ -312,7 +335,9 @@ fn main() {
     {
         let mut runtime = Runtime::new(RuntimeConfig::new(wasm_factory())).unwrap();
         let world = WorldId::from_u64(0);
-        runtime.create_world(world, SimulationConfig::new()).unwrap();
+        runtime
+            .create_world(world, SimulationConfig::new())
+            .unwrap();
         runtime.start_world(world).unwrap();
         bench("reducer-heavy tick (wasm)", iterations / 5, || {
             runtime.step().unwrap();
@@ -328,7 +353,9 @@ fn main() {
         )
         .unwrap();
         let world = WorldId::from_u64(0);
-        runtime.create_world(world, SimulationConfig::new()).unwrap();
+        runtime
+            .create_world(world, SimulationConfig::new())
+            .unwrap();
         runtime.start_world(world).unwrap();
         bench("tick + WAL append", iterations / 2, || {
             runtime.step().unwrap();
@@ -340,7 +367,9 @@ fn main() {
     {
         let mut runtime = Runtime::new(RuntimeConfig::new(writer_factory())).unwrap();
         let world = WorldId::from_u64(0);
-        runtime.create_world(world, SimulationConfig::new()).unwrap();
+        runtime
+            .create_world(world, SimulationConfig::new())
+            .unwrap();
         runtime.start_world(world).unwrap();
         let sub = runtime
             .subscribe(world, Query::builder("players").build().unwrap())
@@ -373,7 +402,9 @@ fn main() {
         )
         .unwrap();
         let world = WorldId::from_u64(0);
-        runtime.create_world(world, SimulationConfig::new()).unwrap();
+        runtime
+            .create_world(world, SimulationConfig::new())
+            .unwrap();
         runtime.start_world(world).unwrap();
         runtime.step().unwrap(); // one durable transaction
         bench("world recovery (WAL replay)", iterations, || {

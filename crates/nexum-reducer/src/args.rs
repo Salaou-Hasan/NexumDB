@@ -57,14 +57,15 @@ impl ReducerArgs {
 
     /// Iterates over `(name, value)` pairs in deterministic (key) order.
     pub fn iter(&self) -> impl Iterator<Item = (&str, &Value)> {
-        self.entries.iter().map(|(name, value)| (name.as_str(), value))
+        self.entries
+            .iter()
+            .map(|(name, value)| (name.as_str(), value))
     }
 
     /// Returns the argument with the given name, or `NotFound` if absent.
     pub fn require(&self, name: &str) -> Result<&Value> {
-        self.get(name).ok_or_else(|| {
-            Error::not_found(format!("reducer argument '{name}' is missing"))
-        })
+        self.get(name)
+            .ok_or_else(|| Error::not_found(format!("reducer argument '{name}' is missing")))
     }
 
     /// Returns the argument as a `u64`, or `NotFound`/`InvalidArgument`.
@@ -118,9 +119,7 @@ impl ReducerArgs {
 }
 
 fn wrong_type(name: &str, expected: &str) -> Error {
-    Error::invalid_argument(format!(
-        "reducer argument '{name}' is not a {expected}"
-    ))
+    Error::invalid_argument(format!("reducer argument '{name}' is not a {expected}"))
 }
 
 #[cfg(test)]
@@ -151,10 +150,7 @@ mod tests {
     fn missing_key_is_not_found() {
         let args = ReducerArgs::new();
         assert!(args.get("nope").is_none());
-        assert!(matches!(
-            args.require_u64("nope"),
-            Err(Error::NotFound(_))
-        ));
+        assert!(matches!(args.require_u64("nope"), Err(Error::NotFound(_))));
     }
 
     #[test]

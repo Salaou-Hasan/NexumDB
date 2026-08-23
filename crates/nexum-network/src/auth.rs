@@ -71,16 +71,10 @@ impl TokenAuthenticator {
 
     /// Maps `token` to `principal`. Rejects a duplicate token with
     /// [`AuthError::Internal`].
-    pub fn add(
-        &mut self,
-        token: impl Into<String>,
-        principal: Principal,
-    ) -> Result<(), AuthError> {
+    pub fn add(&mut self, token: impl Into<String>, principal: Principal) -> Result<(), AuthError> {
         let token = token.into();
         if token.is_empty() {
-            return Err(AuthError::Internal(
-                "token must not be empty".to_string(),
-            ));
+            return Err(AuthError::Internal("token must not be empty".to_string()));
         }
         if self.tokens.contains_key(&token) {
             return Err(AuthError::Internal(

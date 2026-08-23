@@ -81,13 +81,22 @@ fn seed_pool(world: &mut World) {
 /// id is derived from the system id, so several such systems can share a
 /// tick without colliding on the primary key.
 fn insert_system(id: u64, priority: u32) -> SystemDefinition {
-    SystemDefinition::new(SystemId::from_u64(id), format!("insert_{id}"), priority, |ctx, _| {
-        ctx.insert(
-            "players",
-            row![ctx.system().as_u64() * 1_000_000 + ctx.tick().as_u64(), 10u64, 100i32],
-        )?;
-        Ok(())
-    })
+    SystemDefinition::new(
+        SystemId::from_u64(id),
+        format!("insert_{id}"),
+        priority,
+        |ctx, _| {
+            ctx.insert(
+                "players",
+                row![
+                    ctx.system().as_u64() * 1_000_000 + ctx.tick().as_u64(),
+                    10u64,
+                    100i32
+                ],
+            )?;
+            Ok(())
+        },
+    )
     .unwrap()
 }
 
@@ -102,7 +111,9 @@ fn main() {
         let mut world = fresh_world();
         let mut tick = 0u64;
         bench("empty tick", iterations, || {
-            world.tick(&InputFrame::new(TickId::from_u64(tick))).unwrap();
+            world
+                .tick(&InputFrame::new(TickId::from_u64(tick)))
+                .unwrap();
             tick += 1;
         });
     }
@@ -113,7 +124,9 @@ fn main() {
         world.add_system(insert_system(0, 0)).unwrap();
         let mut tick = 0u64;
         bench("one system (1 write)", iterations, || {
-            world.tick(&InputFrame::new(TickId::from_u64(tick))).unwrap();
+            world
+                .tick(&InputFrame::new(TickId::from_u64(tick)))
+                .unwrap();
             tick += 1;
         });
     }
@@ -126,7 +139,9 @@ fn main() {
         }
         let mut tick = 0u64;
         bench("10 systems (10 writes)", iterations / 2, || {
-            world.tick(&InputFrame::new(TickId::from_u64(tick))).unwrap();
+            world
+                .tick(&InputFrame::new(TickId::from_u64(tick)))
+                .unwrap();
             tick += 1;
         });
     }
@@ -139,7 +154,9 @@ fn main() {
         }
         let mut tick = 0u64;
         bench("100 systems (100 writes)", iterations / 10, || {
-            world.tick(&InputFrame::new(TickId::from_u64(tick))).unwrap();
+            world
+                .tick(&InputFrame::new(TickId::from_u64(tick)))
+                .unwrap();
             tick += 1;
         });
     }
@@ -160,7 +177,9 @@ fn main() {
             .unwrap();
         let mut tick = 0u64;
         bench("read-only system (scan pool)", iterations / 2, || {
-            world.tick(&InputFrame::new(TickId::from_u64(tick))).unwrap();
+            world
+                .tick(&InputFrame::new(TickId::from_u64(tick)))
+                .unwrap();
             tick += 1;
         });
     }
@@ -185,7 +204,9 @@ fn main() {
             .unwrap();
         let mut tick = 0u64;
         bench("single-row mutation", iterations, || {
-            world.tick(&InputFrame::new(TickId::from_u64(tick))).unwrap();
+            world
+                .tick(&InputFrame::new(TickId::from_u64(tick)))
+                .unwrap();
             tick += 1;
         });
     }
@@ -207,7 +228,9 @@ fn main() {
             .unwrap();
         let mut tick = 0u64;
         bench("100-row mutation", iterations / 20, || {
-            world.tick(&InputFrame::new(TickId::from_u64(tick))).unwrap();
+            world
+                .tick(&InputFrame::new(TickId::from_u64(tick)))
+                .unwrap();
             tick += 1;
         });
     }
@@ -229,7 +252,9 @@ fn main() {
             .unwrap();
         let mut tick = 0u64;
         bench("multi-table mutation", iterations / 2, || {
-            world.tick(&InputFrame::new(TickId::from_u64(tick))).unwrap();
+            world
+                .tick(&InputFrame::new(TickId::from_u64(tick)))
+                .unwrap();
             tick += 1;
         });
     }
@@ -251,7 +276,10 @@ fn main() {
         world
             .add_system(
                 SystemDefinition::new(SystemId::from_u64(0), "invoker", 0, |ctx, _| {
-                    ctx.invoke_reducer("spawn", &ReducerArgs::new().insert("id", 1_000_000 + ctx.tick().as_u64()))?;
+                    ctx.invoke_reducer(
+                        "spawn",
+                        &ReducerArgs::new().insert("id", 1_000_000 + ctx.tick().as_u64()),
+                    )?;
                     Ok(())
                 })
                 .unwrap(),
@@ -259,7 +287,9 @@ fn main() {
             .unwrap();
         let mut tick = 0u64;
         bench("native reducer invocation", iterations / 2, || {
-            world.tick(&InputFrame::new(TickId::from_u64(tick))).unwrap();
+            world
+                .tick(&InputFrame::new(TickId::from_u64(tick)))
+                .unwrap();
             tick += 1;
         });
     }
@@ -313,7 +343,10 @@ fn main() {
         world
             .add_system(
                 SystemDefinition::new(SystemId::from_u64(0), "wasm_invoker", 0, |ctx, _| {
-                    ctx.invoke_wasm("wspawn", &ReducerArgs::new().insert("id", 2_000_000 + ctx.tick().as_u64()))?;
+                    ctx.invoke_wasm(
+                        "wspawn",
+                        &ReducerArgs::new().insert("id", 2_000_000 + ctx.tick().as_u64()),
+                    )?;
                     Ok(())
                 })
                 .unwrap(),
@@ -321,7 +354,9 @@ fn main() {
             .unwrap();
         let mut tick = 0u64;
         bench("wasm reducer invocation", iterations / 10, || {
-            world.tick(&InputFrame::new(TickId::from_u64(tick))).unwrap();
+            world
+                .tick(&InputFrame::new(TickId::from_u64(tick)))
+                .unwrap();
             tick += 1;
         });
     }
@@ -343,7 +378,9 @@ fn main() {
         registry.drain(sub).unwrap();
         let mut tick = 0u64;
         bench("tick + subscription fan-out", iterations, || {
-            let result = world.tick(&InputFrame::new(TickId::from_u64(tick))).unwrap();
+            let result = world
+                .tick(&InputFrame::new(TickId::from_u64(tick)))
+                .unwrap();
             let _ = registry.apply_changes(world.store(), result.changes());
             let _ = registry.drain(sub).unwrap(); // keep the buffer steady
             tick += 1;
@@ -362,7 +399,9 @@ fn main() {
         world.add_system(insert_system(0, 0)).unwrap();
         let mut tick = 0u64;
         bench("tick + WAL append", iterations / 2, || {
-            let result = world.tick(&InputFrame::new(TickId::from_u64(tick))).unwrap();
+            let result = world
+                .tick(&InputFrame::new(TickId::from_u64(tick)))
+                .unwrap();
             wal.append(result.tx_id(), result.changes()).unwrap();
             tick += 1;
         });

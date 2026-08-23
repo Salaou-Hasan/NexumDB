@@ -31,9 +31,15 @@ pub enum NetworkEvent {
     /// A transport connection was registered.
     ConnectionOpened { connection: ConnectionId },
     /// A connection was closed (locally or by the transport).
-    ConnectionClosed { connection: ConnectionId, reason: String },
+    ConnectionClosed {
+        connection: ConnectionId,
+        reason: String,
+    },
     /// A session authenticated successfully.
-    Authenticated { connection: ConnectionId, principal_id: u64 },
+    Authenticated {
+        connection: ConnectionId,
+        principal_id: u64,
+    },
     /// Authentication was rejected.
     AuthFailed { connection: ConnectionId },
     /// A session attached to a world.
@@ -48,7 +54,10 @@ pub enum NetworkEvent {
     /// A protocol violation was detected.
     ProtocolError { connection: ConnectionId },
     /// A connection was dropped for exceeding an inbound or policy bound.
-    ClientDropped { connection: ConnectionId, reason: String },
+    ClientDropped {
+        connection: ConnectionId,
+        reason: String,
+    },
 }
 
 /// The validated network configuration.
@@ -197,7 +206,9 @@ impl NetworkConfig {
     /// Validates every bound. Called by `NetworkGateway::new`.
     pub fn validate(&self) -> Result<()> {
         if self.max_frame_payload == 0 {
-            return Err(Error::invalid_argument("max_frame_payload must be at least 1"));
+            return Err(Error::invalid_argument(
+                "max_frame_payload must be at least 1",
+            ));
         }
         if self.max_queued_inbound_frames == 0 {
             return Err(Error::invalid_argument(
@@ -210,7 +221,9 @@ impl NetworkConfig {
             ));
         }
         if self.max_connections == 0 {
-            return Err(Error::invalid_argument("max_connections must be at least 1"));
+            return Err(Error::invalid_argument(
+                "max_connections must be at least 1",
+            ));
         }
         if self.max_subscriptions_per_session == 0 {
             return Err(Error::invalid_argument(
@@ -238,7 +251,9 @@ impl NetworkConfig {
             ));
         }
         if self.event_log_limit == 0 {
-            return Err(Error::invalid_argument("event_log_limit must be at least 1"));
+            return Err(Error::invalid_argument(
+                "event_log_limit must be at least 1",
+            ));
         }
         self.rate_limits
             .validate()
@@ -322,9 +337,15 @@ impl std::fmt::Debug for NetworkConfig {
         f.debug_struct("NetworkConfig")
             .field("max_frame_payload", &self.max_frame_payload)
             .field("max_queued_inbound_frames", &self.max_queued_inbound_frames)
-            .field("max_queued_outbound_frames", &self.max_queued_outbound_frames)
+            .field(
+                "max_queued_outbound_frames",
+                &self.max_queued_outbound_frames,
+            )
             .field("max_connections", &self.max_connections)
-            .field("max_subscriptions_per_session", &self.max_subscriptions_per_session)
+            .field(
+                "max_subscriptions_per_session",
+                &self.max_subscriptions_per_session,
+            )
             .field("max_commands_per_frame", &self.max_commands_per_frame)
             .field("max_reducer_name_len", &self.max_reducer_name_len)
             .field("max_reducer_args", &self.max_reducer_args)

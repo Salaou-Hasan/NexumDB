@@ -142,15 +142,13 @@ impl ClientTransport {
         }
         // Write buffered bytes to the transport now (non-blocking); a
         // failed flush means the link broke, not that the frame is queued.
-        self.inner
-            .flush_outbound()
-            .map_err(|error| match error {
-                TransportError::Closed => {
-                    self.closed = true;
-                    SdkError::TransportClosed
-                }
-                other => SdkError::Transport(other),
-            })
+        self.inner.flush_outbound().map_err(|error| match error {
+            TransportError::Closed => {
+                self.closed = true;
+                SdkError::TransportClosed
+            }
+            other => SdkError::Transport(other),
+        })
     }
 
     /// Closes the transport (idempotent).

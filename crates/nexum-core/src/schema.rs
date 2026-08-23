@@ -375,10 +375,7 @@ mod tests {
     fn column_ids_are_positional() {
         let schema = player_schema();
         assert_eq!(schema.column("id").unwrap().id(), ColumnId::from_u64(0));
-        assert_eq!(
-            schema.column("level").unwrap().id(),
-            ColumnId::from_u64(3)
-        );
+        assert_eq!(schema.column("level").unwrap().id(), ColumnId::from_u64(3));
     }
 
     #[test]

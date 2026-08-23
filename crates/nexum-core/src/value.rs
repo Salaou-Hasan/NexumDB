@@ -478,7 +478,10 @@ mod tests {
         let mut map = std::collections::HashMap::new();
         map.insert(vec![Value::U64(1), Value::I32(10)], "first");
         map.insert(vec![Value::U64(2), Value::I32(20)], "second");
-        assert_eq!(map.get(&vec![Value::U64(2), Value::I32(20)]), Some(&"second"));
+        assert_eq!(
+            map.get(&vec![Value::U64(2), Value::I32(20)]),
+            Some(&"second")
+        );
     }
 
     #[test]

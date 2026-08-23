@@ -48,13 +48,7 @@ impl Logger {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        let mut line = format!(
-            "{} {} {} {}",
-            secs,
-            level.name(),
-            self.module,
-            message
-        );
+        let mut line = format!("{} {} {} {}", secs, level.name(), self.module, message);
         for (key, value) in fields {
             line.push_str(&format!(" {key}={value}"));
         }

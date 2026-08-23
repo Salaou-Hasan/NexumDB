@@ -4,9 +4,9 @@
 //! source-agnostic. A failed reducer produces no committed changes, so it
 //! produces no deltas either.
 
+use nexum_core::row;
 use nexum_core::schema::TableSchema;
 use nexum_core::{ColumnType, ReducerId, Value};
-use nexum_core::row;
 use nexum_reducer::{ReducerArgs, ReducerDefinition, ReducerRegistry};
 use nexum_subscription::{Query, SubscriptionRegistry, SubscriptionUpdate};
 use nexum_table::TableStore;
@@ -29,10 +29,18 @@ fn world() -> TableStore {
     store
 }
 
-fn zone10_subscription(store: &TableStore) -> (SubscriptionRegistry, nexum_subscription::SubscriptionId) {
+fn zone10_subscription(
+    store: &TableStore,
+) -> (SubscriptionRegistry, nexum_subscription::SubscriptionId) {
     let mut registry = SubscriptionRegistry::new();
     let sub = registry
-        .subscribe(store, Query::builder("players").predicate_eq("zone_id", 10u64).build().unwrap())
+        .subscribe(
+            store,
+            Query::builder("players")
+                .predicate_eq("zone_id", 10u64)
+                .build()
+                .unwrap(),
+        )
         .unwrap();
     registry.drain(sub).unwrap(); // consume the Initial snapshot
     (registry, sub)
@@ -78,7 +86,8 @@ fn native_reducer_changes_reach_subscriptions() {
         SubscriptionUpdate::Insert { seq, row } => {
             assert_eq!(*seq, report.seq());
             assert_eq!(
-                row.row().get_named(store.table("players").unwrap().schema(), "health"),
+                row.row()
+                    .get_named(store.table("players").unwrap().schema(), "health"),
                 Some(&Value::I32(100))
             );
         }
@@ -101,7 +110,11 @@ fn rejected_native_reducer_produces_no_deltas() {
         )
         .unwrap();
 
-    assert!(reducers.invoke(&mut store, "reject", &ReducerArgs::new()).is_err());
+    assert!(
+        reducers
+            .invoke(&mut store, "reject", &ReducerArgs::new())
+            .is_err()
+    );
     // The rejection aborted the transaction: no committed changes, so no
     // deltas and no sequence advancement.
     assert!(registry.drain(sub).unwrap().is_empty());
@@ -181,7 +194,9 @@ fn wasm_reducer_changes_reach_subscriptions() {
     )
     .unwrap();
 
-    let result = wasm.invoke(&mut store, "spawn", &ReducerArgs::new()).unwrap();
+    let result = wasm
+        .invoke(&mut store, "spawn", &ReducerArgs::new())
+        .unwrap();
     let report = registry.apply_changes(&store, result.changes());
     assert_eq!(report.affected(), &[sub]);
 
@@ -192,7 +207,8 @@ fn wasm_reducer_changes_reach_subscriptions() {
             assert_eq!(*seq, report.seq());
             assert_eq!(row.row_id().as_u64(), 0);
             assert_eq!(
-                row.row().get_named(store.table("players").unwrap().schema(), "zone_id"),
+                row.row()
+                    .get_named(store.table("players").unwrap().schema(), "zone_id"),
                 Some(&Value::U64(10))
             );
         }
@@ -206,14 +222,13 @@ fn trapped_wasm_reducer_produces_no_deltas() {
     let (mut registry, sub) = zone10_subscription(&store);
 
     let mut wasm = WasmModuleRegistry::new(WasmLimits::default()).unwrap();
-    wasm.register(
-        "explode",
-        1,
-        wasm_module(r#"    (unreachable)"#),
-    )
-    .unwrap();
+    wasm.register("explode", 1, wasm_module(r#"    (unreachable)"#))
+        .unwrap();
 
-    assert!(wasm.invoke(&mut store, "explode", &ReducerArgs::new()).is_err());
+    assert!(
+        wasm.invoke(&mut store, "explode", &ReducerArgs::new())
+            .is_err()
+    );
     // The trap aborted the transaction: no changes ever reached the commit
     // boundary, so the subscription saw nothing and no sequence advanced.
     assert!(registry.drain(sub).unwrap().is_empty());

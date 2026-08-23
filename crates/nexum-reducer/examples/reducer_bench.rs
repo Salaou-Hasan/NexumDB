@@ -25,7 +25,7 @@ use std::time::Instant;
 
 use nexum_core::{ColumnType, ReducerId, TableSchema};
 use nexum_reducer::{ReducerArgs, ReducerDefinition, ReducerRegistry};
-use nexum_table::{row, TableStore};
+use nexum_table::{TableStore, row};
 
 fn player_schema(name: &str) -> TableSchema {
     TableSchema::builder(name)
@@ -89,7 +89,9 @@ fn main() {
             )
             .unwrap();
         bench("empty reducer", n, || {
-            let result = registry.invoke(&mut store, "empty", &ReducerArgs::new()).unwrap();
+            let result = registry
+                .invoke(&mut store, "empty", &ReducerArgs::new())
+                .unwrap();
             black_box(result);
         });
     }
@@ -116,7 +118,9 @@ fn main() {
             )
             .unwrap();
         bench("read-only reducer (scan 10 rows)", n, || {
-            let result = registry.invoke(&mut store, "read", &ReducerArgs::new()).unwrap();
+            let result = registry
+                .invoke(&mut store, "read", &ReducerArgs::new())
+                .unwrap();
             black_box(result);
         });
     }
@@ -129,10 +133,8 @@ fn main() {
             .register(
                 ReducerDefinition::new(ReducerId::from_u64(0), "spawn", |ctx, args| {
                     let id = args.require_u64("id")?;
-                    let row_id = ctx.insert(
-                        "players",
-                        row![id, 10u64, 100i32, (id as u32) % 1_000_000],
-                    )?;
+                    let row_id =
+                        ctx.insert("players", row![id, 10u64, 100i32, (id as u32) % 1_000_000])?;
                     Ok(nexum_core::Value::U64(row_id.as_u64()))
                 })
                 .unwrap(),
@@ -158,10 +160,7 @@ fn main() {
                     let base = args.require_u64("base")?;
                     for offset in 1..=10u64 {
                         let id = base + offset;
-                        ctx.insert(
-                            "players",
-                            row![id, 10u64, 100i32, (id as u32) % 1_000_000],
-                        )?;
+                        ctx.insert("players", row![id, 10u64, 100i32, (id as u32) % 1_000_000])?;
                     }
                     Ok(nexum_core::Value::U64(0))
                 })
@@ -186,10 +185,8 @@ fn main() {
             .register(
                 ReducerDefinition::new(ReducerId::from_u64(0), "trade", |ctx, args| {
                     let id = args.require_u64("id")?;
-                    let player = ctx.insert(
-                        "players",
-                        row![id, 10u64, 100i32, (id as u32) % 1_000_000],
-                    )?;
+                    let player =
+                        ctx.insert("players", row![id, 10u64, 100i32, (id as u32) % 1_000_000])?;
                     ctx.update(
                         "players",
                         player,
@@ -220,10 +217,8 @@ fn main() {
             .register(
                 ReducerDefinition::new(ReducerId::from_u64(0), "announce", |ctx, args| {
                     let id = args.require_u64("id")?;
-                    let row_id = ctx.insert(
-                        "players",
-                        row![id, 10u64, 100i32, (id as u32) % 1_000_000],
-                    )?;
+                    let row_id =
+                        ctx.insert("players", row![id, 10u64, 100i32, (id as u32) % 1_000_000])?;
                     ctx.emit("joined", id)?;
                     ctx.emit("ready", id)?;
                     Ok(nexum_core::Value::U64(row_id.as_u64()))
@@ -263,7 +258,9 @@ fn main() {
             )
             .unwrap();
         bench("aborting reducer (unique-key violation)", n, || {
-            let err = registry.invoke(&mut store, "steal", &ReducerArgs::new()).unwrap_err();
+            let err = registry
+                .invoke(&mut store, "steal", &ReducerArgs::new())
+                .unwrap_err();
             black_box(err);
         });
     }

@@ -20,19 +20,17 @@
 
 use std::collections::BTreeMap;
 
-use nexum_core::{binary::get_value, Error, Result, Value};
-use nexum_reducer::{
-    finish_invocation, ReducerArgs, ReducerContext, ReducerEvent, ReducerResult,
-};
+use nexum_core::{Error, Result, Value, binary::get_value};
+use nexum_reducer::{ReducerArgs, ReducerContext, ReducerEvent, ReducerResult, finish_invocation};
 use nexum_table::TableStore;
 use nexum_tx::Transaction;
 use wasmi::core::TrapCode;
-use wasmi::{Config, Engine, EnforcedLimits, Linker, StackLimits, Store};
+use wasmi::{Config, EnforcedLimits, Engine, Linker, StackLimits, Store};
 
-use crate::abi::{encode_args, RET_REJECT};
-use crate::host::{define_host, HostState};
+use crate::abi::{RET_REJECT, encode_args};
+use crate::host::{HostState, define_host};
 use crate::limits::WasmLimits;
-use crate::module::{WasmReducerModule, ENTRY_NAME};
+use crate::module::{ENTRY_NAME, WasmReducerModule};
 
 /// A registry of validated WASM reducer modules.
 #[derive(Debug)]
@@ -66,14 +64,20 @@ impl WasmModuleRegistry {
 
     /// Validates and registers a module, or `AlreadyExists` if the name is
     /// taken. The compiled module is cached for reuse.
-    pub fn register(&mut self, name: impl Into<String>, version: u64, bytecode: Vec<u8>) -> Result<()> {
+    pub fn register(
+        &mut self,
+        name: impl Into<String>,
+        version: u64,
+        bytecode: Vec<u8>,
+    ) -> Result<()> {
         let name = name.into();
         if self.modules.contains_key(&name) {
             return Err(Error::already_exists(format!(
                 "wasm module '{name}' is already registered"
             )));
         }
-        let module = WasmReducerModule::new(&self.engine, name.clone(), version, bytecode, &self.limits)?;
+        let module =
+            WasmReducerModule::new(&self.engine, name.clone(), version, bytecode, &self.limits)?;
         self.modules.insert(name, module);
         Ok(())
     }
@@ -123,9 +127,9 @@ impl WasmModuleRegistry {
         name: &str,
         args: &ReducerArgs,
     ) -> Result<ReducerResult> {
-        let module = self.lookup(name).ok_or_else(|| {
-            Error::not_found(format!("wasm module '{name}' is not registered"))
-        })?;
+        let module = self
+            .lookup(name)
+            .ok_or_else(|| Error::not_found(format!("wasm module '{name}' is not registered")))?;
 
         let mut tx = Transaction::begin(store);
         let (events, outcome) = {
@@ -151,12 +155,19 @@ impl WasmModuleRegistry {
         name: &str,
         args: &ReducerArgs,
     ) -> Result<(Value, Vec<ReducerEvent>, WasmStageTimes)> {
-        let module = self.lookup(name).ok_or_else(|| {
-            Error::not_found(format!("wasm module '{name}' is not registered"))
-        })?;
+        let module = self
+            .lookup(name)
+            .ok_or_else(|| Error::not_found(format!("wasm module '{name}' is not registered")))?;
         let mut ctx = ReducerContext::new(tx, store);
         let mut times = WasmStageTimes::default();
-        let outcome = run_module(&self.engine, module, &mut ctx, &self.limits, args, Some(&mut times));
+        let outcome = run_module(
+            &self.engine,
+            module,
+            &mut ctx,
+            &self.limits,
+            args,
+            Some(&mut times),
+        );
         let events = ctx.take_events();
         match outcome {
             Ok(value) => Ok((value, events, times)),
@@ -186,9 +197,9 @@ impl WasmModuleRegistry {
         name: &str,
         args: &ReducerArgs,
     ) -> Result<(Value, Vec<ReducerEvent>)> {
-        let module = self.lookup(name).ok_or_else(|| {
-            Error::not_found(format!("wasm module '{name}' is not registered"))
-        })?;
+        let module = self
+            .lookup(name)
+            .ok_or_else(|| Error::not_found(format!("wasm module '{name}' is not registered")))?;
         let mut ctx = ReducerContext::new(tx, store);
         let outcome = run_module(&self.engine, module, &mut ctx, &self.limits, args, None);
         let events = ctx.take_events();
@@ -280,7 +291,11 @@ fn run_module(
     }
     memory
         .write(&mut store, module.in_ptr() as usize, &args_bytes)
-        .map_err(|e| Error::internal(format!("cannot write reducer arguments into guest memory: {e}")))?;
+        .map_err(|e| {
+            Error::internal(format!(
+                "cannot write reducer arguments into guest memory: {e}"
+            ))
+        })?;
 
     let run = instance
         .get_typed_func::<(), i32>(&store, ENTRY_NAME)

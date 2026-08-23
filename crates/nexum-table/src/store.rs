@@ -62,9 +62,7 @@ impl TableStore {
     /// Returns [`Error::not_found`] if no such table exists.
     pub fn drop_table(&mut self, name: &str) -> Result<()> {
         if self.tables.remove(name).is_none() {
-            return Err(Error::not_found(format!(
-                "table '{name}' does not exist"
-            )));
+            return Err(Error::not_found(format!("table '{name}' does not exist")));
         }
         Ok(())
     }
@@ -74,9 +72,10 @@ impl TableStore {
     ///
     /// Returns [`Error::not_found`] if no such table exists.
     pub fn add_index(&mut self, table: &str, def: nexum_core::IndexDef) -> Result<()> {
-        let table = self.tables.get_mut(table).ok_or_else(|| {
-            Error::not_found(format!("table '{table}' does not exist"))
-        })?;
+        let table = self
+            .tables
+            .get_mut(table)
+            .ok_or_else(|| Error::not_found(format!("table '{table}' does not exist")))?;
         table.add_index(def)
     }
 
@@ -120,7 +119,9 @@ impl TableStore {
 
     /// Iterates over all tables as `(name, table)` pairs, sorted by name.
     pub fn tables(&self) -> impl Iterator<Item = (&str, &Table)> {
-        self.tables.iter().map(|(name, table)| (name.as_str(), table))
+        self.tables
+            .iter()
+            .map(|(name, table)| (name.as_str(), table))
     }
 
     /// Drains the committed changes of every table, in deterministic order
@@ -156,8 +157,7 @@ impl TableStore {
     /// Captures every table's authoritative state for a snapshot, ordered by
     /// `TableId` (deterministic; id order is creation order).
     pub fn snapshot_tables(&self) -> Vec<TableState> {
-        let mut states: Vec<TableState> =
-            self.tables.values().map(Table::table_state).collect();
+        let mut states: Vec<TableState> = self.tables.values().map(Table::table_state).collect();
         states.sort_by_key(TableState::id);
         states
     }
@@ -176,9 +176,7 @@ impl TableStore {
         next_transaction_id: u64,
     ) -> Result<()> {
         if !self.tables.is_empty() {
-            return Err(Error::invalid_argument(
-                "restore requires an empty store",
-            ));
+            return Err(Error::invalid_argument("restore requires an empty store"));
         }
         let mut seen_ids = HashSet::new();
         let mut seen_names = HashSet::new();
@@ -339,7 +337,11 @@ mod tests {
             .unwrap()
             .update(alice, row![1u64, 30u64, 50i32, 5u32])
             .unwrap();
-        store.table_mut("items").unwrap().insert(row![1u64]).unwrap();
+        store
+            .table_mut("items")
+            .unwrap()
+            .insert(row![1u64])
+            .unwrap();
 
         // Capture authoritative state + counters.
         let states = store.snapshot_tables();
@@ -359,15 +361,33 @@ mod tests {
 
         // Rows, versions, and epochs are exact.
         let players = restored.table("players").unwrap();
-        assert_eq!(players.version_of(alice), Some(nexum_core::Version::from_u64(1)));
+        assert_eq!(
+            players.version_of(alice),
+            Some(nexum_core::Version::from_u64(1))
+        );
         assert_eq!(players.version_of(bob), Some(nexum_core::Version::ZERO));
         assert_eq!(players.epoch(), nexum_core::Version::from_u64(3));
 
         // Indexes were rebuilt from the restored rows, not serialized.
-        assert_eq!(players.lookup("by_zone", &[Value::U64(30)]).unwrap(), vec![alice]);
-        assert_eq!(players.lookup("by_zone", &[Value::U64(10)]).unwrap(), vec![bob]);
-        assert_eq!(players.lookup("by_level", &[Value::U32(6)]).unwrap(), vec![bob]);
-        assert!(restored.table("items").unwrap().get(nexum_core::RowId::from_u64(0)).is_some());
+        assert_eq!(
+            players.lookup("by_zone", &[Value::U64(30)]).unwrap(),
+            vec![alice]
+        );
+        assert_eq!(
+            players.lookup("by_zone", &[Value::U64(10)]).unwrap(),
+            vec![bob]
+        );
+        assert_eq!(
+            players.lookup("by_level", &[Value::U32(6)]).unwrap(),
+            vec![bob]
+        );
+        assert!(
+            restored
+                .table("items")
+                .unwrap()
+                .get(nexum_core::RowId::from_u64(0))
+                .is_some()
+        );
 
         // RowId allocation continues from the restored counter.
         let carol = restored
@@ -382,9 +402,7 @@ mod tests {
     fn restore_requires_an_empty_store() {
         let mut store = TableStore::new();
         store.create_table(schema("players")).unwrap();
-        let err = store
-            .restore(Vec::new(), 0, 0)
-            .unwrap_err();
+        let err = store.restore(Vec::new(), 0, 0).unwrap_err();
         assert!(matches!(err, Error::InvalidArgument(_)));
     }
 
@@ -394,9 +412,17 @@ mod tests {
         store.create_table(schema("alpha")).unwrap();
         store.create_table(schema("beta")).unwrap();
 
-        store.table_mut("alpha").unwrap().insert(row![1u64]).unwrap();
+        store
+            .table_mut("alpha")
+            .unwrap()
+            .insert(row![1u64])
+            .unwrap();
         store.table_mut("beta").unwrap().insert(row![2u64]).unwrap();
-        store.table_mut("alpha").unwrap().insert(row![3u64]).unwrap();
+        store
+            .table_mut("alpha")
+            .unwrap()
+            .insert(row![3u64])
+            .unwrap();
 
         let changes = store.drain_changes();
         assert_eq!(changes.len(), 3);

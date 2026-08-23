@@ -15,9 +15,9 @@
 
 use std::collections::HashMap;
 
+use nexum_core::Row;
 use nexum_core::schema::TableSchema;
 use nexum_core::{Error, Result, RowId, TableId, Value, Version};
-use nexum_core::Row;
 use nexum_storage::{Change, StorageTable, TableState};
 
 use crate::index::Index;
@@ -180,7 +180,10 @@ impl Table {
             index.commit_insert(key, row_id);
         }
         for (name, key) in secondary_keys {
-            let index = self.indexes.get_mut(&name).expect("key computed from own indexes");
+            let index = self
+                .indexes
+                .get_mut(&name)
+                .expect("key computed from own indexes");
             index.commit_insert(key, row_id);
         }
 
@@ -322,7 +325,10 @@ impl Table {
             .map(|(name, index)| (name.clone(), index.key_of(&old_row), index.key_of(&row)))
             .collect();
         for (name, old, new) in &secondary_keys {
-            let index = self.indexes.get(name).expect("key computed from own indexes");
+            let index = self
+                .indexes
+                .get(name)
+                .expect("key computed from own indexes");
             index.check_update(old, new, row_id)?;
         }
 
@@ -337,7 +343,10 @@ impl Table {
             index.commit_insert(new, row_id);
         }
         for (name, old, new) in secondary_keys {
-            let index = self.indexes.get_mut(&name).expect("key computed from own indexes");
+            let index = self
+                .indexes
+                .get_mut(&name)
+                .expect("key computed from own indexes");
             if old != new {
                 index.commit_remove(&old, row_id);
                 index.commit_insert(new, row_id);
@@ -369,7 +378,10 @@ impl Table {
             .map(|(name, index)| (name.clone(), index.key_of(&row)))
             .collect();
         for (name, key) in secondary_keys {
-            let index = self.indexes.get_mut(&name).expect("key computed from own indexes");
+            let index = self
+                .indexes
+                .get_mut(&name)
+                .expect("key computed from own indexes");
             index.commit_remove(&key, row_id);
         }
 
@@ -379,7 +391,9 @@ impl Table {
     /// Iterates over all rows in ascending `RowId` order — deterministic,
     /// which the simulation phase requires.
     pub fn scan(&self) -> impl Iterator<Item = (RowId, &Row)> {
-        self.storage.scan().map(|(row_id, stored)| (row_id, stored.row()))
+        self.storage
+            .scan()
+            .map(|(row_id, stored)| (row_id, stored.row()))
     }
 
     /// Peeks at the buffered changes since the last drain, in commit order.
@@ -521,8 +535,8 @@ impl Table {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nexum_core::row;
     use nexum_core::ColumnType;
+    use nexum_core::row;
 
     fn player_table() -> Table {
         let schema = TableSchema::builder("players")
@@ -553,7 +567,10 @@ mod tests {
         let mut table = player_table();
         let row_id = table.insert(row![1u64, 10u64, 100i32, 5u32]).unwrap();
         assert_eq!(
-            table.get(row_id).unwrap().get_named(table.schema(), "health"),
+            table
+                .get(row_id)
+                .unwrap()
+                .get_named(table.schema(), "health"),
             Some(&Value::I32(100))
         );
         assert!(table.get(RowId::from_u64(99)).is_none());
@@ -564,7 +581,9 @@ mod tests {
         let mut table = player_table();
         let row_id = table.insert(row![1u64, 10u64, 100i32, 5u32]).unwrap();
         assert_eq!(table.version_of(row_id), Some(Version::ZERO));
-        table.update(row_id, row![1u64, 10u64, 50i32, 5u32]).unwrap();
+        table
+            .update(row_id, row![1u64, 10u64, 50i32, 5u32])
+            .unwrap();
         assert_eq!(table.version_of(row_id), Some(Version::from_u64(1)));
         table.delete(row_id).unwrap();
         assert_eq!(table.version_of(row_id), None);
@@ -577,10 +596,14 @@ mod tests {
         let row_id = table.insert(row![1u64, 10u64, 100i32, 5u32]).unwrap();
         assert_eq!(table.epoch(), Version::from_u64(1));
         // No-op update (identical row): no epoch advance.
-        table.update(row_id, row![1u64, 10u64, 100i32, 5u32]).unwrap();
+        table
+            .update(row_id, row![1u64, 10u64, 100i32, 5u32])
+            .unwrap();
         assert_eq!(table.epoch(), Version::from_u64(1));
         // Effective update and delete advance it.
-        table.update(row_id, row![1u64, 10u64, 50i32, 5u32]).unwrap();
+        table
+            .update(row_id, row![1u64, 10u64, 50i32, 5u32])
+            .unwrap();
         assert_eq!(table.epoch(), Version::from_u64(2));
         table.delete(row_id).unwrap();
         assert_eq!(table.epoch(), Version::from_u64(3));
@@ -626,8 +649,16 @@ mod tests {
             .get_by_primary_key(&[Value::U64(7)])
             .unwrap()
             .expect("row exists");
-        assert_eq!(found.get_named(table.schema(), "zone_id"), Some(&Value::U64(10)));
-        assert!(table.get_by_primary_key(&[Value::U64(99)]).unwrap().is_none());
+        assert_eq!(
+            found.get_named(table.schema(), "zone_id"),
+            Some(&Value::U64(10))
+        );
+        assert!(
+            table
+                .get_by_primary_key(&[Value::U64(99)])
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -648,14 +679,27 @@ mod tests {
         let bob = table.insert(row![2u64, 10u64, 90i32, 6u32]).unwrap();
         let carol = table.insert(row![3u64, 20u64, 80i32, 7u32]).unwrap();
 
-        assert_eq!(table.lookup("by_zone", &[Value::U64(10)]).unwrap(), vec![alice, bob]);
-        assert_eq!(table.lookup("by_zone", &[Value::U64(20)]).unwrap(), vec![carol]);
-        assert!(table.lookup("by_zone", &[Value::U64(30)]).unwrap().is_empty());
+        assert_eq!(
+            table.lookup("by_zone", &[Value::U64(10)]).unwrap(),
+            vec![alice, bob]
+        );
+        assert_eq!(
+            table.lookup("by_zone", &[Value::U64(20)]).unwrap(),
+            vec![carol]
+        );
+        assert!(
+            table
+                .lookup("by_zone", &[Value::U64(30)])
+                .unwrap()
+                .is_empty()
+        );
 
         let err = table.lookup("missing", &[Value::U64(10)]).unwrap_err();
         assert!(matches!(err, Error::NotFound(_)));
 
-        let err = table.lookup("by_zone", &[Value::U64(10), Value::U64(11)]).unwrap_err();
+        let err = table
+            .lookup("by_zone", &[Value::U64(10), Value::U64(11)])
+            .unwrap_err();
         assert!(matches!(err, Error::InvalidArgument(_)));
     }
 
@@ -669,11 +713,22 @@ mod tests {
             .unwrap();
 
         let updated = table.get(row_id).unwrap();
-        assert_eq!(updated.get_named(table.schema(), "health"), Some(&Value::I32(50)));
+        assert_eq!(
+            updated.get_named(table.schema(), "health"),
+            Some(&Value::I32(50))
+        );
 
         // Index keys moved: no longer in zone 10, now in zone 30.
-        assert!(table.lookup("by_zone", &[Value::U64(10)]).unwrap().is_empty());
-        assert_eq!(table.lookup("by_zone", &[Value::U64(30)]).unwrap(), vec![row_id]);
+        assert!(
+            table
+                .lookup("by_zone", &[Value::U64(10)])
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            table.lookup("by_zone", &[Value::U64(30)]).unwrap(),
+            vec![row_id]
+        );
     }
 
     #[test]
@@ -683,12 +738,17 @@ mod tests {
         let second = table.insert(row![2u64, 10u64, 90i32, 6u32]).unwrap();
 
         // Move second row's level onto first row's level 5.
-        let err = table.update(second, row![2u64, 10u64, 90i32, 5u32]).unwrap_err();
+        let err = table
+            .update(second, row![2u64, 10u64, 90i32, 5u32])
+            .unwrap_err();
         assert!(matches!(err, Error::AlreadyExists(_)));
 
         // Table unchanged.
         assert_eq!(
-            table.get(second).unwrap().get_named(table.schema(), "level"),
+            table
+                .get(second)
+                .unwrap()
+                .get_named(table.schema(), "level"),
             Some(&Value::U32(6))
         );
 
@@ -700,7 +760,9 @@ mod tests {
     #[test]
     fn update_missing_row_errors() {
         let mut table = player_table();
-        let err = table.update(RowId::from_u64(9), row![1u64, 10u64, 100i32, 5u32]).unwrap_err();
+        let err = table
+            .update(RowId::from_u64(9), row![1u64, 10u64, 100i32, 5u32])
+            .unwrap_err();
         assert!(matches!(err, Error::NotFound(_)));
     }
 
@@ -711,8 +773,18 @@ mod tests {
         table.delete(row_id).unwrap();
 
         assert!(table.get(row_id).is_none());
-        assert!(table.lookup("by_zone", &[Value::U64(10)]).unwrap().is_empty());
-        assert!(table.get_by_primary_key(&[Value::U64(1)]).unwrap().is_none());
+        assert!(
+            table
+                .lookup("by_zone", &[Value::U64(10)])
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            table
+                .get_by_primary_key(&[Value::U64(1)])
+                .unwrap()
+                .is_none()
+        );
         assert!(table.is_empty());
 
         let err = table.delete(row_id).unwrap_err();
@@ -727,7 +799,10 @@ mod tests {
         table.insert(row![2u64, 20u64, 100i32, 7u32]).unwrap();
 
         let ids: Vec<RowId> = table.scan().map(|(id, _)| id).collect();
-        assert_eq!(ids, vec![RowId::from_u64(0), RowId::from_u64(1), RowId::from_u64(2)]);
+        assert_eq!(
+            ids,
+            vec![RowId::from_u64(0), RowId::from_u64(1), RowId::from_u64(2)]
+        );
     }
 
     #[test]
@@ -761,7 +836,12 @@ mod tests {
             table.lookup_unique("primary", &[Value::U64(1)]).unwrap(),
             vec![RowId::from_u64(0)]
         );
-        assert!(table.lookup_unique("primary", &[Value::U64(99)]).unwrap().is_empty());
+        assert!(
+            table
+                .lookup_unique("primary", &[Value::U64(99)])
+                .unwrap()
+                .is_empty()
+        );
 
         // Unique secondary.
         assert_eq!(
@@ -771,15 +851,21 @@ mod tests {
 
         // Errors: unknown index, non-unique index, wrong key type.
         assert!(matches!(
-            table.lookup_unique("missing", &[Value::U64(1)]).unwrap_err(),
+            table
+                .lookup_unique("missing", &[Value::U64(1)])
+                .unwrap_err(),
             Error::NotFound(_)
         ));
         assert!(matches!(
-            table.lookup_unique("by_zone", &[Value::U64(10)]).unwrap_err(),
+            table
+                .lookup_unique("by_zone", &[Value::U64(10)])
+                .unwrap_err(),
             Error::InvalidArgument(_)
         ));
         assert!(matches!(
-            table.lookup_unique("by_level", &[Value::U64(1)]).unwrap_err(),
+            table
+                .lookup_unique("by_level", &[Value::U64(1)])
+                .unwrap_err(),
             Error::InvalidArgument(_)
         ));
     }
@@ -796,7 +882,9 @@ mod tests {
     fn changes_flow_through_the_table() {
         let mut table = player_table();
         let row_id = table.insert(row![1u64, 10u64, 100i32, 5u32]).unwrap();
-        table.update(row_id, row![1u64, 10u64, 50i32, 5u32]).unwrap();
+        table
+            .update(row_id, row![1u64, 10u64, 50i32, 5u32])
+            .unwrap();
         table.delete(row_id).unwrap();
 
         let changes = table.drain_changes();
@@ -830,7 +918,10 @@ mod tests {
             .get_by_primary_key(&[Value::U64(1), Value::U64(20)])
             .unwrap()
             .expect("composite key row exists");
-        assert_eq!(found.get_named(table.schema(), "score"), Some(&Value::I32(90)));
+        assert_eq!(
+            found.get_named(table.schema(), "score"),
+            Some(&Value::I32(90))
+        );
 
         // Duplicate composite key rejected.
         let err = table.insert(row![1u64, 10u64, 5i32]).unwrap_err();
@@ -856,21 +947,33 @@ mod tests {
 
         // Change the primary key value: identity (RowId) is unchanged, but the
         // PK index entry must move.
-        table.update(row_id, row![7u64, 10u64, 100i32, 5u32]).unwrap();
+        table
+            .update(row_id, row![7u64, 10u64, 100i32, 5u32])
+            .unwrap();
 
-        assert!(table.get_by_primary_key(&[Value::U64(1)]).unwrap().is_none());
+        assert!(
+            table
+                .get_by_primary_key(&[Value::U64(1)])
+                .unwrap()
+                .is_none()
+        );
         let found = table
             .get_by_primary_key(&[Value::U64(7)])
             .unwrap()
             .expect("row findable by new pk");
-        assert_eq!(found.get_named(table.schema(), "health"), Some(&Value::I32(100)));
+        assert_eq!(
+            found.get_named(table.schema(), "health"),
+            Some(&Value::I32(100))
+        );
     }
 
     #[test]
     fn lookup_rejects_wrong_typed_key() {
         let mut table = player_table();
         table.insert(row![1u64, 10u64, 100i32, 5u32]).unwrap();
-        let err = table.lookup("by_zone", &[Value::String("nope".into())]).unwrap_err();
+        let err = table
+            .lookup("by_zone", &[Value::String("nope".into())])
+            .unwrap_err();
         assert!(matches!(err, Error::InvalidArgument(_)));
     }
 
@@ -914,8 +1017,18 @@ mod tests {
         // Derived indexes must agree.
         assert_eq!(table.lookup("by_zone", &[Value::U64(10)]).unwrap(), zone10);
         assert_eq!(table.lookup("by_zone", &[Value::U64(30)]).unwrap(), zone30);
-        assert!(table.get_by_primary_key(&[Value::U64(2)]).unwrap().is_none());
-        assert!(table.get_by_primary_key(&[Value::U64(1)]).unwrap().is_some());
+        assert!(
+            table
+                .get_by_primary_key(&[Value::U64(2)])
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            table
+                .get_by_primary_key(&[Value::U64(1)])
+                .unwrap()
+                .is_some()
+        );
 
         // Row count matches scan count.
         assert_eq!(table.len(), table.scan().count());
@@ -959,7 +1072,12 @@ mod tests {
         assert_eq!(table.lookup("by_zone", &[Value::U64(10)]).unwrap(), vec![a]);
         assert_eq!(table.lookup("by_zone", &[Value::U64(30)]).unwrap(), vec![c]);
         table.delete(a).unwrap();
-        assert!(table.lookup("by_zone", &[Value::U64(10)]).unwrap().is_empty());
+        assert!(
+            table
+                .lookup("by_zone", &[Value::U64(10)])
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(table.lookup("by_zone", &[Value::U64(20)]).unwrap(), vec![b]);
         assert_eq!(table.len(), 2);
     }
@@ -969,11 +1087,25 @@ mod tests {
         let mut table = bare_table();
         table.insert(row![1u64, 10u64, 100i32, 5u32]).unwrap();
 
-        assert!(table.add_index(nexum_core::IndexDef::new("primary", &["id"], true)).is_err());
-        assert!(table.add_index(nexum_core::IndexDef::new("", &["zone_id"], false)).is_err());
-        table.add_index(nexum_core::IndexDef::new("by_zone", &["zone_id"], false)).unwrap();
+        assert!(
+            table
+                .add_index(nexum_core::IndexDef::new("primary", &["id"], true))
+                .is_err()
+        );
+        assert!(
+            table
+                .add_index(nexum_core::IndexDef::new("", &["zone_id"], false))
+                .is_err()
+        );
+        table
+            .add_index(nexum_core::IndexDef::new("by_zone", &["zone_id"], false))
+            .unwrap();
         // Duplicate name: rejected, and the existing index is untouched.
-        assert!(table.add_index(nexum_core::IndexDef::new("by_zone", &["level"], false)).is_err());
+        assert!(
+            table
+                .add_index(nexum_core::IndexDef::new("by_zone", &["level"], false))
+                .is_err()
+        );
         assert_eq!(
             table.lookup("by_zone", &[Value::U64(10)]).unwrap(),
             vec![RowId::from_u64(0)]
@@ -987,13 +1119,19 @@ mod tests {
         table.insert(row![1u64, 10u64, 100i32, 5u32]).unwrap();
         table.insert(row![2u64, 10u64, 90i32, 6u32]).unwrap();
 
-        assert!(table.add_index(nexum_core::IndexDef::new("by_zone", &["zone_id"], true)).is_err());
+        assert!(
+            table
+                .add_index(nexum_core::IndexDef::new("by_zone", &["zone_id"], true))
+                .is_err()
+        );
         // The failed add left no index behind.
         assert!(table.lookup("by_zone", &[Value::U64(10)]).is_err());
         assert_eq!(table.len(), 2);
 
         // The same columns work as a non-unique index.
-        table.add_index(nexum_core::IndexDef::new("by_zone", &["zone_id"], false)).unwrap();
+        table
+            .add_index(nexum_core::IndexDef::new("by_zone", &["zone_id"], false))
+            .unwrap();
         assert_eq!(table.lookup("by_zone", &[Value::U64(10)]).unwrap().len(), 2);
     }
 }

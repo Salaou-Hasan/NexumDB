@@ -17,9 +17,9 @@
 
 use std::collections::BTreeMap;
 
+use nexum_core::Row;
 use nexum_core::schema::TableSchema;
 use nexum_core::{Error, Result, RowId, TableId, Version};
-use nexum_core::Row;
 
 use crate::change::Change;
 use crate::snapshot::TableState;
@@ -129,14 +129,9 @@ impl StorageTable {
         self.next_row_id += 1;
 
         let version = Version::ZERO;
-        self.changes.push(Change::insert(self.id, row_id, row.clone(), version));
-        self.rows.insert(
-            row_id,
-            StoredRow {
-                row,
-                version,
-            },
-        );
+        self.changes
+            .push(Change::insert(self.id, row_id, row.clone(), version));
+        self.rows.insert(row_id, StoredRow { row, version });
         self.epoch = self.epoch.next();
 
         Ok(row_id)
@@ -219,12 +214,8 @@ impl StorageTable {
 
         self.epoch = self.epoch.next();
 
-        self.changes.push(Change::delete(
-            self.id,
-            row_id,
-            stored.row,
-            stored.version,
-        ));
+        self.changes
+            .push(Change::delete(self.id, row_id, stored.row, stored.version));
 
         Ok(())
     }
@@ -337,7 +328,10 @@ mod tests {
         let mut t = table();
         let id = t.insert(row![1u64, 10u64, 100i32]).unwrap();
         let stored = t.get(id).expect("row exists");
-        assert_eq!(stored.row().get_named(t.schema(), "health"), Some(&nexum_core::Value::I32(100)));
+        assert_eq!(
+            stored.row().get_named(t.schema(), "health"),
+            Some(&nexum_core::Value::I32(100))
+        );
         assert_eq!(stored.version(), Version::ZERO);
         assert!(t.get(RowId::from_u64(99)).is_none());
     }
@@ -388,13 +382,18 @@ mod tests {
         assert_eq!(t.version_of(id), Some(Version::from_u64(1)));
         t.update(id, row![1u64, 10u64, 25i32]).unwrap();
         assert_eq!(t.version_of(id), Some(Version::from_u64(2)));
-        assert_eq!(t.get_row(id).unwrap().get_named(t.schema(), "health"), Some(&nexum_core::Value::I32(25)));
+        assert_eq!(
+            t.get_row(id).unwrap().get_named(t.schema(), "health"),
+            Some(&nexum_core::Value::I32(25))
+        );
     }
 
     #[test]
     fn update_missing_row_errors_and_records_nothing() {
         let mut t = table();
-        let err = t.update(RowId::from_u64(9), row![1u64, 10u64, 100i32]).unwrap_err();
+        let err = t
+            .update(RowId::from_u64(9), row![1u64, 10u64, 100i32])
+            .unwrap_err();
         assert!(matches!(err, Error::NotFound(_)));
         assert!(t.changes().is_empty());
     }
@@ -461,7 +460,10 @@ mod tests {
         t.insert(row![1u64, 10u64, 100i32]).unwrap();
         t.insert(row![2u64, 20u64, 100i32]).unwrap();
         let ids: Vec<RowId> = t.scan().map(|(id, _)| id).collect();
-        assert_eq!(ids, vec![RowId::from_u64(0), RowId::from_u64(1), RowId::from_u64(2)]);
+        assert_eq!(
+            ids,
+            vec![RowId::from_u64(0), RowId::from_u64(1), RowId::from_u64(2)]
+        );
     }
 
     #[test]
@@ -470,7 +472,9 @@ mod tests {
         let id = t.insert(row![1u64, 10u64, 100i32]).unwrap();
         let before_version = t.version_of(id).unwrap();
 
-        let err = t.update(id, row![1u64, 10u64, "oops".to_string()]).unwrap_err();
+        let err = t
+            .update(id, row![1u64, 10u64, "oops".to_string()])
+            .unwrap_err();
         assert!(matches!(err, Error::InvalidArgument(_)));
 
         assert_eq!(t.version_of(id), Some(before_version));

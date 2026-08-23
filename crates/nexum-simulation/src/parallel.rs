@@ -30,7 +30,7 @@ use nexum_table::TableStore;
 use nexum_tx::Transaction;
 use nexum_wasm::WasmModuleRegistry;
 
-use crate::context::{append_events, SimulationContext};
+use crate::context::{SimulationContext, append_events};
 use crate::input::InputFrame;
 use crate::partition::PartitionMessage;
 use crate::systems::{SystemAccess, SystemDefinition};
@@ -209,7 +209,10 @@ pub(crate) fn execute_group(
     events: &mut Vec<ReducerEvent>,
     outbound: &mut Vec<PartitionMessage>,
 ) -> Result<()> {
-    debug_assert!(group.systems.len() >= 2, "execute_group is for multi-member groups");
+    debug_assert!(
+        group.systems.len() >= 2,
+        "execute_group is for multi-member groups"
+    );
     let members = group.systems();
     let thread_count = workers.max(1).min(members.len());
     let parent_shared: &Transaction = parent;
@@ -325,7 +328,7 @@ pub(crate) fn execute_group(
             None => {
                 return Err(Error::internal(format!(
                     "parallel group lost the result of system slot {slot}"
-                )))
+                )));
             }
         };
         let fresh: Vec<(TableId, RowId)> = child

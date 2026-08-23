@@ -10,12 +10,8 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use nexum_core::row;
-use nexum_core::{
-    ColumnType, Error, PlayerId, ReducerId, Result, Row, SystemId, Value, WorldId,
-};
-use nexum_game_server::{
-    GameInstanceConfig, GameServer, GameServerConfig,
-};
+use nexum_core::{ColumnType, Error, PlayerId, ReducerId, Result, Row, SystemId, Value, WorldId};
+use nexum_game_server::{GameInstanceConfig, GameServer, GameServerConfig};
 use nexum_network::{NetworkConfig, Principal, TokenAuthenticator};
 use nexum_reducer::{ReducerArgs, ReducerContext, ReducerDefinition};
 use nexum_runtime::{Runtime, RuntimeConfig, WorldFactory};
@@ -74,29 +70,31 @@ fn bump(ctx: &mut ReducerContext, args: &ReducerArgs) -> Result<Value> {
 }
 
 fn game_factory() -> WorldFactory {
-    Box::new(|id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-        ensure_players(&mut store);
-        let mut world = World::new(id, store, sim)?;
-        world
-            .add_system(
-                SystemDefinition::new(SystemId::from_u64(0), "spawner", 0, |ctx, frame| {
-                    for command in frame.commands() {
-                        if command.kind() == "spawn" {
-                            let id = command.payload().and_then(Value::as_u64).unwrap();
-                            ctx.insert("players", row![id, 10u64, 100i32])?;
+    Box::new(
+        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
+            ensure_players(&mut store);
+            let mut world = World::new(id, store, sim)?;
+            world
+                .add_system(
+                    SystemDefinition::new(SystemId::from_u64(0), "spawner", 0, |ctx, frame| {
+                        for command in frame.commands() {
+                            if command.kind() == "spawn" {
+                                let id = command.payload().and_then(Value::as_u64).unwrap();
+                                ctx.insert("players", row![id, 10u64, 100i32])?;
+                            }
                         }
-                    }
-                    Ok(())
-                })
-                .unwrap(),
-            )
-            .unwrap();
-        world
-            .native_mut()
-            .register(ReducerDefinition::new(ReducerId::from_u64(1), "bump", bump).unwrap())
-            .unwrap();
-        Ok(world)
-    })
+                        Ok(())
+                    })
+                    .unwrap(),
+                )
+                .unwrap();
+            world
+                .native_mut()
+                .register(ReducerDefinition::new(ReducerId::from_u64(1), "bump", bump).unwrap())
+                .unwrap();
+            Ok(world)
+        },
+    )
 }
 
 fn auth() -> Arc<TokenAuthenticator> {
@@ -111,7 +109,13 @@ fn server() -> GameServer {
             .with_max_queued_reducer_calls(1 << 20),
     )
     .unwrap();
-    GameServer::new(runtime, NetworkConfig::new(), auth(), GameServerConfig::new()).unwrap()
+    GameServer::new(
+        runtime,
+        NetworkConfig::new(),
+        auth(),
+        GameServerConfig::new(),
+    )
+    .unwrap()
 }
 
 fn main() {
@@ -171,7 +175,9 @@ fn main() {
     let mut next_id = 0u64;
     bench("command routing (submit_command)", iterations, || {
         next_id += 1;
-        route.submit_command(player, "spawn", Some(Value::U64(next_id))).unwrap();
+        route
+            .submit_command(player, "spawn", Some(Value::U64(next_id)))
+            .unwrap();
     });
     bench("reducer routing (invoke_reducer)", iterations, || {
         route.invoke_reducer(player, "bump", args.clone()).unwrap();
@@ -188,7 +194,8 @@ fn main() {
     srv.expose_reducer("bump").unwrap();
     let alice = Principal::new(1, "alice");
     let _ = srv.join_game(&alice, game).unwrap();
-    srv.submit_command(player, "spawn", Some(Value::U64(1))).unwrap();
+    srv.submit_command(player, "spawn", Some(Value::U64(1)))
+        .unwrap();
     srv.step().unwrap();
 
     bench("empty tick (step)", iterations, || {

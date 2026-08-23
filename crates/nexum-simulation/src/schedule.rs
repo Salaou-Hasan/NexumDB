@@ -208,12 +208,20 @@ mod tests {
         schedule
             .schedule(TickId::from_u64(1), "b", ReducerArgs::new())
             .unwrap();
-        assert!(schedule.schedule(TickId::from_u64(1), "c", ReducerArgs::new()).is_err());
+        assert!(
+            schedule
+                .schedule(TickId::from_u64(1), "c", ReducerArgs::new())
+                .is_err()
+        );
     }
 
     #[test]
     fn empty_reducer_name_is_rejected() {
         let mut schedule = Schedule::new(4);
-        assert!(schedule.schedule(TickId::from_u64(1), "", ReducerArgs::new()).is_err());
+        assert!(
+            schedule
+                .schedule(TickId::from_u64(1), "", ReducerArgs::new())
+                .is_err()
+        );
     }
 }

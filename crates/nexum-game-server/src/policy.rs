@@ -109,7 +109,10 @@ impl GamePolicyTable {
 
     /// The effective role of a principal.
     pub fn role_of(&self, principal: u64) -> Role {
-        self.role_overrides.get(&principal).copied().unwrap_or(Role::Player)
+        self.role_overrides
+            .get(&principal)
+            .copied()
+            .unwrap_or(Role::Player)
     }
 
     /// Grants a principal active membership in a world (join/reconnect).

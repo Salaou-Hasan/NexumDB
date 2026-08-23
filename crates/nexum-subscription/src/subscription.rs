@@ -41,7 +41,7 @@ use nexum_core::{ChangeKind, Row, RowId, TableId, Value};
 use nexum_storage::Change;
 
 use crate::delta::{DeliveredRow, SubscriptionUpdate};
-use crate::matcher::{value_cmp, CompiledQuery};
+use crate::matcher::{CompiledQuery, value_cmp};
 use crate::query::Query;
 
 /// Lifecycle state of a subscription (ADR-008 D7).
@@ -120,7 +120,10 @@ pub(crate) struct SharedView {
 impl SharedView {
     /// Creates an empty view for `query`.
     pub(crate) fn new(query: Query, compiled: CompiledQuery, max_snapshot_rows: usize) -> Self {
-        let window_cap = compiled.limit().unwrap_or(usize::MAX).min(max_snapshot_rows);
+        let window_cap = compiled
+            .limit()
+            .unwrap_or(usize::MAX)
+            .min(max_snapshot_rows);
         Self {
             query,
             compiled,
@@ -202,7 +205,12 @@ impl SharedView {
     /// resulting updates to `out` (the group's scratch buffer). The caller
     /// fans `out` out to each member's delivery buffer; overflow/stale
     /// handling is per member (ADR-020 D1).
-    pub(crate) fn apply_change(&mut self, change: &Change, seq: u64, out: &mut Vec<SubscriptionUpdate>) {
+    pub(crate) fn apply_change(
+        &mut self,
+        change: &Change,
+        seq: u64,
+        out: &mut Vec<SubscriptionUpdate>,
+    ) {
         let row_id = change.row_id();
         match change.kind() {
             ChangeKind::Insert => {
@@ -215,8 +223,7 @@ impl SharedView {
                 }
             }
             ChangeKind::Update => {
-                let (Some(_old_row), Some(new_row)) =
-                    (change.old_row(), change.new_row_shared())
+                let (Some(_old_row), Some(new_row)) = (change.old_row(), change.new_row_shared())
                 else {
                     return;
                 };
@@ -298,9 +305,7 @@ impl SharedView {
         ko: Option<Key>,
         kn: Option<Key>,
     ) {
-        let was_visible = ko
-            .as_ref()
-            .is_some_and(|old| self.visible_keys.remove(old));
+        let was_visible = ko.as_ref().is_some_and(|old| self.visible_keys.remove(old));
         let Some(kn) = kn else {
             // Removal path: the row is gone from the window.
             if was_visible {
@@ -331,7 +336,10 @@ impl SharedView {
             if still_visible {
                 self.visible_keys.insert(kn);
                 if let Some(upd) = update {
-                    out.push(SubscriptionUpdate::Update { seq, row: Arc::new(upd) });
+                    out.push(SubscriptionUpdate::Update {
+                        seq,
+                        row: Arc::new(upd),
+                    });
                 }
             } else {
                 // Demoted: Delete, then the next-best row backfills.
@@ -384,7 +392,10 @@ impl SharedView {
         let row = self.deliverable(entered.row_id);
         out.push(SubscriptionUpdate::Insert {
             seq,
-            row: Arc::new(DeliveredRow::new(entered.row_id, self.compiled.project(&row))),
+            row: Arc::new(DeliveredRow::new(
+                entered.row_id,
+                self.compiled.project(&row),
+            )),
         });
     }
 

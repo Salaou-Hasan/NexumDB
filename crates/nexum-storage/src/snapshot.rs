@@ -127,9 +127,9 @@ impl TableState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nexum_core::row;
     use nexum_core::ColumnType;
     use nexum_core::Value;
+    use nexum_core::row;
 
     use crate::StorageTable;
 
@@ -179,7 +179,10 @@ mod tests {
         let alice = RowId::from_u64(0);
         assert_eq!(restored.version_of(alice), Some(Version::from_u64(1)));
         assert_eq!(
-            restored.get_row(alice).unwrap().get_named(restored.schema(), "health"),
+            restored
+                .get_row(alice)
+                .unwrap()
+                .get_named(restored.schema(), "health"),
             Some(&Value::I32(50))
         );
         assert_eq!(restored.epoch(), state.epoch());

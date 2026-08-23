@@ -8,7 +8,7 @@
 //! `ReducerResult` carrying changes + events + a return value. This
 //! definition type is deliberately small; the WASM ABI is designed later.
 
-use nexum_core::{Error, Result, ReducerId, Value};
+use nexum_core::{Error, ReducerId, Result, Value};
 
 use crate::args::ReducerArgs;
 use crate::context::ReducerContext;
@@ -32,9 +32,7 @@ impl ReducerDefinition {
     pub fn new(id: ReducerId, name: impl Into<String>, execute: ReducerFn) -> Result<Self> {
         let name = name.into();
         if name.is_empty() {
-            return Err(Error::invalid_argument(
-                "reducer name must not be empty",
-            ));
+            return Err(Error::invalid_argument("reducer name must not be empty"));
         }
         Ok(Self { id, name, execute })
     }

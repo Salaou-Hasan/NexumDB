@@ -15,12 +15,12 @@ use std::time::Duration;
 
 use nexum_core::PlayerId;
 use nexum_game_server::{GameServer, GameServerConfig, JoinOutcome};
-use nexum_network::{NetworkEvent, Principal, TokenAuthenticator, TcpTransport};
+use nexum_network::{NetworkEvent, Principal, TcpTransport, TokenAuthenticator};
 use nexum_reducer::ReducerArgs;
 use nexum_runtime::Runtime;
 
 use crate::config::ServerConfig;
-use crate::game::{game_factory, CLIENT_REDUCERS};
+use crate::game::{CLIENT_REDUCERS, game_factory};
 
 /// Configuration for the game server (CLI flags override the config file
 /// and defaults; see [`ServerConfig`] for the full knob list).
@@ -50,7 +50,6 @@ pub struct ServerArgs {
     /// Quiet mode (log level → error; no per-tick chatter).
     pub quiet: bool,
 }
-
 
 /// Builds the effective [`ServerConfig`]: defaults → config file → CLI.
 /// Fails fast on an invalid configuration (ADR-016).
@@ -118,14 +117,18 @@ fn has_wal(dir: &std::path::Path) -> bool {
     std::fs::read_dir(dir)
         .map(|entries| entries.flatten().count() > 0)
         .unwrap_or(false)
-}/// Runs the game server until interrupted, then shuts down cleanly:
+}
+/// Runs the game server until interrupted, then shuts down cleanly:
 /// stops accepting connections, drains inbound, and flushes every world's
 /// WAL (ADR-016 D3).
 pub fn run_server(args: ServerArgs) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let config = effective_config(&args).map_err(Box::<dyn std::error::Error + Send + Sync>::from)?;
+    let config =
+        effective_config(&args).map_err(Box::<dyn std::error::Error + Send + Sync>::from)?;
     if !args.quiet {
-        println!("[config] {} ticks/s · {} workers · {} partitions · seed {}",
-            config.tick_hz, config.workers, config.default_partitions, config.seed);
+        println!(
+            "[config] {} ticks/s · {} workers · {} partitions · seed {}",
+            config.tick_hz, config.workers, config.default_partitions, config.seed
+        );
         println!(
             "[config] persistence: {:?}{}",
             config.persistence,
@@ -171,9 +174,7 @@ pub fn run_server(args: ServerArgs) -> Result<(), Box<dyn std::error::Error + Se
             }
             game
         }
-        _ => {
-            server.create_game(game_config)?
-        }
+        _ => server.create_game(game_config)?,
     };
     server.start_game(game)?;
 
@@ -181,9 +182,16 @@ pub fn run_server(args: ServerArgs) -> Result<(), Box<dyn std::error::Error + Se
         server.expose_reducer(reducer)?;
     }
 
-    let listen_addr: SocketAddr = (config.bind.parse::<std::net::Ipv4Addr>().map_err(|_| {
-        Box::<dyn std::error::Error + Send + Sync>::from(format!("invalid bind address: {}", config.bind))
-    })?, config.port).into();
+    let listen_addr: SocketAddr = (
+        config.bind.parse::<std::net::Ipv4Addr>().map_err(|_| {
+            Box::<dyn std::error::Error + Send + Sync>::from(format!(
+                "invalid bind address: {}",
+                config.bind
+            ))
+        })?,
+        config.port,
+    )
+        .into();
     let transport = TcpTransport::listen(listen_addr)?;
     println!("══════════════════════════════════════════════════════════");
     println!("  NEXUM ARENA — the playable multiplayer demo");
@@ -191,9 +199,7 @@ pub fn run_server(args: ServerArgs) -> Result<(), Box<dyn std::error::Error + Se
         "  listening on {listen_addr}  ·  {} partition(s)  ·  {} ticks/s  ·  seed {}",
         config.default_partitions, config.tick_hz, config.seed
     );
-    println!(
-        "  clients:  cargo run -p game-server -- client --name alice  (alice/bob/carol/dave)"
-    );
+    println!("  clients:  cargo run -p game-server -- client --name alice  (alice/bob/carol/dave)");
     println!("══════════════════════════════════════════════════════════");
 
     // connection id → principal id (for disconnect handling).
@@ -220,7 +226,9 @@ pub fn run_server(args: ServerArgs) -> Result<(), Box<dyn std::error::Error + Se
         shutdown.poll();
         // 1. Accept new TCP connections.
         while let Some(connection) = transport.accept(1024, 64 * 1024)? {
-            server.gateway_mut().register_connection(Box::new(connection))?;
+            server
+                .gateway_mut()
+                .register_connection(Box::new(connection))?;
             if !args.quiet {
                 println!("[net] connection opened");
             }
@@ -312,7 +320,8 @@ pub fn run_server(args: ServerArgs) -> Result<(), Box<dyn std::error::Error + Se
         server.gateway_mut().flush_outbound()?;
 
         loop_count += 1;
-        if !args.quiet && config.metrics_interval_ticks > 0
+        if !args.quiet
+            && config.metrics_interval_ticks > 0
             && loop_count.is_multiple_of(config.metrics_interval_ticks)
         {
             let snapshot = crate::ServerMetricsSnapshot::capture(

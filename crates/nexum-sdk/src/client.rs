@@ -101,7 +101,10 @@ impl Client {
     pub fn status(&self) -> ConnectionStatus {
         ConnectionStatus {
             state: self.state,
-            peer: self.transport.as_ref().map(|transport| transport.peer().to_string()),
+            peer: self
+                .transport
+                .as_ref()
+                .map(|transport| transport.peer().to_string()),
         }
     }
 
@@ -210,7 +213,10 @@ impl Client {
                     return;
                 }
                 self.state = ConnectionState::Connected;
-                self.push_event(ServerEvent::Connected { version, server_name });
+                self.push_event(ServerEvent::Connected {
+                    version,
+                    server_name,
+                });
             }
             ServerMessage::AuthResult {
                 ok,
@@ -406,7 +412,11 @@ impl Client {
             });
             return;
         };
-        if self.subscriptions.get(&local).is_some_and(|handle| handle.is_stale()) {
+        if self
+            .subscriptions
+            .get(&local)
+            .is_some_and(|handle| handle.is_stale())
+        {
             return;
         }
         let Some(view) = self.views.get_mut(&local) else {
@@ -506,7 +516,11 @@ impl Client {
         if self.session.is_none() {
             return Err(SdkError::AuthenticationRequired);
         }
-        if self.session.as_ref().is_none_or(|session| !session.is_attached()) {
+        if self
+            .session
+            .as_ref()
+            .is_none_or(|session| !session.is_attached())
+        {
             return Err(SdkError::NotAttached);
         }
         Ok(())

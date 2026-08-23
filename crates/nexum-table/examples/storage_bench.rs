@@ -20,9 +20,9 @@
 use std::hint::black_box;
 use std::time::Instant;
 
-use nexum_core::{ColumnType, TableSchema, TableId, Value};
+use nexum_core::{ColumnType, TableId, TableSchema, Value};
 use nexum_storage::StorageTable;
-use nexum_table::{row, TableStore};
+use nexum_table::{TableStore, row};
 
 fn player_schema() -> TableSchema {
     TableSchema::builder("players")
@@ -50,9 +50,7 @@ fn bench<F: FnMut()>(name: &str, n: usize, mut f: F) {
     let elapsed = start.elapsed();
     let ns_per_op = elapsed.as_nanos() as f64 / n as f64;
     let ops_per_sec = 1e9 / ns_per_op;
-    println!(
-        "{name:<28} {ns_per_op:>10.1} ns/op  {ops_per_sec:>12.0} ops/s"
-    );
+    println!("{name:<28} {ns_per_op:>10.1} ns/op  {ops_per_sec:>12.0} ops/s");
 }
 
 fn storage_table() -> StorageTable {

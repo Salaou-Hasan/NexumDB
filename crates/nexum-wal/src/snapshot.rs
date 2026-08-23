@@ -107,12 +107,12 @@ impl Snapshot {
         let body_crc = crc32(&body);
         file.write_all(&(body.len() as u64).to_le_bytes())
             .map_err(|e| map_io(e, "writing body length"))?;
-        file.write_all(&body).map_err(|e| map_io(e, "writing body"))?;
+        file.write_all(&body)
+            .map_err(|e| map_io(e, "writing body"))?;
         file.write_all(&body_crc.to_le_bytes())
             .map_err(|e| map_io(e, "writing body checksum"))?;
-        file.sync_all().map_err(|e| {
-            Error::internal(format!("snapshot: fsync failed: {e}"))
-        })?;
+        file.sync_all()
+            .map_err(|e| Error::internal(format!("snapshot: fsync failed: {e}")))?;
         drop(file);
 
         std::fs::rename(&tmp_path, &final_path).map_err(|e| {
@@ -130,10 +130,7 @@ impl Snapshot {
     /// skip an invalid snapshot.
     pub fn read(path: &Path) -> Result<Snapshot> {
         let bytes = std::fs::read(path).map_err(|e| {
-            Error::internal(format!(
-                "snapshot: cannot read '{}': {e}",
-                path.display()
-            ))
+            Error::internal(format!("snapshot: cannot read '{}': {e}", path.display()))
         })?;
         let mut cursor: &[u8] = &bytes;
 
@@ -180,9 +177,9 @@ impl Snapshot {
         let mut tables = Vec::new();
         let mut body_cursor = body;
         while !body_cursor.is_empty() {
-            let state_len = u32::from_le_bytes(
-                take(&mut body_cursor, 4)?.try_into().expect("4 bytes"),
-            ) as usize;
+            let state_len =
+                u32::from_le_bytes(take(&mut body_cursor, 4)?.try_into().expect("4 bytes"))
+                    as usize;
             let state_bytes = take(&mut body_cursor, state_len)?;
             let mut state_cursor = state_bytes;
             tables.push(TableState::decode(&mut state_cursor)?);
@@ -227,10 +224,7 @@ impl Snapshot {
             let Ok(snapshot) = Snapshot::read(&path) else {
                 continue; // skip invalid snapshots; keep going
             };
-            if best
-                .as_ref()
-                .is_none_or(|(best_lsn, _, _)| lsn > *best_lsn)
-            {
+            if best.as_ref().is_none_or(|(best_lsn, _, _)| lsn > *best_lsn) {
                 best = Some((lsn, path, snapshot));
             }
         }

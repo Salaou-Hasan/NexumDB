@@ -11,8 +11,8 @@
 //! depending on the table crate. `nexum-table` re-exports it, so existing
 //! `nexum_table::Row` paths keep working.
 
-use crate::schema::TableSchema;
 use crate::Value;
+use crate::schema::TableSchema;
 
 /// An ordered list of typed cell values, matching a schema's column order.
 ///
@@ -142,6 +142,9 @@ mod tests {
     #[test]
     fn row_macro_converts_types() {
         let row = row![true, 10u64, 3.5f64];
-        assert_eq!(row.values(), &[Value::Bool(true), Value::U64(10), Value::F64(3.5)]);
+        assert_eq!(
+            row.values(),
+            &[Value::Bool(true), Value::U64(10), Value::F64(3.5)]
+        );
     }
 }

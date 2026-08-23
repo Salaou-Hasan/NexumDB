@@ -5,7 +5,7 @@
 //! cargo run -p game-server -- client [--name alice] [--port 9337] [--auto SECONDS]
 //! ```
 
-use game_server::{run_client, run_server, ClientArgs, ServerArgs};
+use game_server::{ClientArgs, ServerArgs, run_client, run_server};
 
 const HELP: &str = "usage: game-server <server|client> [options]
 
@@ -64,15 +64,68 @@ fn parse_server(args: &mut impl Iterator<Item = String>) -> ServerArgs {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--config" => server.config = Some(args.next().unwrap_or_else(usage::<String>).into()),
-            "--port" => server.port = Some(args.next().unwrap_or_else(usage::<String>).parse().unwrap_or_else(|_| usage::<u16>())),
-            "--partitions" => server.partitions = Some(args.next().unwrap_or_else(usage::<String>).parse().unwrap_or_else(|_| usage::<usize>())),
-            "--hz" => server.hz = Some(args.next().unwrap_or_else(usage::<String>).parse().unwrap_or_else(|_| usage::<u32>())),
-            "--seed" => server.seed = Some(args.next().unwrap_or_else(usage::<String>).parse().unwrap_or_else(|_| usage::<u64>())),
-            "--players" => server.max_players = Some(args.next().unwrap_or_else(usage::<String>).parse().unwrap_or_else(|_| usage::<usize>())),
-            "--workers" => server.workers = Some(args.next().unwrap_or_else(usage::<String>).parse().unwrap_or_else(|_| usage::<usize>())),
-            "--persist" => server.persist = Some(args.next().unwrap_or_else(usage::<String>).into()),
-            "--stop-after" => server.stop_after = Some(args.next().unwrap_or_else(usage::<String>).parse().unwrap_or_else(|_| usage::<u64>())),
-            "--stop-file" => server.stop_file = Some(args.next().unwrap_or_else(usage::<String>).into()),
+            "--port" => {
+                server.port = Some(
+                    args.next()
+                        .unwrap_or_else(usage::<String>)
+                        .parse()
+                        .unwrap_or_else(|_| usage::<u16>()),
+                )
+            }
+            "--partitions" => {
+                server.partitions = Some(
+                    args.next()
+                        .unwrap_or_else(usage::<String>)
+                        .parse()
+                        .unwrap_or_else(|_| usage::<usize>()),
+                )
+            }
+            "--hz" => {
+                server.hz = Some(
+                    args.next()
+                        .unwrap_or_else(usage::<String>)
+                        .parse()
+                        .unwrap_or_else(|_| usage::<u32>()),
+                )
+            }
+            "--seed" => {
+                server.seed = Some(
+                    args.next()
+                        .unwrap_or_else(usage::<String>)
+                        .parse()
+                        .unwrap_or_else(|_| usage::<u64>()),
+                )
+            }
+            "--players" => {
+                server.max_players = Some(
+                    args.next()
+                        .unwrap_or_else(usage::<String>)
+                        .parse()
+                        .unwrap_or_else(|_| usage::<usize>()),
+                )
+            }
+            "--workers" => {
+                server.workers = Some(
+                    args.next()
+                        .unwrap_or_else(usage::<String>)
+                        .parse()
+                        .unwrap_or_else(|_| usage::<usize>()),
+                )
+            }
+            "--persist" => {
+                server.persist = Some(args.next().unwrap_or_else(usage::<String>).into())
+            }
+            "--stop-after" => {
+                server.stop_after = Some(
+                    args.next()
+                        .unwrap_or_else(usage::<String>)
+                        .parse()
+                        .unwrap_or_else(|_| usage::<u64>()),
+                )
+            }
+            "--stop-file" => {
+                server.stop_file = Some(args.next().unwrap_or_else(usage::<String>).into())
+            }
             "--quiet" => server.quiet = true,
             "--help" | "-h" => print_help(),
             other => {
@@ -90,8 +143,21 @@ fn parse_client(args: &mut impl Iterator<Item = String>) -> ClientArgs {
         match arg.as_str() {
             "--name" => client.name = args.next().unwrap_or_else(usage::<String>),
             "--addr" => client.addr = args.next().unwrap_or_else(usage::<String>),
-            "--port" => client.port = args.next().unwrap_or_else(usage::<String>).parse().unwrap_or_else(|_| usage::<u16>()),
-            "--auto" => client.auto_seconds = Some(args.next().unwrap_or_else(usage::<String>).parse().unwrap_or_else(|_| usage::<u64>())),
+            "--port" => {
+                client.port = args
+                    .next()
+                    .unwrap_or_else(usage::<String>)
+                    .parse()
+                    .unwrap_or_else(|_| usage::<u16>())
+            }
+            "--auto" => {
+                client.auto_seconds = Some(
+                    args.next()
+                        .unwrap_or_else(usage::<String>)
+                        .parse()
+                        .unwrap_or_else(|_| usage::<u64>()),
+                )
+            }
             "--quiet" => client.quiet = true,
             "--help" | "-h" => print_help(),
             other => {

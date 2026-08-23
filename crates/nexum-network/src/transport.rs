@@ -22,7 +22,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::error::{NetworkError, ProtocolError};
-use crate::protocol::{parse_frame, ServerMessage};
+use crate::protocol::{ServerMessage, parse_frame};
 
 /// A transport-level failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,7 +110,11 @@ pub trait Connection {
 
     /// Combined receive: tries direct then frame in one call.
     /// Returns true if a message was received (either direct or frame).
-    fn try_recv_any_combined(&mut self, _msg_out: &mut Option<ServerMessage>, _frame_out: &mut Option<Arc<[u8]>>) -> Result<bool, TransportError> {
+    fn try_recv_any_combined(
+        &mut self,
+        _msg_out: &mut Option<ServerMessage>,
+        _frame_out: &mut Option<Arc<[u8]>>,
+    ) -> Result<bool, TransportError> {
         // Default: try direct, then frame separately.
         if let Some(msg) = self.try_recv_direct()? {
             *_msg_out = Some(msg);
@@ -174,7 +178,10 @@ pub struct MemoryTransport;
 
 impl MemoryTransport {
     /// Opens a fresh server/client pair.
-    pub fn connect(inbound_cap: usize, outbound_cap: usize) -> (MemoryConnection, MemoryConnection) {
+    pub fn connect(
+        inbound_cap: usize,
+        outbound_cap: usize,
+    ) -> (MemoryConnection, MemoryConnection) {
         let has_inbound = Arc::new(AtomicBool::new(false));
         let link = Arc::new(Mutex::new(MemoryLink {
             to_server: VecDeque::new(),
@@ -292,7 +299,11 @@ impl Connection for MemoryConnection {
         }
     }
 
-    fn try_recv_any_combined(&mut self, msg_out: &mut Option<ServerMessage>, frame_out: &mut Option<Arc<[u8]>>) -> Result<bool, TransportError> {
+    fn try_recv_any_combined(
+        &mut self,
+        msg_out: &mut Option<ServerMessage>,
+        frame_out: &mut Option<Arc<[u8]>>,
+    ) -> Result<bool, TransportError> {
         let mut link = self.link.lock().expect("memory link lock");
         if self.server_side {
             return Ok(false);
@@ -312,7 +323,7 @@ impl Connection for MemoryConnection {
         Ok(()) // queue-based: nothing to flush
     }
 
-fn close(&mut self) {
+    fn close(&mut self) {
         // Mark the link closed without discarding already-buffered frames:
         // like a TCP FIN, the peer can still read what was queued before the
         // close (e.g. a final `Disconnect` reason), while new sends fail.
@@ -358,9 +369,8 @@ impl TcpConnection {
         outbound_cap: usize,
         max_payload: u32,
     ) -> Result<Self, NetworkError> {
-        let stream = TcpStream::connect(addr).map_err(|error| {
-            NetworkError::Internal(format!("tcp connect failed: {error}"))
-        })?;
+        let stream = TcpStream::connect(addr)
+            .map_err(|error| NetworkError::Internal(format!("tcp connect failed: {error}")))?;
         stream.set_nonblocking(true).map_err(|error| {
             NetworkError::Internal(format!("tcp set_nonblocking failed: {error}"))
         })?;
@@ -477,12 +487,11 @@ pub struct TcpTransport {
 impl TcpTransport {
     /// Binds and listens on `addr`.
     pub fn listen(addr: impl ToSocketAddrs) -> Result<Self, NetworkError> {
-        let listener = TcpListener::bind(addr).map_err(|error| {
-            NetworkError::Internal(format!("tcp listen failed: {error}"))
+        let listener = TcpListener::bind(addr)
+            .map_err(|error| NetworkError::Internal(format!("tcp listen failed: {error}")))?;
+        listener.set_nonblocking(true).map_err(|error| {
+            NetworkError::Internal(format!("tcp set_nonblocking failed: {error}"))
         })?;
-        listener
-            .set_nonblocking(true)
-            .map_err(|error| NetworkError::Internal(format!("tcp set_nonblocking failed: {error}")))?;
         Ok(Self { listener })
     }
 
@@ -528,4 +537,3 @@ impl TcpTransport {
         }
     }
 }
-

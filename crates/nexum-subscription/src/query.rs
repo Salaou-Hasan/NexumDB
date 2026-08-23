@@ -250,7 +250,9 @@ impl QueryBuilder {
     /// predicate or projection column name, or a zero limit.
     pub fn build(self) -> Result<Query> {
         if self.table.trim().is_empty() {
-            return Err(Error::invalid_argument("query table name must not be empty"));
+            return Err(Error::invalid_argument(
+                "query table name must not be empty",
+            ));
         }
         for predicate in &self.predicates {
             if predicate.column.trim().is_empty() {
@@ -317,7 +319,10 @@ mod tests {
             OrderDirection::Descending
         );
         assert_eq!(query.limit(), Some(100));
-        assert_eq!(query.projection().unwrap(), &["id".to_string(), "health".to_string()]);
+        assert_eq!(
+            query.projection().unwrap(),
+            &["id".to_string(), "health".to_string()]
+        );
     }
 
     #[test]
@@ -350,7 +355,10 @@ mod tests {
 
     #[test]
     fn rejects_empty_predicate_column() {
-        let err = Query::builder("t").predicate_eq("", 1u64).build().unwrap_err();
+        let err = Query::builder("t")
+            .predicate_eq("", 1u64)
+            .build()
+            .unwrap_err();
         assert!(matches!(err, Error::InvalidArgument(_)));
     }
 
@@ -371,15 +379,27 @@ mod tests {
 
     #[test]
     fn rejects_empty_projection_column() {
-        let err = Query::builder("t").project(&["id", ""]).build().unwrap_err();
+        let err = Query::builder("t")
+            .project(&["id", ""])
+            .build()
+            .unwrap_err();
         assert!(matches!(err, Error::InvalidArgument(_)));
     }
 
     #[test]
     fn query_is_eq_comparable_and_row_agnostic() {
-        let a = Query::builder("players").predicate_eq("zone_id", 10u64).build().unwrap();
-        let b = Query::builder("players").predicate_eq("zone_id", 10u64).build().unwrap();
-        let c = Query::builder("players").predicate_eq("zone_id", 20u64).build().unwrap();
+        let a = Query::builder("players")
+            .predicate_eq("zone_id", 10u64)
+            .build()
+            .unwrap();
+        let b = Query::builder("players")
+            .predicate_eq("zone_id", 10u64)
+            .build()
+            .unwrap();
+        let c = Query::builder("players")
+            .predicate_eq("zone_id", 20u64)
+            .build()
+            .unwrap();
         assert_eq!(a, b);
         assert_ne!(a, c);
         // Sanity: the model does not reference implementation objects.

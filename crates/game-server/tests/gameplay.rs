@@ -3,7 +3,9 @@
 //! rejection. Every mutation flows through `World::tick_with_calls` — the
 //! same single commit path the runtime uses.
 
-use game_server::game::{game_factory, spawn, COL_ALIVE, COL_AMMO, COL_COOLDOWN, COL_HP, COL_X, COL_Y};
+use game_server::game::{
+    COL_ALIVE, COL_AMMO, COL_COOLDOWN, COL_HP, COL_X, COL_Y, game_factory, spawn,
+};
 use nexum_core::{Row, RowId, TickId, Value, WorldId};
 use nexum_network::CALLER_SOURCE_ARG;
 use nexum_reducer::ReducerArgs;
@@ -13,12 +15,22 @@ use nexum_table::TableStore;
 /// Builds a fresh world through the real game factory.
 fn world(seed: u64) -> World {
     let store = TableStore::new();
-    game_factory()(WorldId::from_u64(0), store, SimulationConfig::new().with_seed(seed)).unwrap()
+    game_factory()(
+        WorldId::from_u64(0),
+        store,
+        SimulationConfig::new().with_seed(seed),
+    )
+    .unwrap()
 }
 
 /// Drives one reducer call through the real tick path (join tick semantics:
 /// the call executes against the tick transaction, the tick commits).
-fn call(world: &mut World, request: u64, reducer: &str, args: ReducerArgs) -> nexum_simulation::TickResult {
+fn call(
+    world: &mut World,
+    request: u64,
+    reducer: &str,
+    args: ReducerArgs,
+) -> nexum_simulation::TickResult {
     let frame = InputFrame::new(world.tick_number());
     let calls = vec![ReducerCall::new(request, reducer, args).unwrap()];
     world.tick_with_calls(&frame, &[], &calls).unwrap()
@@ -138,7 +150,10 @@ fn move_player_updates_position_and_facing_and_clamps_to_bounds() {
             .insert("dx", -1i64)
             .insert("dy", 0i64),
     );
-    assert!(call_result(&result, 13).is_ok(), "move into the wall is a legal intent");
+    assert!(
+        call_result(&result, 13).is_ok(),
+        "move into the wall is a legal intent"
+    );
     let rows = scan_players(&world);
     assert_eq!(get(row_of(&rows, 1), COL_X), 0, "clamped at the west wall");
 }
@@ -244,9 +259,14 @@ fn client_calls_cannot_act_on_behalf_of_another_player() {
         &mut world,
         12,
         "take_damage",
-        ReducerArgs::new().insert("player_id", 2u64).insert("amount", 10i64),
+        ReducerArgs::new()
+            .insert("player_id", 2u64)
+            .insert("amount", 10i64),
     );
-    assert!(call_result(&result, 12).is_ok(), "server-only reducer works when invoked");
+    assert!(
+        call_result(&result, 12).is_ok(),
+        "server-only reducer works when invoked"
+    );
 }
 
 // -------------------------------------------------------------- combat
@@ -262,11 +282,16 @@ fn take_damage_death_and_respawn_are_authoritative() {
         &mut world,
         11,
         "take_damage",
-        ReducerArgs::new().insert("player_id", 1u64).insert("amount", 100i64),
+        ReducerArgs::new()
+            .insert("player_id", 1u64)
+            .insert("amount", 100i64),
     );
     assert!(call_result(&result, 11).is_ok());
     let events = result.events();
-    assert!(events.iter().any(|event| event.name() == "kill"), "kill event emitted");
+    assert!(
+        events.iter().any(|event| event.name() == "kill"),
+        "kill event emitted"
+    );
     let rows = scan_players(&world);
     let row = row_of(&rows, 1);
     assert_eq!(get(row, COL_HP), 0);
@@ -282,7 +307,10 @@ fn take_damage_death_and_respawn_are_authoritative() {
             .insert("dx", 1i64)
             .insert("dy", 0i64),
     );
-    assert!(!call_result(&result, 12).is_ok(), "dead players cannot move");
+    assert!(
+        !call_result(&result, 12).is_ok(),
+        "dead players cannot move"
+    );
 
     // Respawn restores position/hp at the spawn point, keeping score.
     let result = call(
@@ -296,7 +324,11 @@ fn take_damage_death_and_respawn_are_authoritative() {
     let row = row_of(&rows, 1);
     assert_eq!(get(row, COL_ALIVE), 1, "respawned");
     assert_eq!(get(row, COL_HP), 100);
-    assert_eq!((get(row, COL_X), get(row, COL_Y)), (x, y), "respawn at the spawn point");
+    assert_eq!(
+        (get(row, COL_X), get(row, COL_Y)),
+        (x, y),
+        "respawn at the spawn point"
+    );
 
     // Respawn while alive is rejected.
     let result = call(
@@ -305,7 +337,10 @@ fn take_damage_death_and_respawn_are_authoritative() {
         "respawn_player",
         ReducerArgs::new().insert(CALLER_SOURCE_ARG, 1u64),
     );
-    assert!(!call_result(&result, 14).is_ok(), "alive players cannot respawn");
+    assert!(
+        !call_result(&result, 14).is_ok(),
+        "alive players cannot respawn"
+    );
 }
 
 #[test]
@@ -402,7 +437,11 @@ fn wasm_fire_weapon_misses_when_no_target_is_in_front() {
     assert_eq!(outcome.value(), Some(&Value::I64(0)), "no damage on a miss");
     let rows = scan_players(&world);
     assert_eq!(get(row_of(&rows, 2), COL_HP), 100, "target unharmed");
-    assert_eq!(get(row_of(&rows, 1), COL_AMMO), 9, "the shot still consumed ammo");
+    assert_eq!(
+        get(row_of(&rows, 1), COL_AMMO),
+        9,
+        "the shot still consumed ammo"
+    );
 }
 
 #[test]
@@ -433,7 +472,9 @@ fn wasm_fire_weapon_rejects_while_recharging_dead_or_disconnected() {
         &mut world,
         13,
         "take_damage",
-        ReducerArgs::new().insert("player_id", 1u64).insert("amount", 100i64),
+        ReducerArgs::new()
+            .insert("player_id", 1u64)
+            .insert("amount", 100i64),
     );
     let result = call(
         &mut world,
@@ -456,7 +497,9 @@ fn wasm_fire_weapon_rejects_while_recharging_dead_or_disconnected() {
         &mut world,
         16,
         "player_leave",
-        ReducerArgs::new().insert("player_id", 1u64).insert("game_id", 0u64),
+        ReducerArgs::new()
+            .insert("player_id", 1u64)
+            .insert("game_id", 0u64),
     );
     let result = call(
         &mut world,
@@ -466,7 +509,13 @@ fn wasm_fire_weapon_rejects_while_recharging_dead_or_disconnected() {
     );
     let outcome = call_result(&result, 17);
     assert!(!outcome.is_ok());
-    assert!(outcome.error().unwrap().to_string().contains("disconnected"));
+    assert!(
+        outcome
+            .error()
+            .unwrap()
+            .to_string()
+            .contains("disconnected")
+    );
 }
 
 #[test]
@@ -525,21 +574,57 @@ fn wasm_module_same_inputs_same_state_produce_identical_results() {
 
     for tick in 0..6 {
         let call_args = match tick {
-            0 => Some(("player_join", ReducerArgs::new().insert("player_id", 1u64).insert("game_id", 0u64))),
-            1 => Some(("player_join", ReducerArgs::new().insert("player_id", 2u64).insert("game_id", 0u64))),
-            2 => Some(("move_player", ReducerArgs::new().insert(CALLER_SOURCE_ARG, 1u64).insert("dx", 1i64).insert("dy", 0i64))),
+            0 => Some((
+                "player_join",
+                ReducerArgs::new()
+                    .insert("player_id", 1u64)
+                    .insert("game_id", 0u64),
+            )),
+            1 => Some((
+                "player_join",
+                ReducerArgs::new()
+                    .insert("player_id", 2u64)
+                    .insert("game_id", 0u64),
+            )),
+            2 => Some((
+                "move_player",
+                ReducerArgs::new()
+                    .insert(CALLER_SOURCE_ARG, 1u64)
+                    .insert("dx", 1i64)
+                    .insert("dy", 0i64),
+            )),
             _ => None,
         };
         if let Some((reducer, args)) = call_args {
             let result_a = call(&mut a, 1, reducer, args.clone());
             let result_b = call(&mut b, 1, reducer, args);
-            traces_a.push((result_a.tick(), result_a.changes().len(), result_a.reducer_results().len()));
-            traces_b.push((result_b.tick(), result_b.changes().len(), result_b.reducer_results().len()));
+            traces_a.push((
+                result_a.tick(),
+                result_a.changes().len(),
+                result_a.reducer_results().len(),
+            ));
+            traces_b.push((
+                result_b.tick(),
+                result_b.changes().len(),
+                result_b.reducer_results().len(),
+            ));
         } else {
-            let result_a = a.tick_with_calls(&InputFrame::new(a.tick_number()), &[], &[]).unwrap();
-            let result_b = b.tick_with_calls(&InputFrame::new(b.tick_number()), &[], &[]).unwrap();
-            traces_a.push((result_a.tick(), result_a.changes().len(), result_a.reducer_results().len()));
-            traces_b.push((result_b.tick(), result_b.changes().len(), result_b.reducer_results().len()));
+            let result_a = a
+                .tick_with_calls(&InputFrame::new(a.tick_number()), &[], &[])
+                .unwrap();
+            let result_b = b
+                .tick_with_calls(&InputFrame::new(b.tick_number()), &[], &[])
+                .unwrap();
+            traces_a.push((
+                result_a.tick(),
+                result_a.changes().len(),
+                result_a.reducer_results().len(),
+            ));
+            traces_b.push((
+                result_b.tick(),
+                result_b.changes().len(),
+                result_b.reducer_results().len(),
+            ));
         }
     }
     assert_eq!(traces_a, traces_b, "identical change-trace shapes");
@@ -610,6 +695,9 @@ fn many_players_move_through_pk_and_position_index_deterministically() {
 
     let state_a = run(99);
     let state_b = run(99);
-    assert_eq!(state_a, state_b, "identical inputs ⇒ identical authoritative state");
+    assert_eq!(
+        state_a, state_b,
+        "identical inputs ⇒ identical authoritative state"
+    );
     assert_eq!(state_a.len(), N as usize, "all players still present");
 }

@@ -39,7 +39,9 @@ pub mod server;
 pub use config::{GameInstanceConfig, GameServerConfig};
 pub use error::GameServerError;
 pub use events::GameServerEvent;
-pub use lifecycle::{GameLifecycle, GameStatus, JoinOutcome, PartitionState, PlayerState, PlayerStatus};
+pub use lifecycle::{
+    GameLifecycle, GameStatus, JoinOutcome, PartitionState, PlayerState, PlayerStatus,
+};
 pub use metrics::GameServerMetrics;
 pub use policy::{GamePolicyTable, PolicyHandle, ReducerExposure, ReducerPolicy, Role};
 pub use server::{GameRecoveryReport, GameServer};

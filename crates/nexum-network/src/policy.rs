@@ -25,7 +25,12 @@ pub trait GamePolicy: Send + Sync {
 
     /// Whether `principal` may submit `frame` (whose commands are already
     /// source-stamped with the principal id) to `world`.
-    fn authorize_input(&self, _principal: &Principal, _world: WorldId, _frame: &InputFrame) -> bool {
+    fn authorize_input(
+        &self,
+        _principal: &Principal,
+        _world: WorldId,
+        _frame: &InputFrame,
+    ) -> bool {
         true
     }
 

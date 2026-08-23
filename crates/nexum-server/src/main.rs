@@ -28,14 +28,14 @@
 use std::sync::Arc;
 
 use nexum_core::{
-    row, ColumnType, Error, PlayerId, ReducerId, Result, Row, RowId, SystemId, TableSchema,
-    Value, WorldId,
+    ColumnType, Error, PlayerId, ReducerId, Result, Row, RowId, SystemId, TableSchema, Value,
+    WorldId, row,
 };
 use nexum_game_server::{GameInstanceConfig, GameServer, GameServerConfig};
 use nexum_network::{NetworkConfig, Principal, TokenAuthenticator};
 use nexum_reducer::{ReducerArgs, ReducerContext, ReducerDefinition};
 use nexum_runtime::{PersistencePolicy, Runtime, RuntimeConfig, WorldFactory};
-use nexum_sdk::{transport::ClientTransport, Client, SdkConfig};
+use nexum_sdk::{Client, SdkConfig, transport::ClientTransport};
 use nexum_simulation::{InputCommand, InputFrame, SimulationConfig, SystemDefinition, World};
 use nexum_subscription::Query;
 use nexum_table::TableStore;
@@ -123,46 +123,48 @@ fn ping_module() -> Vec<u8> {
 /// native reducers (`bump`, `player_join`, `server_secret`), and a WASM
 /// reducer (`ping_wasm`).
 fn demo_factory() -> WorldFactory {
-    Box::new(|id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-        ensure_players(&mut store);
-        let mut world = World::new(id, store, sim)?;
-        world
-            .add_system(
-                SystemDefinition::new(SystemId::from_u64(0), "spawner", 0, |ctx, frame| {
-                    for command in frame.commands() {
-                        if command.kind() == "spawn" {
-                            let id = command.payload().and_then(Value::as_u64).unwrap();
-                            ctx.insert("players", row![id, 10u64, 100i32])?;
+    Box::new(
+        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
+            ensure_players(&mut store);
+            let mut world = World::new(id, store, sim)?;
+            world
+                .add_system(
+                    SystemDefinition::new(SystemId::from_u64(0), "spawner", 0, |ctx, frame| {
+                        for command in frame.commands() {
+                            if command.kind() == "spawn" {
+                                let id = command.payload().and_then(Value::as_u64).unwrap();
+                                ctx.insert("players", row![id, 10u64, 100i32])?;
+                            }
                         }
-                    }
-                    Ok(())
-                })
-                .unwrap(),
-            )
-            .unwrap();
-        world
-            .native_mut()
-            .register(ReducerDefinition::new(ReducerId::from_u64(1), "bump", bump).unwrap())
-            .unwrap();
-        world
-            .native_mut()
-            .register(
-                ReducerDefinition::new(ReducerId::from_u64(2), "player_join", player_join)
+                        Ok(())
+                    })
                     .unwrap(),
-            )
-            .unwrap();
-        world
-            .native_mut()
-            .register(
-                ReducerDefinition::new(ReducerId::from_u64(3), "server_secret", server_secret)
-                    .unwrap(),
-            )
-            .unwrap();
-        let mut wasm = WasmModuleRegistry::new(WasmLimits::default()).unwrap();
-        wasm.register("ping_wasm", 1, ping_module()).unwrap();
-        world.set_wasm(wasm);
-        Ok(world)
-    })
+                )
+                .unwrap();
+            world
+                .native_mut()
+                .register(ReducerDefinition::new(ReducerId::from_u64(1), "bump", bump).unwrap())
+                .unwrap();
+            world
+                .native_mut()
+                .register(
+                    ReducerDefinition::new(ReducerId::from_u64(2), "player_join", player_join)
+                        .unwrap(),
+                )
+                .unwrap();
+            world
+                .native_mut()
+                .register(
+                    ReducerDefinition::new(ReducerId::from_u64(3), "server_secret", server_secret)
+                        .unwrap(),
+                )
+                .unwrap();
+            let mut wasm = WasmModuleRegistry::new(WasmLimits::default()).unwrap();
+            wasm.register("ping_wasm", 1, ping_module()).unwrap();
+            world.set_wasm(wasm);
+            Ok(world)
+        },
+    )
 }
 
 /// The demo identity table: `alice-token` → principal 1, `bob-token` →
@@ -218,7 +220,10 @@ fn main() {
     }
 
     println!("══════════════════════════════════════════════════════════════");
-    println!("  NEXUM v{} — authoritative state engine demo (Phase 14)", env!("CARGO_PKG_VERSION"));
+    println!(
+        "  NEXUM v{} — authoritative state engine demo (Phase 14)",
+        env!("CARGO_PKG_VERSION")
+    );
     println!("══════════════════════════════════════════════════════════════");
     println!(
         "  stack:  GameServer → Runtime → World → Transaction/OCC → Vec<Change>\n\
@@ -289,26 +294,48 @@ fn main() {
         // Spawn distinct ids — the join reducers already inserted rows 1–3,
         // and a duplicate primary key would fail the tick.
         if tick == 0 {
-            server.submit_command(alice_player, "spawn", Some(Value::U64(4))).unwrap();
+            server
+                .submit_command(alice_player, "spawn", Some(Value::U64(4)))
+                .unwrap();
             println!("  [tick {tick:>2}]  alice spawns player #4");
         }
         if tick == 2 {
-            server.submit_command(bob_player, "spawn", Some(Value::U64(5))).unwrap();
+            server
+                .submit_command(bob_player, "spawn", Some(Value::U64(5)))
+                .unwrap();
             println!("  [tick {tick:>2}]  bob spawns player #5");
         }
         if tick == 4 {
-            let result = server.invoke_reducer(alice_player, "bump", ReducerArgs::new().insert("player", 1u64)).unwrap();
+            let result = server
+                .invoke_reducer(
+                    alice_player,
+                    "bump",
+                    ReducerArgs::new().insert("player", 1u64),
+                )
+                .unwrap();
             // Server request ids live in the reserved `1 << 63` namespace
             // (ADR-014 D3), disjoint from client ids.
             println!("  [tick {tick:>2}]  server invokes `bump` (server request #{result:#x})");
         }
         if tick == 5 {
-            let result = server.invoke_reducer(bob_player, "server_secret", ReducerArgs::new().insert("player_id", 2u64)).unwrap();
-            println!("  [tick {tick:>2}]  server invokes `server_secret` (audit, server request #{result:#x})");
+            let result = server
+                .invoke_reducer(
+                    bob_player,
+                    "server_secret",
+                    ReducerArgs::new().insert("player_id", 2u64),
+                )
+                .unwrap();
+            println!(
+                "  [tick {tick:>2}]  server invokes `server_secret` (audit, server request #{result:#x})"
+            );
         }
         if tick == 6 {
-            let result = server.invoke_reducer(alice_player, "ping_wasm", ReducerArgs::new()).unwrap();
-            println!("  [tick {tick:>2}]  server invokes WASM `ping_wasm` (server request #{result:#x})");
+            let result = server
+                .invoke_reducer(alice_player, "ping_wasm", ReducerArgs::new())
+                .unwrap();
+            println!(
+                "  [tick {tick:>2}]  server invokes WASM `ping_wasm` (server request #{result:#x})"
+            );
         }
 
         let results = server.step().expect("tick commits");
@@ -348,7 +375,10 @@ fn main() {
     client.authenticate("alice-token").unwrap();
     server.gateway_mut().process_inbound();
     client.pump().unwrap();
-    println!("  [client] authenticated as {:?}", client.session_principal().unwrap());
+    println!(
+        "  [client] authenticated as {:?}",
+        client.session_principal().unwrap()
+    );
 
     // The client authenticated as alice (principal 1 → world 1). Attaching
     // to that same world succeeds because alice is an active member of it
@@ -380,12 +410,16 @@ fn main() {
     client.pump().unwrap();
 
     let view = client.view(local).unwrap();
-    let carol_row = view.get(RowId::from_u64(0)).map(|r| r.row().values().to_vec());
+    let carol_row = view
+        .get(RowId::from_u64(0))
+        .map(|r| r.row().values().to_vec());
     println!("  [client] after spawn command, view rows = {}", view.len());
     println!("  [client] row 0 = {carol_row:?}");
 
     // A client reducer call to the WASM reducer, correlated by request id.
-    let request = client.call_reducer("ping_wasm", ReducerArgs::new()).unwrap();
+    let request = client
+        .call_reducer("ping_wasm", ReducerArgs::new())
+        .unwrap();
     server.gateway_mut().process_inbound();
     server.step().unwrap();
     client.pump().unwrap();
@@ -397,7 +431,9 @@ fn main() {
 
     // A client reducer call to a *server-only* reducer is denied by the
     // exposure policy with a correlated error.
-    let denied = client.call_reducer("server_secret", ReducerArgs::new()).unwrap();
+    let denied = client
+        .call_reducer("server_secret", ReducerArgs::new())
+        .unwrap();
     server.gateway_mut().process_inbound();
     server.step().unwrap();
     client.pump().unwrap();

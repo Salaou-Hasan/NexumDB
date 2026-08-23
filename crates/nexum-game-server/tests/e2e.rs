@@ -9,18 +9,14 @@
 use std::sync::Arc;
 
 use nexum_core::{
-    row, ColumnType, Error, GameInstanceId, PlayerId, ReducerId, Result, Row, RowId, SystemId,
-    TableSchema, TickId, Value, WorldId,
+    ColumnType, Error, GameInstanceId, PlayerId, ReducerId, Result, Row, RowId, SystemId,
+    TableSchema, TickId, Value, WorldId, row,
 };
-use nexum_game_server::{
-    GameInstanceConfig, GameServer, GameServerConfig, JoinOutcome,
-};
+use nexum_game_server::{GameInstanceConfig, GameServer, GameServerConfig, JoinOutcome};
 use nexum_network::{NetworkConfig, Principal, TokenAuthenticator};
 use nexum_reducer::{ReducerArgs, ReducerContext, ReducerDefinition};
 use nexum_runtime::{PersistencePolicy, Runtime, RuntimeConfig, WorldFactory};
-use nexum_sdk::{
-    transport::ClientTransport, Client, SdkConfig, ServerEvent,
-};
+use nexum_sdk::{Client, SdkConfig, ServerEvent, transport::ClientTransport};
 use nexum_simulation::{InputCommand, InputFrame, SimulationConfig, SystemDefinition, World};
 use nexum_subscription::Query;
 use nexum_table::TableStore;
@@ -94,86 +90,93 @@ fn server_secret(ctx: &mut ReducerContext, args: &ReducerArgs) -> Result<Value> 
 
 /// A world with a `spawn` command consumer and the game reducers.
 fn game_factory() -> WorldFactory {
-    Box::new(|id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-        ensure_players(&mut store);
-        let mut world = World::new(id, store, sim)?;
-        world
-            .add_system(
-                SystemDefinition::new(SystemId::from_u64(0), "consumer", 0, |ctx, frame| {
-                    for command in frame.commands() {
-                        if command.kind() == "spawn" {
-                            let id = command.payload().and_then(Value::as_u64).unwrap();
-                            ctx.insert("players", row![id, 10u64, 100i32])?;
+    Box::new(
+        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
+            ensure_players(&mut store);
+            let mut world = World::new(id, store, sim)?;
+            world
+                .add_system(
+                    SystemDefinition::new(SystemId::from_u64(0), "consumer", 0, |ctx, frame| {
+                        for command in frame.commands() {
+                            if command.kind() == "spawn" {
+                                let id = command.payload().and_then(Value::as_u64).unwrap();
+                                ctx.insert("players", row![id, 10u64, 100i32])?;
+                            }
                         }
-                    }
-                    Ok(())
-                })
-                .unwrap(),
-            )
-            .unwrap();
-        world
-            .native_mut()
-            .register(ReducerDefinition::new(ReducerId::from_u64(1), "bump", bump).unwrap())
-            .unwrap();
-        world
-            .native_mut()
-            .register(
-                ReducerDefinition::new(ReducerId::from_u64(2), "player_join", player_join).unwrap(),
-            )
-            .unwrap();
-        world
-            .native_mut()
-            .register(
-                ReducerDefinition::new(ReducerId::from_u64(3), "server_secret", server_secret)
+                        Ok(())
+                    })
                     .unwrap(),
-            )
-            .unwrap();
-        Ok(world)
-    })
+                )
+                .unwrap();
+            world
+                .native_mut()
+                .register(ReducerDefinition::new(ReducerId::from_u64(1), "bump", bump).unwrap())
+                .unwrap();
+            world
+                .native_mut()
+                .register(
+                    ReducerDefinition::new(ReducerId::from_u64(2), "player_join", player_join)
+                        .unwrap(),
+                )
+                .unwrap();
+            world
+                .native_mut()
+                .register(
+                    ReducerDefinition::new(ReducerId::from_u64(3), "server_secret", server_secret)
+                        .unwrap(),
+                )
+                .unwrap();
+            Ok(world)
+        },
+    )
 }
 
 /// A factory whose worlds fail on their first tick (zero mutation).
 fn failing_factory() -> WorldFactory {
-    Box::new(|id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-        ensure_players(&mut store);
-        let mut world = World::new(id, store, sim)?;
-        world
-            .add_system(
-                SystemDefinition::new(SystemId::from_u64(0), "writer", 0, |ctx, _| {
-                    ctx.insert("players", row![ctx.tick().as_u64(), 10u64, 100i32])?;
-                    Ok(())
-                })
-                .unwrap(),
-            )
-            .unwrap();
-        world
-            .add_system(
-                SystemDefinition::new(SystemId::from_u64(1), "fails", 10, |_ctx, _| {
-                    Err(Error::invalid_argument("boom"))
-                })
-                .unwrap(),
-            )
-            .unwrap();
-        Ok(world)
-    })
+    Box::new(
+        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
+            ensure_players(&mut store);
+            let mut world = World::new(id, store, sim)?;
+            world
+                .add_system(
+                    SystemDefinition::new(SystemId::from_u64(0), "writer", 0, |ctx, _| {
+                        ctx.insert("players", row![ctx.tick().as_u64(), 10u64, 100i32])?;
+                        Ok(())
+                    })
+                    .unwrap(),
+                )
+                .unwrap();
+            world
+                .add_system(
+                    SystemDefinition::new(SystemId::from_u64(1), "fails", 10, |_ctx, _| {
+                        Err(Error::invalid_argument("boom"))
+                    })
+                    .unwrap(),
+                )
+                .unwrap();
+            Ok(world)
+        },
+    )
 }
 
 /// A factory with a WASM reducer (`ping_wasm`) returning `U64(42)`.
 fn wasm_factory() -> WorldFactory {
-    Box::new(|id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-        ensure_players(&mut store);
-        let mut world = World::new(id, store, sim)?;
-        world
-            .add_system(
-                SystemDefinition::new(SystemId::from_u64(0), "consumer", 0, |_ctx, _| Ok(()))
-                    .unwrap(),
-            )
-            .unwrap();
-        let mut wasm = WasmModuleRegistry::new(WasmLimits::default()).unwrap();
-        wasm.register("ping_wasm", 1, ping_module()).unwrap();
-        world.set_wasm(wasm);
-        Ok(world)
-    })
+    Box::new(
+        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
+            ensure_players(&mut store);
+            let mut world = World::new(id, store, sim)?;
+            world
+                .add_system(
+                    SystemDefinition::new(SystemId::from_u64(0), "consumer", 0, |_ctx, _| Ok(()))
+                        .unwrap(),
+                )
+                .unwrap();
+            let mut wasm = WasmModuleRegistry::new(WasmLimits::default()).unwrap();
+            wasm.register("ping_wasm", 1, ping_module()).unwrap();
+            world.set_wasm(wasm);
+            Ok(world)
+        },
+    )
 }
 
 /// A minimal WASM module returning `U64(42)` (no host calls).
@@ -206,7 +209,13 @@ fn temp_dir(name: &str) -> std::path::PathBuf {
 
 fn server_with(factory: WorldFactory) -> GameServer {
     let runtime = Runtime::new(RuntimeConfig::new(factory)).unwrap();
-    GameServer::new(runtime, NetworkConfig::new(), auth(), GameServerConfig::new()).unwrap()
+    GameServer::new(
+        runtime,
+        NetworkConfig::new(),
+        auth(),
+        GameServerConfig::new(),
+    )
+    .unwrap()
 }
 
 fn running_game(server: &mut GameServer, config: GameInstanceConfig) -> GameInstanceId {
@@ -223,7 +232,10 @@ fn connect_and_join(
     game: GameInstanceId,
 ) -> (Client, PlayerId, WorldId, JoinOutcome) {
     let (transport, server_conn) = ClientTransport::memory_pair(256, 512);
-    server.gateway_mut().register_connection(Box::new(server_conn)).unwrap();
+    server
+        .gateway_mut()
+        .register_connection(Box::new(server_conn))
+        .unwrap();
     let mut client = Client::new(SdkConfig::new()).unwrap();
     client.connect(transport.into_inner()).unwrap();
     server.gateway_mut().process_inbound();
@@ -242,7 +254,11 @@ fn connect_and_join(
     client.attach(world).unwrap();
     server.gateway_mut().process_inbound();
     client.pump().unwrap();
-    assert_eq!(client.attached_world(), Some(world), "attached to the player's world");
+    assert_eq!(
+        client.attached_world(),
+        Some(world),
+        "attached to the player's world"
+    );
     client.take_events();
     (client, player, world, outcome)
 }
@@ -258,8 +274,7 @@ fn full_pipeline_join_reducer_subscription_and_wal() {
     .unwrap();
     // This test asserts the full change list on the Tick event.
     let network = NetworkConfig::new().with_tick_update_changes(true);
-    let mut server = GameServer::new(runtime, network, auth(), GameServerConfig::new())
-        .unwrap();
+    let mut server = GameServer::new(runtime, network, auth(), GameServerConfig::new()).unwrap();
     let game = running_game(
         &mut server,
         GameInstanceConfig::new("arena").with_on_player_join("player_join"),
@@ -274,12 +289,17 @@ fn full_pipeline_join_reducer_subscription_and_wal() {
     server.step().unwrap();
 
     // The subscription observes the authoritative committed row.
-    let local = client.subscribe(Query::builder("players").build().unwrap()).unwrap();
+    let local = client
+        .subscribe(Query::builder("players").build().unwrap())
+        .unwrap();
     server.gateway_mut().process_inbound();
     client.pump().unwrap();
     let view = client.view(local).unwrap();
     assert_eq!(view.len(), 1, "on_player_join committed the player row");
-    assert_eq!(view.get(RowId::from_u64(0)).unwrap().row().get(0), Some(&Value::U64(1)));
+    assert_eq!(
+        view.get(RowId::from_u64(0)).unwrap().row().get(0),
+        Some(&Value::U64(1))
+    );
 
     // Client reducer call → policy → runtime → world tick → WAL → subscription
     // → network → SDK view.
@@ -324,10 +344,15 @@ fn failed_tick_produces_zero_mutation_and_zero_subscription_updates() {
     let mut server = server_with(failing_factory());
     let game = running_game(&mut server, GameInstanceConfig::new("doomed"));
     let (mut client, _, _world, _) = connect_and_join(&mut server, "alice-token", game);
-    let local = client.subscribe(Query::builder("players").build().unwrap()).unwrap();
+    let local = client
+        .subscribe(Query::builder("players").build().unwrap())
+        .unwrap();
     server.gateway_mut().process_inbound();
     client.pump().unwrap();
-    assert!(client.view(local).unwrap().is_empty(), "initial snapshot is empty");
+    assert!(
+        client.view(local).unwrap().is_empty(),
+        "initial snapshot is empty"
+    );
 
     // The first tick fails: no authoritative mutation, no TickUpdate, no
     // subscription delta — and the game is reported Failed.
@@ -335,14 +360,21 @@ fn failed_tick_produces_zero_mutation_and_zero_subscription_updates() {
     client.pump().unwrap();
     let events = client.take_events();
     assert!(
-        !events.iter().any(|event| matches!(event, ServerEvent::Tick { .. })),
+        !events
+            .iter()
+            .any(|event| matches!(event, ServerEvent::Tick { .. })),
         "a failed tick emits no TickUpdate"
     );
-    assert!(client.view(local).unwrap().is_empty(), "the failed tick changed nothing");
-    assert!(server
-        .drain_events()
-        .iter()
-        .any(|event| matches!(event, nexum_game_server::GameServerEvent::GameFailed { .. })));
+    assert!(
+        client.view(local).unwrap().is_empty(),
+        "the failed tick changed nothing"
+    );
+    assert!(
+        server
+            .drain_events()
+            .iter()
+            .any(|event| matches!(event, nexum_game_server::GameServerEvent::GameFailed { .. }))
+    );
 }
 
 // --------------------------------------------------- multi-partition isolation
@@ -358,8 +390,12 @@ fn players_are_isolated_across_partitions_and_games() {
     let (mut bob, _, world_b, _) = connect_and_join(&mut server, "bob-token", game);
     assert_ne!(world_a, world_b, "1 % 2 != 2 % 2 — deterministic routing");
 
-    let sub_a = alice.subscribe(Query::builder("players").build().unwrap()).unwrap();
-    let sub_b = bob.subscribe(Query::builder("players").build().unwrap()).unwrap();
+    let sub_a = alice
+        .subscribe(Query::builder("players").build().unwrap())
+        .unwrap();
+    let sub_b = bob
+        .subscribe(Query::builder("players").build().unwrap())
+        .unwrap();
     server.gateway_mut().process_inbound();
     alice.pump().unwrap();
     bob.pump().unwrap();
@@ -376,7 +412,10 @@ fn players_are_isolated_across_partitions_and_games() {
     bob.pump().unwrap();
 
     assert_eq!(alice.view(sub_a).unwrap().len(), 1, "alice sees her row");
-    assert!(bob.view(sub_b).unwrap().is_empty(), "bob's partition is untouched");
+    assert!(
+        bob.view(sub_b).unwrap().is_empty(),
+        "bob's partition is untouched"
+    );
 
     // Bob cannot attach to Alice's world either: he is already bound to his
     // own partition's world, and re-attachment is rejected synchronously
@@ -397,7 +436,9 @@ fn unexposed_reducer_is_denied_but_server_can_invoke_it() {
 
     // `server_secret` is registered on the world but NOT exposed — the client
     // is denied with a correlated error and nothing is submitted.
-    let request = client.call_reducer("server_secret", ReducerArgs::new()).unwrap();
+    let request = client
+        .call_reducer("server_secret", ReducerArgs::new())
+        .unwrap();
     server.gateway_mut().process_inbound();
     server.step().unwrap();
     client.pump().unwrap();
@@ -410,7 +451,11 @@ fn unexposed_reducer_is_denied_but_server_can_invoke_it() {
     // The same reducer is server-invocable (server-trusted path). It commits
     // through the normal tick boundary: one atomic tick, one Vec<Change>.
     let req = server
-        .invoke_reducer(player, "server_secret", ReducerArgs::new().insert("player_id", 1u64))
+        .invoke_reducer(
+            player,
+            "server_secret",
+            ReducerArgs::new().insert("player_id", 1u64),
+        )
         .unwrap();
     let step_results = server.step().unwrap();
     assert_eq!(step_results.len(), 1, "one world ticked");
@@ -418,7 +463,9 @@ fn unexposed_reducer_is_denied_but_server_can_invoke_it() {
     assert_eq!(tick.tick().as_u64(), 1, "the join tick (0), then this tick");
     assert!(
         tick.changes().iter().any(|change| {
-            change.new_row().is_some_and(|row| row.get(0) == Some(&Value::U64(1001)))
+            change
+                .new_row()
+                .is_some_and(|row| row.get(0) == Some(&Value::U64(1001)))
         }),
         "the audit row was committed by the server-side reducer"
     );
@@ -436,14 +483,19 @@ fn unregistered_reducers_are_denied_by_default() {
     let game = running_game(&mut server, GameInstanceConfig::new("arena"));
     let (mut client, _, _, _) = connect_and_join(&mut server, "alice-token", game);
 
-    let request = client.call_reducer("never_registered", ReducerArgs::new()).unwrap();
+    let request = client
+        .call_reducer("never_registered", ReducerArgs::new())
+        .unwrap();
     server.gateway_mut().process_inbound();
     server.step().unwrap();
     client.pump().unwrap();
     let results = client.take_reducer_results();
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].request_id(), request);
-    assert!(!results[0].is_ok(), "unknown reducers are denied by the policy");
+    assert!(
+        !results[0].is_ok(),
+        "unknown reducers are denied by the policy"
+    );
 }
 
 // ---------------------------------------------------------------- WASM
@@ -455,7 +507,9 @@ fn wasm_reducer_invoked_through_the_game_server() {
     server.expose_reducer("ping_wasm").unwrap();
     let (mut client, _, _, _) = connect_and_join(&mut server, "alice-token", game);
 
-    let request = client.call_reducer("ping_wasm", ReducerArgs::new()).unwrap();
+    let request = client
+        .call_reducer("ping_wasm", ReducerArgs::new())
+        .unwrap();
     server.gateway_mut().process_inbound();
     server.step().unwrap();
     client.pump().unwrap();
@@ -472,7 +526,7 @@ fn wasm_reducer_invoked_through_the_game_server() {
 fn recovery_restores_state_and_reconnects_without_history_replay() {
     let dir = temp_dir("nexum-game-e2e-recovery");
 
-// First server: create, run, and durably commit one join (the
+    // First server: create, run, and durably commit one join (the
     // `player_join` reducer inserts the player row through the simulation
     // path on the join tick).
     let game_config = GameInstanceConfig::new("arena").with_on_player_join("player_join");
@@ -480,8 +534,13 @@ fn recovery_restores_state_and_reconnects_without_history_replay() {
         RuntimeConfig::new(game_factory()).with_persistence(PersistencePolicy::Flush, dir.clone()),
     )
     .unwrap();
-    let mut server = GameServer::new(runtime, NetworkConfig::new(), auth(), GameServerConfig::new())
-        .unwrap();
+    let mut server = GameServer::new(
+        runtime,
+        NetworkConfig::new(),
+        auth(),
+        GameServerConfig::new(),
+    )
+    .unwrap();
     let game = running_game(&mut server, game_config.clone());
     let (client, _player, _world, _) = connect_and_join(&mut server, "alice-token", game);
     server.step().unwrap();
@@ -500,8 +559,13 @@ fn recovery_restores_state_and_reconnects_without_history_replay() {
         RuntimeConfig::new(game_factory()).with_persistence(PersistencePolicy::Flush, dir.clone()),
     )
     .unwrap();
-    let mut server = GameServer::new(runtime, NetworkConfig::new(), auth(), GameServerConfig::new())
-        .unwrap();
+    let mut server = GameServer::new(
+        runtime,
+        NetworkConfig::new(),
+        auth(),
+        GameServerConfig::new(),
+    )
+    .unwrap();
     server.expose_reducer("bump").unwrap();
     let (game, report) = server.recover_game(game_config, None).unwrap();
     assert!(report.replayed_txs >= 1, "committed history was replayed");
@@ -514,12 +578,17 @@ fn recovery_restores_state_and_reconnects_without_history_replay() {
 
     // A fresh subscription sees the current recovered state — and only future
     // commits flow as live updates (no historical replay).
-    let local = client.subscribe(Query::builder("players").build().unwrap()).unwrap();
+    let local = client
+        .subscribe(Query::builder("players").build().unwrap())
+        .unwrap();
     server.gateway_mut().process_inbound();
     client.pump().unwrap();
     let view = client.view(local).unwrap();
     assert_eq!(view.len(), 1, "recovered row is visible in the snapshot");
-    assert_eq!(view.get(RowId::from_u64(0)).unwrap().row().get(0), Some(&Value::U64(1)));
+    assert_eq!(
+        view.get(RowId::from_u64(0)).unwrap().row().get(0),
+        Some(&Value::U64(1))
+    );
 
     // An empty tick emits no deltas to the fresh subscription.
     client.take_events();
@@ -527,7 +596,9 @@ fn recovery_restores_state_and_reconnects_without_history_replay() {
     client.pump().unwrap();
     let events = client.take_events();
     assert!(
-        events.iter().all(|event| !matches!(event, ServerEvent::Tick { changes, .. } if !changes.is_empty())),
+        events.iter().all(
+            |event| !matches!(event, ServerEvent::Tick { changes, .. } if !changes.is_empty())
+        ),
         "no historical changes replayed as live updates"
     );
 
@@ -543,7 +614,13 @@ fn recovery_restores_state_and_reconnects_without_history_replay() {
     assert_eq!(results[0].request_id(), request);
     assert_eq!(results[0].value(), Some(&Value::I32(110)));
     assert_eq!(
-        client.view(local).unwrap().get(RowId::from_u64(0)).unwrap().row().get(2),
+        client
+            .view(local)
+            .unwrap()
+            .get(RowId::from_u64(0))
+            .unwrap()
+            .row()
+            .get(2),
         Some(&Value::I32(110)),
         "the post-recovery commit updated the view"
     );

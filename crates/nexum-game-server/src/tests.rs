@@ -4,8 +4,8 @@
 use std::sync::Arc;
 
 use nexum_core::{
-    row, ColumnType, Error, GameInstanceId, PlayerId, ReducerId, Result, Row, SystemId,
-    TableSchema, Value, WorldId,
+    ColumnType, Error, GameInstanceId, PlayerId, ReducerId, Result, Row, SystemId, TableSchema,
+    Value, WorldId, row,
 };
 use nexum_network::{GamePolicy, NetworkConfig, Principal, TokenAuthenticator};
 use nexum_reducer::{ReducerArgs, ReducerContext, ReducerDefinition};
@@ -73,68 +73,73 @@ fn player_leave(ctx: &mut ReducerContext, args: &ReducerArgs) -> Result<Value> {
 
 /// A world with a `spawn` command consumer and native reducers.
 fn test_factory() -> WorldFactory {
-    Box::new(|id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-        players_table(&mut store);
-        let mut world = World::new(id, store, sim)?;
-        world
-            .add_system(
-                SystemDefinition::new(SystemId::from_u64(0), "consumer", 0, |ctx, frame| {
-                    for command in frame.commands() {
-                        if command.kind() == "spawn" {
-                            let id = command.payload().and_then(Value::as_u64).unwrap();
-                            ctx.insert("players", row![id, 100i32])?;
+    Box::new(
+        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
+            players_table(&mut store);
+            let mut world = World::new(id, store, sim)?;
+            world
+                .add_system(
+                    SystemDefinition::new(SystemId::from_u64(0), "consumer", 0, |ctx, frame| {
+                        for command in frame.commands() {
+                            if command.kind() == "spawn" {
+                                let id = command.payload().and_then(Value::as_u64).unwrap();
+                                ctx.insert("players", row![id, 100i32])?;
+                            }
                         }
-                    }
-                    Ok(())
-                })
-                .unwrap(),
-            )
-            .unwrap();
-        world
-            .native_mut()
-            .register(ReducerDefinition::new(ReducerId::from_u64(1), "bump", bump).unwrap())
-            .unwrap();
-        world
-            .native_mut()
-            .register(
-                ReducerDefinition::new(ReducerId::from_u64(2), "player_join", player_join).unwrap(),
-            )
-            .unwrap();
-        world
-            .native_mut()
-            .register(
-                ReducerDefinition::new(ReducerId::from_u64(3), "player_leave", player_leave)
+                        Ok(())
+                    })
                     .unwrap(),
-            )
-            .unwrap();
-        Ok(world)
-    })
+                )
+                .unwrap();
+            world
+                .native_mut()
+                .register(ReducerDefinition::new(ReducerId::from_u64(1), "bump", bump).unwrap())
+                .unwrap();
+            world
+                .native_mut()
+                .register(
+                    ReducerDefinition::new(ReducerId::from_u64(2), "player_join", player_join)
+                        .unwrap(),
+                )
+                .unwrap();
+            world
+                .native_mut()
+                .register(
+                    ReducerDefinition::new(ReducerId::from_u64(3), "player_leave", player_leave)
+                        .unwrap(),
+                )
+                .unwrap();
+            Ok(world)
+        },
+    )
 }
 
 /// A factory whose world 0 fails on its first tick.
 fn failing_factory() -> WorldFactory {
-    Box::new(|id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-        players_table(&mut store);
-        let mut world = World::new(id, store, sim)?;
-        world
-            .add_system(
-                SystemDefinition::new(SystemId::from_u64(0), "writer", 0, |ctx, _| {
-                    ctx.insert("players", row![ctx.tick().as_u64(), 100i32])?;
-                    Ok(())
-                })
-                .unwrap(),
-            )
-            .unwrap();
-        world
-            .add_system(
-                SystemDefinition::new(SystemId::from_u64(1), "fails", 10, |_ctx, _| {
-                    Err(Error::invalid_argument("boom"))
-                })
-                .unwrap(),
-            )
-            .unwrap();
-        Ok(world)
-    })
+    Box::new(
+        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
+            players_table(&mut store);
+            let mut world = World::new(id, store, sim)?;
+            world
+                .add_system(
+                    SystemDefinition::new(SystemId::from_u64(0), "writer", 0, |ctx, _| {
+                        ctx.insert("players", row![ctx.tick().as_u64(), 100i32])?;
+                        Ok(())
+                    })
+                    .unwrap(),
+                )
+                .unwrap();
+            world
+                .add_system(
+                    SystemDefinition::new(SystemId::from_u64(1), "fails", 10, |_ctx, _| {
+                        Err(Error::invalid_argument("boom"))
+                    })
+                    .unwrap(),
+                )
+                .unwrap();
+            Ok(world)
+        },
+    )
 }
 
 fn server_with(factory: WorldFactory) -> GameServer {
@@ -167,25 +172,42 @@ fn running_game(server: &mut GameServer, config: GameInstanceConfig) -> GameInst
 #[test]
 fn game_lifecycle_create_start_stop_restart_destroy() {
     let mut server = server_with(test_factory());
-    let game = server.create_game(GameInstanceConfig::new("arena")).unwrap();
-    assert_eq!(server.game_status(game).unwrap().lifecycle, GameLifecycle::Created);
+    let game = server
+        .create_game(GameInstanceConfig::new("arena"))
+        .unwrap();
+    assert_eq!(
+        server.game_status(game).unwrap().lifecycle,
+        GameLifecycle::Created
+    );
     assert!(matches!(
         server.drain_events().as_slice(),
         [GameServerEvent::GameCreated { .. }]
     ));
 
     server.start_game(game).unwrap();
-    assert_eq!(server.game_status(game).unwrap().lifecycle, GameLifecycle::Running);
+    assert_eq!(
+        server.game_status(game).unwrap().lifecycle,
+        GameLifecycle::Running
+    );
 
     server.stop_game(game).unwrap();
-    assert_eq!(server.game_status(game).unwrap().lifecycle, GameLifecycle::Stopped);
+    assert_eq!(
+        server.game_status(game).unwrap().lifecycle,
+        GameLifecycle::Stopped
+    );
 
     // Restart from Stopped is legal.
     server.start_game(game).unwrap();
-    assert_eq!(server.game_status(game).unwrap().lifecycle, GameLifecycle::Running);
+    assert_eq!(
+        server.game_status(game).unwrap().lifecycle,
+        GameLifecycle::Running
+    );
 
     server.destroy_game(game).unwrap();
-    assert!(matches!(server.game_status(game), Err(GameServerError::UnknownGame(_))));
+    assert!(matches!(
+        server.game_status(game),
+        Err(GameServerError::UnknownGame(_))
+    ));
     assert!(server.list_games().is_empty());
 }
 
@@ -206,7 +228,10 @@ fn game_lifecycle_invalid_transitions_are_rejected() {
     ));
     // Destroying twice is an unknown-game error.
     server.destroy_game(game).unwrap();
-    assert!(matches!(server.destroy_game(game), Err(GameServerError::UnknownGame(_))));
+    assert!(matches!(
+        server.destroy_game(game),
+        Err(GameServerError::UnknownGame(_))
+    ));
 }
 
 #[test]
@@ -243,11 +268,17 @@ fn join_leave_and_fresh_rejoin() {
     let outcome = server.join_game(&alice(), game).unwrap();
     assert_eq!(outcome, JoinOutcome::Joined);
     let player = PlayerId::from_u64(alice().id());
-    assert_eq!(server.player_status(player).unwrap().state, PlayerState::Active);
+    assert_eq!(
+        server.player_status(player).unwrap().state,
+        PlayerState::Active
+    );
     assert_eq!(server.player_status(player).unwrap().game, game);
 
     server.leave_game(player).unwrap();
-    assert_eq!(server.player_status(player).unwrap().state, PlayerState::Left);
+    assert_eq!(
+        server.player_status(player).unwrap().state,
+        PlayerState::Left
+    );
 
     // A join after Left is a fresh join, not a reconnect.
     let outcome = server.join_game(&alice(), game).unwrap();
@@ -260,31 +291,54 @@ fn duplicate_join_is_a_reconnect_with_the_same_player() {
     let game = running_game(&mut server, GameInstanceConfig::new("arena"));
     let player = PlayerId::from_u64(alice().id());
 
-    assert_eq!(server.join_game(&alice(), game).unwrap(), JoinOutcome::Joined);
+    assert_eq!(
+        server.join_game(&alice(), game).unwrap(),
+        JoinOutcome::Joined
+    );
     // Same principal rejoining restores the same membership.
     let outcome = server.join_game(&alice(), game).unwrap();
     assert_eq!(outcome, JoinOutcome::Reconnected);
-    assert_eq!(server.player_world(player).unwrap(), server.player_world(player).unwrap());
+    assert_eq!(
+        server.player_world(player).unwrap(),
+        server.player_world(player).unwrap()
+    );
 
     // Disconnect → reconnect restores Active.
     server.disconnect_player(player).unwrap();
-    assert_eq!(server.player_status(player).unwrap().state, PlayerState::Reconnecting);
-    assert_eq!(server.join_game(&alice(), game).unwrap(), JoinOutcome::Reconnected);
-    assert_eq!(server.player_status(player).unwrap().state, PlayerState::Active);
+    assert_eq!(
+        server.player_status(player).unwrap().state,
+        PlayerState::Reconnecting
+    );
+    assert_eq!(
+        server.join_game(&alice(), game).unwrap(),
+        JoinOutcome::Reconnected
+    );
+    assert_eq!(
+        server.player_status(player).unwrap().state,
+        PlayerState::Active
+    );
 }
 
 #[test]
 fn join_rejects_full_games_and_invalid_states() {
     let mut server = server_with(test_factory());
-    let game = running_game(&mut server, GameInstanceConfig::new("arena").with_max_players(1));
-    assert_eq!(server.join_game(&alice(), game).unwrap(), JoinOutcome::Joined);
+    let game = running_game(
+        &mut server,
+        GameInstanceConfig::new("arena").with_max_players(1),
+    );
+    assert_eq!(
+        server.join_game(&alice(), game).unwrap(),
+        JoinOutcome::Joined
+    );
     assert!(matches!(
         server.join_game(&bob(), game),
         Err(GameServerError::GameFull { .. })
     ));
 
     // Joining a stopped game fails explicitly.
-    let stopped = server.create_game(GameInstanceConfig::new("lobby")).unwrap();
+    let stopped = server
+        .create_game(GameInstanceConfig::new("lobby"))
+        .unwrap();
     assert!(matches!(
         server.join_game(&alice(), stopped),
         Err(GameServerError::GameNotRunning(_))
@@ -330,7 +384,9 @@ fn deterministic_partition_routing() {
     );
     let world_a = server.join_game(&alice(), game).unwrap();
     let world_b = server.join_game(&bob(), game).unwrap();
-    let alice_world = server.player_world(PlayerId::from_u64(alice().id())).unwrap();
+    let alice_world = server
+        .player_world(PlayerId::from_u64(alice().id()))
+        .unwrap();
     let bob_world = server.player_world(PlayerId::from_u64(bob().id())).unwrap();
     // 1 % 2 = 1, 2 % 2 = 0 — deterministic pure function of the player id.
     assert_eq!(world_a, JoinOutcome::Joined);
@@ -354,7 +410,13 @@ fn players_are_isolated_between_games() {
         Err(GameServerError::UnknownPlayer(_))
     ));
     server.join_game(&bob(), game_b).unwrap();
-    assert_eq!(server.player_status(PlayerId::from_u64(bob().id())).unwrap().game, game_b);
+    assert_eq!(
+        server
+            .player_status(PlayerId::from_u64(bob().id()))
+            .unwrap()
+            .game,
+        game_b
+    );
 }
 
 // ----------------------------------------------------------------- commands
@@ -367,12 +429,17 @@ fn submit_command_executes_through_the_world_tick() {
     server.join_game(&alice(), game).unwrap();
 
     // Server-side intent: spawn a player row in the authoritative world.
-    server.submit_command(player, "spawn", Some(Value::U64(alice().id()))).unwrap();
+    server
+        .submit_command(player, "spawn", Some(Value::U64(alice().id())))
+        .unwrap();
     let results = server.step().unwrap();
     assert_eq!(results.len(), 1);
     let (world, result) = &results[0];
     assert_eq!(*world, server.player_world(player).unwrap());
-    assert!(!result.changes().is_empty(), "spawn committed at least one change");
+    assert!(
+        !result.changes().is_empty(),
+        "spawn committed at least one change"
+    );
 
     // A command for an unknown player is rejected.
     assert!(matches!(
@@ -389,7 +456,11 @@ fn invoke_reducer_is_server_trusted_and_correlated() {
     server.join_game(&alice(), game).unwrap();
 
     let request = server
-        .invoke_reducer(player, "player_join", ReducerArgs::new().insert("player_id", alice().id()))
+        .invoke_reducer(
+            player,
+            "player_join",
+            ReducerArgs::new().insert("player_id", alice().id()),
+        )
         .unwrap();
     let results = server.step().unwrap();
     let call = results[0]
@@ -411,18 +482,26 @@ fn exposure_is_deny_by_default_and_revocable() {
 
     server.expose_reducer("bump").unwrap();
     assert!(server.is_client_callable("bump"));
-    assert_eq!(server.reducer_exposure("bump"), Some(ReducerExposure::ClientCallable));
+    assert_eq!(
+        server.reducer_exposure("bump"),
+        Some(ReducerExposure::ClientCallable)
+    );
 
     server.revoke_reducer("bump").unwrap();
     assert!(!server.is_client_callable("bump"));
-    assert!(matches!(server.revoke_reducer("bump"), Err(GameServerError::UnknownReducer(_))));
+    assert!(matches!(
+        server.revoke_reducer("bump"),
+        Err(GameServerError::UnknownReducer(_))
+    ));
 }
 
 #[test]
 fn policy_handle_enforces_exposure_roles_and_membership() {
     let mut server = server_with(test_factory());
     server.expose_reducer("bump").unwrap();
-    server.register_client_reducer("admin_only", &[Role::Admin]).unwrap();
+    server
+        .register_client_reducer("admin_only", &[Role::Admin])
+        .unwrap();
     server.set_principal_role(1, Role::Player);
 
     let handle = server.policy_handle();
@@ -473,7 +552,10 @@ fn role_overrides_and_active_membership_are_shared_live() {
 fn world_failure_marks_partition_and_then_game_failed() {
     let mut server = server_with(failing_factory());
     // Both worlds of the game fail; the game must report Failed and events.
-    let game = running_game(&mut server, GameInstanceConfig::new("doomed").with_partition_count(2));
+    let game = running_game(
+        &mut server,
+        GameInstanceConfig::new("doomed").with_partition_count(2),
+    );
     let _ = server.step().unwrap();
     let events = server.drain_events();
     let partition_failures = events
@@ -481,10 +563,15 @@ fn world_failure_marks_partition_and_then_game_failed() {
         .filter(|event| matches!(event, GameServerEvent::PartitionFailed { .. }))
         .count();
     assert_eq!(partition_failures, 2, "both partitions report failure");
-    assert!(events
-        .iter()
-        .any(|event| matches!(event, GameServerEvent::GameFailed { .. })));
-    assert_eq!(server.game_status(game).unwrap().lifecycle, GameLifecycle::Failed);
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, GameServerEvent::GameFailed { .. }))
+    );
+    assert_eq!(
+        server.game_status(game).unwrap().lifecycle,
+        GameLifecycle::Failed
+    );
     assert_eq!(server.game_status(game).unwrap().failed_partitions, 2);
 
     // Joining a failed game fails explicitly.
@@ -497,7 +584,10 @@ fn world_failure_marks_partition_and_then_game_failed() {
 #[test]
 fn failing_world_rejects_commands_and_joins() {
     let mut server = server_with(failing_factory());
-    let game = running_game(&mut server, GameInstanceConfig::new("doomed").with_partition_count(1));
+    let game = running_game(
+        &mut server,
+        GameInstanceConfig::new("doomed").with_partition_count(1),
+    );
     // Join succeeds while the world is up, then the world fails on the first
     // tick and the game itself becomes Failed (its only partition died).
     let outcome = server.join_game(&alice(), game).unwrap();
@@ -508,7 +598,10 @@ fn failing_world_rejects_commands_and_joins() {
         server.submit_command(player, "spawn", None),
         Err(GameServerError::GameFailed(_))
     ));
-    assert_eq!(server.game_status(game).unwrap().lifecycle, GameLifecycle::Failed);
+    assert_eq!(
+        server.game_status(game).unwrap().lifecycle,
+        GameLifecycle::Failed
+    );
 }
 
 // ------------------------------------------------------------ subscriptions
@@ -526,7 +619,9 @@ fn server_side_subscriptions_are_bounded_per_player() {
     let game = running_game(&mut server, GameInstanceConfig::new("arena"));
     let player = PlayerId::from_u64(alice().id());
     server.join_game(&alice(), game).unwrap();
-    let query = nexum_subscription::Query::builder("players").build().unwrap();
+    let query = nexum_subscription::Query::builder("players")
+        .build()
+        .unwrap();
     let sub_a = server.subscribe_player(player, query.clone()).unwrap();
     let sub_b = server.subscribe_player(player, query.clone()).unwrap();
     assert!(matches!(
@@ -535,10 +630,7 @@ fn server_side_subscriptions_are_bounded_per_player() {
     ));
     server.unsubscribe_player(player, sub_a).unwrap();
     server.resync_player(player, sub_b).unwrap();
-    assert!(matches!(
-        server.unsubscribe_player(player, sub_b),
-        Ok(())
-    ));
+    assert!(matches!(server.unsubscribe_player(player, sub_b), Ok(())));
 }
 
 #[test]
@@ -547,7 +639,9 @@ fn leave_game_ends_tracked_subscriptions() {
     let game = running_game(&mut server, GameInstanceConfig::new("arena"));
     let player = PlayerId::from_u64(alice().id());
     server.join_game(&alice(), game).unwrap();
-    let query = nexum_subscription::Query::builder("players").build().unwrap();
+    let query = nexum_subscription::Query::builder("players")
+        .build()
+        .unwrap();
     let sub = server.subscribe_player(player, query).unwrap();
     server.leave_game(player).unwrap();
     // The subscription no longer exists on the world's registry.
@@ -568,7 +662,9 @@ fn command_burst_before_a_tick_merges_into_one_frame() {
     server.join_game(&alice(), game).unwrap();
 
     for id in 1..=5u64 {
-        server.submit_command(player, "spawn", Some(Value::U64(id))).unwrap();
+        server
+            .submit_command(player, "spawn", Some(Value::U64(id)))
+            .unwrap();
     }
     // One step drains the whole burst in one tick (FIFO), no frame-gate
     // failure, world stays healthy.
@@ -576,11 +672,17 @@ fn command_burst_before_a_tick_merges_into_one_frame() {
     assert_eq!(results.len(), 1, "one world ticked");
     let changes = results[0].1.changes().len();
     assert_eq!(changes, 5, "all five commands committed in one tick");
-    assert_eq!(server.game_status(game).unwrap().lifecycle, GameLifecycle::Running);
+    assert_eq!(
+        server.game_status(game).unwrap().lifecycle,
+        GameLifecycle::Running
+    );
 
     // Subsequent ticks continue normally.
     server.step().unwrap();
-    assert_eq!(server.game_status(game).unwrap().lifecycle, GameLifecycle::Running);
+    assert_eq!(
+        server.game_status(game).unwrap().lifecycle,
+        GameLifecycle::Running
+    );
 }
 
 /// Commands submitted between ticks still execute on the next tick, and a
@@ -592,8 +694,12 @@ fn commands_buffered_then_stopped_are_rejected_not_dropped() {
     let player = PlayerId::from_u64(alice().id());
     server.join_game(&alice(), game).unwrap();
 
-    server.submit_command(player, "spawn", Some(Value::U64(1))).unwrap();
-    server.submit_command(player, "spawn", Some(Value::U64(2))).unwrap();
+    server
+        .submit_command(player, "spawn", Some(Value::U64(1)))
+        .unwrap();
+    server
+        .submit_command(player, "spawn", Some(Value::U64(2)))
+        .unwrap();
     server.stop_game(game).unwrap();
 
     // Both buffered commands were rejected with events, not silently lost.
@@ -602,7 +708,11 @@ fn commands_buffered_then_stopped_are_rejected_not_dropped() {
         .iter()
         .filter(|event| matches!(event, GameServerEvent::CommandRejected { .. }))
         .collect();
-    assert_eq!(rejected.len(), 2, "both buffered commands rejected explicitly");
+    assert_eq!(
+        rejected.len(),
+        2,
+        "both buffered commands rejected explicitly"
+    );
 }
 
 /// Server-originated request ids live in the reserved namespace: a server
@@ -618,7 +728,11 @@ fn server_invoke_request_ids_use_the_reserved_namespace() {
     server.join_game(&alice(), game).unwrap();
 
     let request = server
-        .invoke_reducer(player, "player_join", ReducerArgs::new().insert("player_id", alice().id()))
+        .invoke_reducer(
+            player,
+            "player_join",
+            ReducerArgs::new().insert("player_id", alice().id()),
+        )
         .unwrap();
     assert_ne!(request & SERVER_REQUEST_MSB, 0, "server ids are namespaced");
     let results = server.step().unwrap();
@@ -638,7 +752,10 @@ fn repeated_runs_produce_identical_world_ids_and_routing() {
     let mut first = server_with(test_factory());
     let mut second = server_with(test_factory());
     let run = |server: &mut GameServer| -> (u64, u64) {
-        let game = running_game(server, GameInstanceConfig::new("arena").with_partition_count(3));
+        let game = running_game(
+            server,
+            GameInstanceConfig::new("arena").with_partition_count(3),
+        );
         server.join_game(&alice(), game).unwrap();
         server.join_game(&bob(), game).unwrap();
         let alice_world = server.player_world(PlayerId::from_u64(1)).unwrap().as_u64();

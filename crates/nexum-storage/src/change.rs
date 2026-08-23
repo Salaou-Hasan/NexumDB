@@ -12,8 +12,8 @@
 
 use std::sync::Arc;
 
-use nexum_core::{ChangeKind, RowId, TableId, Version};
 use nexum_core::Row;
+use nexum_core::{ChangeKind, RowId, TableId, Version};
 
 /// One committed mutation of one row.
 ///

@@ -29,15 +29,24 @@ pub enum GameServerError {
     /// The game failed (authoritative worlds unavailable).
     GameFailed(GameInstanceId),
     /// A lifecycle transition was invalid from the current state.
-    InvalidTransition { game: GameInstanceId, detail: String },
+    InvalidTransition {
+        game: GameInstanceId,
+        detail: String,
+    },
     /// The game is at capacity.
     GameFull { game: GameInstanceId, max: usize },
     /// The player is not in an actable state.
     PlayerNotActive(PlayerId),
     /// The player does not belong to the named game.
-    PlayerNotInGame { game: GameInstanceId, player: PlayerId },
+    PlayerNotInGame {
+        game: GameInstanceId,
+        player: PlayerId,
+    },
     /// The player already has a membership in the named game.
-    PlayerAlreadyInGame { game: GameInstanceId, player: PlayerId },
+    PlayerAlreadyInGame {
+        game: GameInstanceId,
+        player: PlayerId,
+    },
     /// The player's world is not running.
     WorldFailed(WorldId),
     /// The world does not exist.
@@ -91,9 +100,14 @@ impl fmt::Display for GameServerError {
             Self::UnknownReducer(reducer) => write!(f, "unknown reducer '{reducer}'"),
             Self::NotAuthorized(detail) => write!(f, "not authorized: {detail}"),
             Self::Capacity(detail) => write!(f, "capacity exceeded: {detail}"),
-            Self::CommandBufferFull(world) => write!(f, "pending command buffer full for world {world}"),
+            Self::CommandBufferFull(world) => {
+                write!(f, "pending command buffer full for world {world}")
+            }
             Self::SubscriptionLimit { player, limit } => {
-                write!(f, "player {player} reached the subscription limit ({limit})")
+                write!(
+                    f,
+                    "player {player} reached the subscription limit ({limit})"
+                )
             }
             Self::Network(error) => write!(f, "network: {error}"),
             Self::Runtime(error) => write!(f, "runtime: {error}"),

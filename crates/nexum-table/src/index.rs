@@ -79,7 +79,11 @@ impl Index {
     pub(crate) fn key_of(&self, row: &Row) -> Vec<Value> {
         self.columns()
             .iter()
-            .map(|&position| row.get(position).expect("row validated against schema").clone())
+            .map(|&position| {
+                row.get(position)
+                    .expect("row validated against schema")
+                    .clone()
+            })
             .collect()
     }
 
@@ -98,7 +102,12 @@ impl Index {
     /// Validates that updating a row to `new_key` would not violate
     /// uniqueness, allowing the row to keep a key it already owns
     /// (`old_key == new_key`, or `new_key` currently maps to `row_id`).
-    pub(crate) fn check_update(&self, old_key: &[Value], new_key: &[Value], row_id: RowId) -> Result<()> {
+    pub(crate) fn check_update(
+        &self,
+        old_key: &[Value],
+        new_key: &[Value],
+        row_id: RowId,
+    ) -> Result<()> {
         if let Self::Unique { name, entries, .. } = self {
             if old_key == new_key {
                 return Ok(());
@@ -155,7 +164,6 @@ impl Index {
                 .unwrap_or_default(),
         }
     }
-
 }
 
 #[cfg(test)]
@@ -224,7 +232,10 @@ mod tests {
         index.commit_insert(key.clone(), RowId::from_u64(0));
         index.commit_insert(key.clone(), RowId::from_u64(1));
 
-        assert_eq!(index.lookup(&key), vec![RowId::from_u64(0), RowId::from_u64(1)]);
+        assert_eq!(
+            index.lookup(&key),
+            vec![RowId::from_u64(0), RowId::from_u64(1)]
+        );
 
         index.commit_remove(&key, RowId::from_u64(0));
         assert_eq!(index.lookup(&key), vec![RowId::from_u64(1)]);

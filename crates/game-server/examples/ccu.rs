@@ -32,15 +32,13 @@
 use std::time::{Duration, Instant};
 
 use game_server::{
-    fire_weapon_module, game_factory, move_args, CLIENT_REDUCERS, ARENA_HEIGHT,
-    ARENA_WIDTH, POS_INDEX, TABLE,
+    ARENA_HEIGHT, ARENA_WIDTH, CLIENT_REDUCERS, POS_INDEX, TABLE, fire_weapon_module, game_factory,
+    move_args,
 };
-use nexum_game_server::{
-    GameInstanceConfig, GameServer, GameServerConfig, JoinOutcome,
-};
+use nexum_game_server::{GameInstanceConfig, GameServer, GameServerConfig, JoinOutcome};
 use nexum_network::{NetworkConfig, Principal, TokenAuthenticator};
 use nexum_runtime::{Runtime, RuntimeConfig};
-use nexum_sdk::{transport::ClientTransport, Client, SdkConfig};
+use nexum_sdk::{Client, SdkConfig, transport::ClientTransport};
 use nexum_subscription::Query;
 
 // ---------------------------------------------------------------- alloc
@@ -134,7 +132,8 @@ fn auth_for(n: usize) -> std::sync::Arc<TokenAuthenticator> {
     let mut auth = TokenAuthenticator::new();
     for i in 0..n {
         let name = format!("p{i}");
-        auth.add(&name, Principal::new(i as u64 + 1, &name)).unwrap();
+        auth.add(&name, Principal::new(i as u64 + 1, &name))
+            .unwrap();
     }
     std::sync::Arc::new(auth)
 }
@@ -162,13 +161,8 @@ fn boot(args: &Args) -> (GameServer, nexum_core::GameInstanceId) {
     let server_config = GameServerConfig::new()
         .with_tick_rate_hz(args.hz as u32)
         .with_reducer_profiling(args.reducer_profile);
-    let mut server = GameServer::new(
-        runtime,
-        network,
-        auth_for(args.clients),
-        server_config,
-    )
-    .expect("game server");
+    let mut server = GameServer::new(runtime, network, auth_for(args.clients), server_config)
+        .expect("game server");
     let game = server
         .create_game(
             GameInstanceConfig::new("arena")
@@ -235,7 +229,10 @@ fn step(server: &mut GameServer, clients: &mut [SimClient]) {
     server.gateway_mut().process_inbound();
     let _ = server.step();
     // pump_subscriptions removed: fan_out_results inside step() already drains.
-    server.gateway_mut().flush_outbound().expect("flush outbound");
+    server
+        .gateway_mut()
+        .flush_outbound()
+        .expect("flush outbound");
     for sim in clients.iter_mut() {
         sim.client.pump().expect("client pump");
     }
@@ -270,10 +267,7 @@ fn step_server_timed(server: &mut GameServer, t: &mut PhaseTimers) {
     // Split the game-server step into its public halves: the authoritative
     // runtime tick (parallel worlds) and the gateway fan-out (TickUpdate
     // broadcast + subscription pumps + reducer-result routing).
-    let results = server
-        .runtime_mut()
-        .step_detailed()
-        .expect("runtime tick");
+    let results = server.runtime_mut().step_detailed().expect("runtime tick");
     let t2 = Instant::now();
     let _ = server.gateway_mut().fan_out_results(&results);
     // pump_subscriptions is NOT called here: fan_out_results already drains
@@ -281,7 +275,10 @@ fn step_server_timed(server: &mut GameServer, t: &mut PhaseTimers) {
     // pump_subscriptions call would re-iterate all connections finding empty
     // buffers — pure overhead.
     let t3 = Instant::now();
-    server.gateway_mut().flush_outbound().expect("flush outbound");
+    server
+        .gateway_mut()
+        .flush_outbound()
+        .expect("flush outbound");
     let t4 = Instant::now();
     let inbound = t1.duration_since(t0).as_nanos() as u64;
     let tick = t2.duration_since(t1).as_nanos() as u64;
@@ -302,14 +299,18 @@ fn step_server_timed(server: &mut GameServer, t: &mut PhaseTimers) {
     t.sub_apply_ns += profile.2;
     // Keep a per-tick phase sample; the caller fills in clients/drain after
     // the pumps.
-    t.tick_samples.push((inbound, tick, fanout, pump, flush, 0, 0));
+    t.tick_samples
+        .push((inbound, tick, fanout, pump, flush, 0, 0));
 }
 
 fn step_server(server: &mut GameServer) {
     server.gateway_mut().process_inbound();
     let _ = server.step();
     server.gateway_mut().pump_subscriptions();
-    server.gateway_mut().flush_outbound().expect("flush outbound");
+    server
+        .gateway_mut()
+        .flush_outbound()
+        .expect("flush outbound");
 }
 
 /// Client-side half: drain every client's inbound frames.
@@ -356,10 +357,9 @@ fn drive_profile(profile: char, tick: u64, clients: &mut [SimClient], hz: u64) {
             }
             if tick.is_multiple_of(hz * 5) {
                 for sim in clients.iter_mut() {
-                    let _ = sim.client.call_reducer(
-                        "fire_weapon",
-                        nexum_reducer::ReducerArgs::new(),
-                    );
+                    let _ = sim
+                        .client
+                        .call_reducer("fire_weapon", nexum_reducer::ReducerArgs::new());
                 }
             }
         }
@@ -371,10 +371,9 @@ fn drive_profile(profile: char, tick: u64, clients: &mut [SimClient], hz: u64) {
             }
             if tick.is_multiple_of(4) {
                 for sim in clients.iter_mut() {
-                    let _ = sim.client.call_reducer(
-                        "fire_weapon",
-                        nexum_reducer::ReducerArgs::new(),
-                    );
+                    let _ = sim
+                        .client
+                        .call_reducer("fire_weapon", nexum_reducer::ReducerArgs::new());
                 }
             }
         }
@@ -391,18 +390,16 @@ fn drive_profile(profile: char, tick: u64, clients: &mut [SimClient], hz: u64) {
             }
             if tick.is_multiple_of(10) {
                 for sim in clients.iter_mut() {
-                    let _ = sim.client.call_reducer(
-                        "fire_weapon",
-                        nexum_reducer::ReducerArgs::new(),
-                    );
+                    let _ = sim
+                        .client
+                        .call_reducer("fire_weapon", nexum_reducer::ReducerArgs::new());
                 }
             }
             if tick.is_multiple_of(25) {
                 for sim in clients.iter_mut() {
-                    let _ = sim.client.call_reducer(
-                        "reload_weapon",
-                        nexum_reducer::ReducerArgs::new(),
-                    );
+                    let _ = sim
+                        .client
+                        .call_reducer("reload_weapon", nexum_reducer::ReducerArgs::new());
                 }
             }
         }
@@ -417,7 +414,7 @@ fn drive_profile(profile: char, tick: u64, clients: &mut [SimClient], hz: u64) {
 /// early-reject path). Each invocation runs against a fresh transaction via
 /// the timed entry point; the stage totals are aggregated over `n` calls.
 fn wasm_stage_breakdown() {
-    use nexum_core::{row, ColumnType, TableSchema};
+    use nexum_core::{ColumnType, TableSchema, row};
     use nexum_reducer::ReducerArgs;
     use nexum_table::TableStore;
     use nexum_tx::Transaction;
@@ -448,12 +445,17 @@ fn wasm_stage_breakdown() {
     for id in 1..=PLAYERS {
         // 1-based ids (the game's player ids start at 1); dense placement.
         let n = id - 1;
-        let (x, y) = (n % ARENA_WIDTH as u64, (n / ARENA_WIDTH as u64) % ARENA_HEIGHT as u64);
+        let (x, y) = (
+            n % ARENA_WIDTH as u64,
+            (n / ARENA_WIDTH as u64) % ARENA_HEIGHT as u64,
+        );
         let mut tx = Transaction::begin(&mut store);
         tx.insert(
             &store,
             TABLE,
-            row![id, x as i64, y as i64, 100i64, 100i64, 1i64, 0i64, 0i64, 1i64, 10i64, 1i64],
+            row![
+                id, x as i64, y as i64, 100i64, 100i64, 1i64, 0i64, 0i64, 1i64, 10i64, 1i64
+            ],
         )
         .unwrap();
         tx.commit(&mut store).unwrap();
@@ -472,8 +474,7 @@ fn wasm_stage_breakdown() {
         let caller = (i as u64 % PLAYERS) + 1; // ids are 1-based in the game
         let args = ReducerArgs::new().insert("target", caller);
         let mut tx = Transaction::begin(&mut store);
-        let outcome = registry
-            .invoke_in_tx_timed(&store, &mut tx, "fire_weapon", &args);
+        let outcome = registry.invoke_in_tx_timed(&store, &mut tx, "fire_weapon", &args);
         let _ = tx.abort();
         let (_, _, times) = outcome.expect("real fire_weapon invocation succeeds");
         if i >= warmup {
@@ -488,12 +489,35 @@ fn wasm_stage_breakdown() {
     }
     let ns = |v: u64| v as f64 / n as f64;
     let total = ns(acc.total_ns).max(1.0);
-    println!("\n=== WASM STAGE BREAKDOWN (real fire_weapon, {} calls) ===", n);
-    println!("  store_setup {:>9.1} ns  ({:>5.1}%)", ns(acc.store_setup_ns), ns(acc.store_setup_ns) / total * 100.0);
-    println!("  instantiate {:>9.1} ns  ({:>5.1}%)", ns(acc.instantiate_ns), ns(acc.instantiate_ns) / total * 100.0);
-    println!("  encode      {:>9.1} ns  ({:>5.1}%)", ns(acc.encode_ns), ns(acc.encode_ns) / total * 100.0);
-    println!("  exec        {:>9.1} ns  ({:>5.1}%)", ns(acc.exec_ns), ns(acc.exec_ns) / total * 100.0);
-    println!("  result      {:>9.1} ns  ({:>5.1}%)", ns(acc.result_ns), ns(acc.result_ns) / total * 100.0);
+    println!(
+        "\n=== WASM STAGE BREAKDOWN (real fire_weapon, {} calls) ===",
+        n
+    );
+    println!(
+        "  store_setup {:>9.1} ns  ({:>5.1}%)",
+        ns(acc.store_setup_ns),
+        ns(acc.store_setup_ns) / total * 100.0
+    );
+    println!(
+        "  instantiate {:>9.1} ns  ({:>5.1}%)",
+        ns(acc.instantiate_ns),
+        ns(acc.instantiate_ns) / total * 100.0
+    );
+    println!(
+        "  encode      {:>9.1} ns  ({:>5.1}%)",
+        ns(acc.encode_ns),
+        ns(acc.encode_ns) / total * 100.0
+    );
+    println!(
+        "  exec        {:>9.1} ns  ({:>5.1}%)",
+        ns(acc.exec_ns),
+        ns(acc.exec_ns) / total * 100.0
+    );
+    println!(
+        "  result      {:>9.1} ns  ({:>5.1}%)",
+        ns(acc.result_ns),
+        ns(acc.result_ns) / total * 100.0
+    );
     println!("  total       {:>9.1} ns/call", total);
 
     // Harness-style loop: one tick transaction; each call branches off it,
@@ -540,11 +564,25 @@ fn wasm_stage_breakdown() {
         }
         let _ = tick_tx.abort();
     }
-    println!("\n=== HARNESS-STYLE LOOP ({CALLS_PER_TICK} branch/invoke/absorb per tick tx, {total_n} calls) ===");
-    println!("  branch    {:>9.1} ns/call", branch_ns as f64 / total_n as f64);
-    println!("  invoke    {:>9.1} ns/call", invoke_ns as f64 / total_n as f64);
-    println!("  absorb    {:>9.1} ns/call", absorb_ns as f64 / total_n as f64);
-    println!("  total     {:>9.1} ns/call", total_ns as f64 / total_n as f64);
+    println!(
+        "\n=== HARNESS-STYLE LOOP ({CALLS_PER_TICK} branch/invoke/absorb per tick tx, {total_n} calls) ==="
+    );
+    println!(
+        "  branch    {:>9.1} ns/call",
+        branch_ns as f64 / total_n as f64
+    );
+    println!(
+        "  invoke    {:>9.1} ns/call",
+        invoke_ns as f64 / total_n as f64
+    );
+    println!(
+        "  absorb    {:>9.1} ns/call",
+        absorb_ns as f64 / total_n as f64
+    );
+    println!(
+        "  total     {:>9.1} ns/call",
+        total_ns as f64 / total_n as f64
+    );
     println!();
 }
 
@@ -680,57 +718,100 @@ fn main() {
     let metrics = server.gateway().metrics();
     let runtime_metrics = server.runtime().metrics();
     let game_metrics = server.metrics();
-    let accepted_delta = (metrics.inputs_accepted + metrics.reducer_calls_accepted)
-        .saturating_sub(accepted_before);
+    let accepted_delta =
+        (metrics.inputs_accepted + metrics.reducer_calls_accepted).saturating_sub(accepted_before);
     let dropped_delta = metrics.messages_dropped.saturating_sub(dropped_before);
-    let rejected_delta = (metrics.inputs_rejected + metrics.reducer_calls_rejected)
-        .saturating_sub(rejected_before);
+    let rejected_delta =
+        (metrics.inputs_rejected + metrics.reducer_calls_rejected).saturating_sub(rejected_before);
 
-    println!("\n=== RESULTS (measured phase: {:.1}s) ===", measured_elapsed.as_secs_f64());
-    println!("tick:  p50={:.1}us  p95={:.1}us  p99={:.1}us  p99.9={:.1}us  max={:.1}us  avg={:.1}us  budget={:.1}ms",
-        p50.as_micros(), p95.as_micros(), p99.as_micros(), p999.as_micros(),
-        max.as_micros(), avg.as_micros(), tick_budget.as_millis() as f64);
-    println!("work:  accepted={accepted_delta}  rejected={rejected_delta}  dropped={dropped_delta}");
-    println!("state: ticks_ok={} ticks_failed={} worlds={} partitions={}",
-        runtime_metrics.ticks_succeeded, runtime_metrics.ticks_failed,
-        runtime_metrics.running_worlds, runtime_metrics.partitions);
-    println!("xpart: messages_sent={} delivered={} dropped={}",
-        runtime_metrics.messages_sent, runtime_metrics.messages_delivered,
-        runtime_metrics.messages_dropped);
+    println!(
+        "\n=== RESULTS (measured phase: {:.1}s) ===",
+        measured_elapsed.as_secs_f64()
+    );
+    println!(
+        "tick:  p50={:.1}us  p95={:.1}us  p99={:.1}us  p99.9={:.1}us  max={:.1}us  avg={:.1}us  budget={:.1}ms",
+        p50.as_micros(),
+        p95.as_micros(),
+        p99.as_micros(),
+        p999.as_micros(),
+        max.as_micros(),
+        avg.as_micros(),
+        tick_budget.as_millis() as f64
+    );
+    println!(
+        "work:  accepted={accepted_delta}  rejected={rejected_delta}  dropped={dropped_delta}"
+    );
+    println!(
+        "state: ticks_ok={} ticks_failed={} worlds={} partitions={}",
+        runtime_metrics.ticks_succeeded,
+        runtime_metrics.ticks_failed,
+        runtime_metrics.running_worlds,
+        runtime_metrics.partitions
+    );
+    println!(
+        "xpart: messages_sent={} delivered={} dropped={}",
+        runtime_metrics.messages_sent,
+        runtime_metrics.messages_delivered,
+        runtime_metrics.messages_dropped
+    );
     let subs_eval = runtime_metrics.subscription_evaluations;
     let subs_deltas = runtime_metrics.subscription_deltas;
     let per_change = subs_eval as f64 / (runtime_metrics.changes_committed.max(1)) as f64;
-    println!("subs:  evaluations={subs_eval} deltas={subs_deltas} per_change={per_change:.2} views={}",
-        runtime_metrics.subscription_views);
+    println!(
+        "subs:  evaluations={subs_eval} deltas={subs_deltas} per_change={per_change:.2} views={}",
+        runtime_metrics.subscription_views
+    );
     let tick_delta = metrics.tick_updates_sent.saturating_sub(tick_before);
     let sub_msg_delta = metrics
         .subscription_messages_sent
         .saturating_sub(sub_msg_before);
-    let result_delta = metrics
-        .reducer_results_sent
-        .saturating_sub(result_before);
-    println!("net:   conns={} sessions={} subs={} frames={} rate_limited={}",
-        metrics.connections, metrics.sessions, metrics.subscriptions,
-        metrics.frames_received, metrics.rate_limited);
-    println!("out:   tick_updates={tick_delta} sub_deltas={sub_msg_delta} reducer_results={result_delta} total={}",
-        tick_delta + sub_msg_delta + result_delta);
-    println!("game:  players_active={} games={} reducer_calls={}",
-        game_metrics.players_active, game_metrics.games_active, game_metrics.reducer_calls);
+    let result_delta = metrics.reducer_results_sent.saturating_sub(result_before);
+    println!(
+        "net:   conns={} sessions={} subs={} frames={} rate_limited={}",
+        metrics.connections,
+        metrics.sessions,
+        metrics.subscriptions,
+        metrics.frames_received,
+        metrics.rate_limited
+    );
+    println!(
+        "out:   tick_updates={tick_delta} sub_deltas={sub_msg_delta} reducer_results={result_delta} total={}",
+        tick_delta + sub_msg_delta + result_delta
+    );
+    println!(
+        "game:  players_active={} games={} reducer_calls={}",
+        game_metrics.players_active, game_metrics.games_active, game_metrics.reducer_calls
+    );
     // Calibrated to measured steady-state RSS (Phase 18 follow-up): the
     // full stack (server + in-process SDK clients) needs ≈ 24.7 KB private
     // per connection with a ~6 MB base — linear fit over 5K/10K/15K/20K
     // measured samples. A mass-join storm without client consumption spikes
     // several× higher (un-drained SDK event buffers).
-    println!("mem:   est.~{}MB (steady-state fit: ~24.7KB/conn + 6MB base, incl. in-process SDK clients; join storm spikes several×)",
-        (args.clients as u64).saturating_mul(25 * 1024) / (1024 * 1024) + 6);
+    println!(
+        "mem:   est.~{}MB (steady-state fit: ~24.7KB/conn + 6MB base, incl. in-process SDK clients; join storm spikes several×)",
+        (args.clients as u64).saturating_mul(25 * 1024) / (1024 * 1024) + 6
+    );
 
     // ---- Phase 21.5: per-reducer execution profile ---------------------
     if args.reducer_profile {
         println!("\n=== REDUCER PROFILE (measured phase) ===");
-        println!("  {:<16} {:>10} {:>12} {:>14}", "reducer", "calls", "total ms", "avg \u{00b5}s");
+        println!(
+            "  {:<16} {:>10} {:>12} {:>14}",
+            "reducer", "calls", "total ms", "avg \u{00b5}s"
+        );
         for (name, (calls, ns)) in &reducer_profile {
-            let avg_us = if *calls > 0 { *ns as f64 / *calls as f64 / 1e3 } else { 0.0 };
-            println!("  {:<16} {:>10} {:>12.2} {:>14.2}", name, calls, *ns as f64 / 1e6, avg_us);
+            let avg_us = if *calls > 0 {
+                *ns as f64 / *calls as f64 / 1e3
+            } else {
+                0.0
+            };
+            println!(
+                "  {:<16} {:>10} {:>12.2} {:>14.2}",
+                name,
+                calls,
+                *ns as f64 / 1e6,
+                avg_us
+            );
         }
     }
 
@@ -747,13 +828,21 @@ fn main() {
         println!("  allocs/tick: {:>10.0}", allocs as f64 / ticks);
         println!("  bytes/tick:  {:>10.0}", bytes as f64 / ticks);
         println!("  frees/tick:  {:>10.0}", frees as f64 / ticks);
-        println!("  allocs/client/tick: {:>8.2}", allocs as f64 / args.clients.max(1) as f64 / ticks);
-        println!("  bytes/client/tick:  {:>8.2}", bytes as f64 / args.clients.max(1) as f64 / ticks);
+        println!(
+            "  allocs/client/tick: {:>8.2}",
+            allocs as f64 / args.clients.max(1) as f64 / ticks
+        );
+        println!(
+            "  bytes/client/tick:  {:>8.2}",
+            bytes as f64 / args.clients.max(1) as f64 / ticks
+        );
         println!("  total allocs: {allocs}  bytes: {bytes}  frees: {frees}");
     }
     #[cfg(not(feature = "ccu-alloc"))]
     if args.count_alloc {
-        println!("\nnote: --count-alloc requires building with `--features ccu-alloc`; skipping allocation profile.");
+        println!(
+            "\nnote: --count-alloc requires building with `--features ccu-alloc`; skipping allocation profile."
+        );
     }
 
     // ---- Phase 21.5: latency spike investigation ------------------------
@@ -806,23 +895,123 @@ fn main() {
         "PASS — p99 within budget, no silent loss, no failures"
     };
     println!("\nCLASSIFICATION: {class}");
-    println!("note: in-process transport; protocol/gateway/runtime/world/subscriptions/SDK are real.");
+    println!(
+        "note: in-process transport; protocol/gateway/runtime/world/subscriptions/SDK are real."
+    );
     println!("arena size: {ARENA_WIDTH}x{ARENA_HEIGHT}; movement validation is authoritative.");
 
     if phase_timers.count > 0 {
         let n = phase_timers.count as f64;
-        println!("\n=== PHASE BREAKDOWN (avg over {count} ticks) ===", count = phase_timers.count);
-        println!("  inbound:  {:>7.1} ms/tick ({:>4.1}%)", phase_timers.inbound_ns as f64 / n / 1e6, phase_timers.inbound_ns as f64 / phase_timers.tick_ns.max(1) as f64 * 100.0);
-        println!("  tick:     {:>7.1} ms/tick ({:>4.1}%)", phase_timers.tick_ns as f64 / n / 1e6, phase_timers.tick_ns as f64 / (phase_timers.inbound_ns + phase_timers.tick_ns + phase_timers.fanout_ns + phase_timers.pump_ns + phase_timers.flush_ns + phase_timers.client_ns + phase_timers.drain_ns).max(1) as f64 * 100.0);
-        println!("  fanout:   {:>7.1} ms/tick ({:>4.1}%)", phase_timers.fanout_ns as f64 / n / 1e6, phase_timers.fanout_ns as f64 / (phase_timers.inbound_ns + phase_timers.tick_ns + phase_timers.fanout_ns + phase_timers.pump_ns + phase_timers.flush_ns + phase_timers.client_ns + phase_timers.drain_ns).max(1) as f64 * 100.0);
-        println!("  pump:     {:>7.1} ms/tick ({:>4.1}%)", phase_timers.pump_ns as f64 / n / 1e6, phase_timers.pump_ns as f64 / (phase_timers.inbound_ns + phase_timers.tick_ns + phase_timers.fanout_ns + phase_timers.pump_ns + phase_timers.flush_ns + phase_timers.client_ns + phase_timers.drain_ns).max(1) as f64 * 100.0);
-        println!("  flush:    {:>7.1} ms/tick ({:>4.1}%)", phase_timers.flush_ns as f64 / n / 1e6, phase_timers.flush_ns as f64 / (phase_timers.inbound_ns + phase_timers.tick_ns + phase_timers.fanout_ns + phase_timers.pump_ns + phase_timers.flush_ns + phase_timers.client_ns + phase_timers.drain_ns).max(1) as f64 * 100.0);
-        println!("  clients:  {:>7.1} ms/tick ({:>4.1}%)", phase_timers.client_ns as f64 / n / 1e6, phase_timers.client_ns as f64 / (phase_timers.inbound_ns + phase_timers.tick_ns + phase_timers.fanout_ns + phase_timers.pump_ns + phase_timers.flush_ns + phase_timers.client_ns + phase_timers.drain_ns).max(1) as f64 * 100.0);
-        println!("  drain:    {:>7.1} ms/tick ({:>4.1}%)", phase_timers.drain_ns as f64 / n / 1e6, phase_timers.drain_ns as f64 / (phase_timers.inbound_ns + phase_timers.tick_ns + phase_timers.fanout_ns + phase_timers.pump_ns + phase_timers.flush_ns + phase_timers.client_ns + phase_timers.drain_ns).max(1) as f64 * 100.0);
+        println!(
+            "\n=== PHASE BREAKDOWN (avg over {count} ticks) ===",
+            count = phase_timers.count
+        );
+        println!(
+            "  inbound:  {:>7.1} ms/tick ({:>4.1}%)",
+            phase_timers.inbound_ns as f64 / n / 1e6,
+            phase_timers.inbound_ns as f64 / phase_timers.tick_ns.max(1) as f64 * 100.0
+        );
+        println!(
+            "  tick:     {:>7.1} ms/tick ({:>4.1}%)",
+            phase_timers.tick_ns as f64 / n / 1e6,
+            phase_timers.tick_ns as f64
+                / (phase_timers.inbound_ns
+                    + phase_timers.tick_ns
+                    + phase_timers.fanout_ns
+                    + phase_timers.pump_ns
+                    + phase_timers.flush_ns
+                    + phase_timers.client_ns
+                    + phase_timers.drain_ns)
+                    .max(1) as f64
+                * 100.0
+        );
+        println!(
+            "  fanout:   {:>7.1} ms/tick ({:>4.1}%)",
+            phase_timers.fanout_ns as f64 / n / 1e6,
+            phase_timers.fanout_ns as f64
+                / (phase_timers.inbound_ns
+                    + phase_timers.tick_ns
+                    + phase_timers.fanout_ns
+                    + phase_timers.pump_ns
+                    + phase_timers.flush_ns
+                    + phase_timers.client_ns
+                    + phase_timers.drain_ns)
+                    .max(1) as f64
+                * 100.0
+        );
+        println!(
+            "  pump:     {:>7.1} ms/tick ({:>4.1}%)",
+            phase_timers.pump_ns as f64 / n / 1e6,
+            phase_timers.pump_ns as f64
+                / (phase_timers.inbound_ns
+                    + phase_timers.tick_ns
+                    + phase_timers.fanout_ns
+                    + phase_timers.pump_ns
+                    + phase_timers.flush_ns
+                    + phase_timers.client_ns
+                    + phase_timers.drain_ns)
+                    .max(1) as f64
+                * 100.0
+        );
+        println!(
+            "  flush:    {:>7.1} ms/tick ({:>4.1}%)",
+            phase_timers.flush_ns as f64 / n / 1e6,
+            phase_timers.flush_ns as f64
+                / (phase_timers.inbound_ns
+                    + phase_timers.tick_ns
+                    + phase_timers.fanout_ns
+                    + phase_timers.pump_ns
+                    + phase_timers.flush_ns
+                    + phase_timers.client_ns
+                    + phase_timers.drain_ns)
+                    .max(1) as f64
+                * 100.0
+        );
+        println!(
+            "  clients:  {:>7.1} ms/tick ({:>4.1}%)",
+            phase_timers.client_ns as f64 / n / 1e6,
+            phase_timers.client_ns as f64
+                / (phase_timers.inbound_ns
+                    + phase_timers.tick_ns
+                    + phase_timers.fanout_ns
+                    + phase_timers.pump_ns
+                    + phase_timers.flush_ns
+                    + phase_timers.client_ns
+                    + phase_timers.drain_ns)
+                    .max(1) as f64
+                * 100.0
+        );
+        println!(
+            "  drain:    {:>7.1} ms/tick ({:>4.1}%)",
+            phase_timers.drain_ns as f64 / n / 1e6,
+            phase_timers.drain_ns as f64
+                / (phase_timers.inbound_ns
+                    + phase_timers.tick_ns
+                    + phase_timers.fanout_ns
+                    + phase_timers.pump_ns
+                    + phase_timers.flush_ns
+                    + phase_timers.client_ns
+                    + phase_timers.drain_ns)
+                    .max(1) as f64
+                * 100.0
+        );
         println!("  -- inside tick --");
-        let tick_total = (phase_timers.world_tick_ns + phase_timers.wal_ns + phase_timers.sub_apply_ns).max(1);
-        println!("  world_tick: {:>7.1} ms/tick ({:>4.1}% of tick)", phase_timers.world_tick_ns as f64 / n / 1e6, phase_timers.world_tick_ns as f64 / tick_total as f64 * 100.0);
-        println!("  wal:        {:>7.1} ms/tick ({:>4.1}% of tick)", phase_timers.wal_ns as f64 / n / 1e6, phase_timers.wal_ns as f64 / tick_total as f64 * 100.0);
-        println!("  sub_apply:  {:>7.1} ms/tick ({:>4.1}% of tick)", phase_timers.sub_apply_ns as f64 / n / 1e6, phase_timers.sub_apply_ns as f64 / tick_total as f64 * 100.0);
+        let tick_total =
+            (phase_timers.world_tick_ns + phase_timers.wal_ns + phase_timers.sub_apply_ns).max(1);
+        println!(
+            "  world_tick: {:>7.1} ms/tick ({:>4.1}% of tick)",
+            phase_timers.world_tick_ns as f64 / n / 1e6,
+            phase_timers.world_tick_ns as f64 / tick_total as f64 * 100.0
+        );
+        println!(
+            "  wal:        {:>7.1} ms/tick ({:>4.1}% of tick)",
+            phase_timers.wal_ns as f64 / n / 1e6,
+            phase_timers.wal_ns as f64 / tick_total as f64 * 100.0
+        );
+        println!(
+            "  sub_apply:  {:>7.1} ms/tick ({:>4.1}% of tick)",
+            phase_timers.sub_apply_ns as f64 / n / 1e6,
+            phase_timers.sub_apply_ns as f64 / tick_total as f64 * 100.0
+        );
     }
 }

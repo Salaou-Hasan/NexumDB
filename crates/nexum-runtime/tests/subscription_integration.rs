@@ -27,22 +27,24 @@ fn players_table(store: &mut TableStore) {
 
 /// A factory whose single system inserts one player per tick.
 fn writer_factory() -> WorldFactory {
-    Box::new(|id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-        if store.table("players").is_none() {
-            players_table(&mut store);
-        }
-        let mut world = World::new(id, store, sim)?;
-        world
-            .add_system(
-                SystemDefinition::new(SystemId::from_u64(0), "writer", 0, |ctx, _| {
-                    ctx.insert("players", row![ctx.tick().as_u64(), 10u64, 100i32])?;
-                    Ok(())
-                })
-                .unwrap(),
-            )
-            .unwrap();
-        Ok(world)
-    })
+    Box::new(
+        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
+            if store.table("players").is_none() {
+                players_table(&mut store);
+            }
+            let mut world = World::new(id, store, sim)?;
+            world
+                .add_system(
+                    SystemDefinition::new(SystemId::from_u64(0), "writer", 0, |ctx, _| {
+                        ctx.insert("players", row![ctx.tick().as_u64(), 10u64, 100i32])?;
+                        Ok(())
+                    })
+                    .unwrap(),
+                )
+                .unwrap();
+            Ok(world)
+        },
+    )
 }
 
 fn temp_dir(name: &str) -> PathBuf {
@@ -54,19 +56,25 @@ fn temp_dir(name: &str) -> PathBuf {
 
 #[test]
 fn subscriptions_observe_only_their_own_world_s_commits() {
-    let mut runtime = Runtime::new(
-        RuntimeConfig::new(writer_factory()).with_worker_count(2),
-    )
-    .unwrap();
+    let mut runtime =
+        Runtime::new(RuntimeConfig::new(writer_factory()).with_worker_count(2)).unwrap();
     for w in 0..2u64 {
-        runtime.create_world(WorldId::from_u64(w), SimulationConfig::new()).unwrap();
+        runtime
+            .create_world(WorldId::from_u64(w), SimulationConfig::new())
+            .unwrap();
         runtime.start_world(WorldId::from_u64(w)).unwrap();
     }
     let sub_a = runtime
-        .subscribe(WorldId::from_u64(0), Query::builder("players").build().unwrap())
+        .subscribe(
+            WorldId::from_u64(0),
+            Query::builder("players").build().unwrap(),
+        )
         .unwrap();
     let sub_b = runtime
-        .subscribe(WorldId::from_u64(1), Query::builder("players").build().unwrap())
+        .subscribe(
+            WorldId::from_u64(1),
+            Query::builder("players").build().unwrap(),
+        )
         .unwrap();
     runtime.drain(WorldId::from_u64(0), sub_a).unwrap(); // Initial
     runtime.drain(WorldId::from_u64(1), sub_b).unwrap(); // Initial
@@ -93,7 +101,9 @@ fn recovered_history_is_a_snapshot_not_live_updates() {
                 .with_persistence(PersistencePolicy::Flush, dir.clone()),
         )
         .unwrap();
-        runtime.create_world(world, SimulationConfig::new()).unwrap();
+        runtime
+            .create_world(world, SimulationConfig::new())
+            .unwrap();
         runtime.start_world(world).unwrap();
         for _ in 0..3 {
             runtime.step().unwrap();

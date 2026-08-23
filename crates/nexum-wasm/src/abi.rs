@@ -22,7 +22,9 @@
 //! deterministic, bounds-checked). Malformed input is an ABI error, never a
 //! panic.
 
-use nexum_core::binary::{get_bool, get_row, get_str, get_u64, put_bool, put_row, put_str, put_u64, put_value};
+use nexum_core::binary::{
+    get_bool, get_row, get_str, get_u64, put_bool, put_row, put_str, put_u64, put_value,
+};
 use nexum_core::{Error, Result, Row, RowId, Value};
 use nexum_reducer::ReducerArgs;
 
@@ -55,7 +57,9 @@ pub fn opcode(code: u32) -> Result<u32> {
     if (OP_GET..=OP_LOOKUP_INDEX).contains(&code) {
         Ok(code)
     } else {
-        Err(Error::invalid_argument(format!("unknown ABI opcode {code}")))
+        Err(Error::invalid_argument(format!(
+            "unknown ABI opcode {code}"
+        )))
     }
 }
 
@@ -368,7 +372,10 @@ mod tests {
         let player = row![1u64, 10u64, 100i32, 5u32];
         let bytes = encode_get_result(Some(&player));
         let mut cursor: &[u8] = &bytes;
-        assert_eq!(decode_get_result(&mut cursor).unwrap(), Some(player.clone()));
+        assert_eq!(
+            decode_get_result(&mut cursor).unwrap(),
+            Some(player.clone())
+        );
 
         let bytes = encode_get_result(None);
         let mut cursor: &[u8] = &bytes;

@@ -159,13 +159,13 @@ impl Transaction {
                 return Err(Error::already_committed(format!(
                     "cannot absorb transaction {}: already committed",
                     child.id
-                )))
+                )));
             }
             TransactionState::Aborted => {
                 return Err(Error::already_aborted(format!(
                     "cannot absorb transaction {}: already aborted",
                     child.id
-                )))
+                )));
             }
         }
         self.reads.absorb(&child.reads);
@@ -464,7 +464,13 @@ impl Transaction {
     /// If `row_id` is a provisional insert handle, the entry must exist
     /// (insert→update = final insert). If it is a real id, the row's
     /// existence is validated at commit.
-    pub fn update(&mut self, store: &TableStore, table: &str, row_id: RowId, row: Row) -> Result<()> {
+    pub fn update(
+        &mut self,
+        store: &TableStore,
+        table: &str,
+        row_id: RowId,
+        row: Row,
+    ) -> Result<()> {
         self.ensure_active()?;
         let table = resolve_table(store, table)?;
         table.schema().validate_row(row.values())?;
@@ -515,13 +521,13 @@ impl Transaction {
                 return Err(Error::already_committed(format!(
                     "transaction {} already committed",
                     self.id
-                )))
+                )));
             }
             TransactionState::Aborted => {
                 return Err(Error::already_aborted(format!(
                     "transaction {} already aborted",
                     self.id
-                )))
+                )));
             }
         }
         match commit::commit(store, self) {
@@ -557,9 +563,9 @@ impl Transaction {
 
 /// Resolves a table by name, or fails with `NotFound`.
 fn resolve_table<'s>(store: &'s TableStore, table: &str) -> Result<&'s nexum_table::Table> {
-    store.table(table).ok_or_else(|| {
-        Error::not_found(format!("table '{table}' does not exist"))
-    })
+    store
+        .table(table)
+        .ok_or_else(|| Error::not_found(format!("table '{table}' does not exist")))
 }
 
 /// Returns `true` if `row` owns `key` in the named **unique** index

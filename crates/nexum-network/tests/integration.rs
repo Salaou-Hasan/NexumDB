@@ -6,13 +6,11 @@
 
 use std::sync::Arc;
 
-use nexum_core::{
-    row, ColumnType, Error, SystemId, TickId, Value, WorldId,
-};
+use nexum_core::{ColumnType, Error, SystemId, TickId, Value, WorldId, row};
 use nexum_network::{
-    protocol::{self, ClientMessage, DeltaKind, PROTOCOL_VERSION, ServerMessage},
     Connection, MemoryConnection, MemoryTransport, NetworkConfig, NetworkGateway, Principal,
     TokenAuthenticator,
+    protocol::{self, ClientMessage, DeltaKind, PROTOCOL_VERSION, ServerMessage},
 };
 use nexum_runtime::{PersistencePolicy, Runtime, RuntimeConfig, WorldFactory, WorldLifecycle};
 use nexum_simulation::{InputCommand, InputFrame, SimulationConfig, SystemDefinition, World};
@@ -41,53 +39,57 @@ fn ensure_players(store: &mut TableStore) {
 
 /// A world whose system consumes `spawn` commands as player rows.
 fn input_factory() -> WorldFactory {
-    Box::new(|id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-        ensure_players(&mut store);
-        let mut world = World::new(id, store, sim)?;
-        world
-            .add_system(
-                SystemDefinition::new(SystemId::from_u64(0), "consumer", 0, |ctx, frame| {
-                    for command in frame.commands() {
-                        if command.kind() == "spawn" {
-                            let id = command.payload().and_then(Value::as_u64).unwrap();
-                            ctx.insert("players", row![id, 10u64, 100i32])?;
-                        }
-                    }
-                    Ok(())
-                })
-                .unwrap(),
-            )
-            .unwrap();
-        Ok(world)
-    })
-}
-
-/// A factory where world 1 fails on its first tick.
-fn failing_factory() -> WorldFactory {
-    Box::new(|id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-        ensure_players(&mut store);
-        let mut world = World::new(id, store, sim)?;
-        world
-            .add_system(
-                SystemDefinition::new(SystemId::from_u64(0), "writer", 0, |ctx, _| {
-                    ctx.insert("players", row![ctx.tick().as_u64(), 10u64, 100i32])?;
-                    Ok(())
-                })
-                .unwrap(),
-            )
-            .unwrap();
-        if id.as_u64() == 1 {
+    Box::new(
+        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
+            ensure_players(&mut store);
+            let mut world = World::new(id, store, sim)?;
             world
                 .add_system(
-                    SystemDefinition::new(SystemId::from_u64(1), "fails", 10, |_ctx, _| {
-                        Err(Error::invalid_argument("boom"))
+                    SystemDefinition::new(SystemId::from_u64(0), "consumer", 0, |ctx, frame| {
+                        for command in frame.commands() {
+                            if command.kind() == "spawn" {
+                                let id = command.payload().and_then(Value::as_u64).unwrap();
+                                ctx.insert("players", row![id, 10u64, 100i32])?;
+                            }
+                        }
+                        Ok(())
                     })
                     .unwrap(),
                 )
                 .unwrap();
-        }
-        Ok(world)
-    })
+            Ok(world)
+        },
+    )
+}
+
+/// A factory where world 1 fails on its first tick.
+fn failing_factory() -> WorldFactory {
+    Box::new(
+        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
+            ensure_players(&mut store);
+            let mut world = World::new(id, store, sim)?;
+            world
+                .add_system(
+                    SystemDefinition::new(SystemId::from_u64(0), "writer", 0, |ctx, _| {
+                        ctx.insert("players", row![ctx.tick().as_u64(), 10u64, 100i32])?;
+                        Ok(())
+                    })
+                    .unwrap(),
+                )
+                .unwrap();
+            if id.as_u64() == 1 {
+                world
+                    .add_system(
+                        SystemDefinition::new(SystemId::from_u64(1), "fails", 10, |_ctx, _| {
+                            Err(Error::invalid_argument("boom"))
+                        })
+                        .unwrap(),
+                    )
+                    .unwrap();
+            }
+            Ok(world)
+        },
+    )
 }
 
 fn test_auth() -> Arc<TokenAuthenticator> {
@@ -144,11 +146,23 @@ fn join_world(
         max,
     );
     gateway.process_inbound();
-    assert!(matches!(recv_server(client, max), ServerMessage::HandshakeResponse { .. }));
+    assert!(matches!(
+        recv_server(client, max),
+        ServerMessage::HandshakeResponse { .. }
+    ));
 
-    send_client(client, &ClientMessage::Authenticate { credentials: "alice-token".into() }, max);
+    send_client(
+        client,
+        &ClientMessage::Authenticate {
+            credentials: "alice-token".into(),
+        },
+        max,
+    );
     gateway.process_inbound();
-    assert!(matches!(recv_server(client, max), ServerMessage::AuthResult { ok: true, .. }));
+    assert!(matches!(
+        recv_server(client, max),
+        ServerMessage::AuthResult { ok: true, .. }
+    ));
 
     send_client(client, &ClientMessage::AttachWorld { world }, max);
     gateway.process_inbound();
@@ -168,7 +182,10 @@ fn subscribe_players(gateway: &mut NetworkGateway, client: &mut MemoryConnection
         max,
     );
     gateway.process_inbound();
-    assert!(matches!(recv_server(client, max), ServerMessage::SubscriptionSnapshot { .. }));
+    assert!(matches!(
+        recv_server(client, max),
+        ServerMessage::SubscriptionSnapshot { .. }
+    ));
 }
 
 // ----------------------------------------------------------- full path + WAL
@@ -184,7 +201,10 @@ fn full_client_to_wal_to_subscription_path() {
     let network = NetworkConfig::new().with_tick_update_changes(true);
     let mut gateway = NetworkGateway::new(runtime, network, test_auth()).unwrap();
     let world = WorldId::from_u64(0);
-    gateway.control().create_world(world, SimulationConfig::new()).unwrap();
+    gateway
+        .control()
+        .create_world(world, SimulationConfig::new())
+        .unwrap();
     gateway.control().start_world(world).unwrap();
     let max = gateway.config().max_frame_payload();
 
@@ -202,7 +222,12 @@ fn full_client_to_wal_to_subscription_path() {
     // Exactly one TickUpdate with exactly one committed change.
     let msg = recv_server(&mut client, max);
     match msg {
-        ServerMessage::TickUpdate { world: w, tick, changes, .. } => {
+        ServerMessage::TickUpdate {
+            world: w,
+            tick,
+            changes,
+            ..
+        } => {
             assert_eq!(w, world);
             assert_eq!(tick, TickId::from_u64(0));
             assert_eq!(changes.len(), 1);
@@ -232,12 +257,16 @@ fn full_client_to_wal_to_subscription_path() {
 fn failed_tick_produces_no_wal_no_subscription_delta_no_realtime_update() {
     let dir = temp_dir("nexum-network-failed-tick");
     let runtime = Runtime::new(
-        RuntimeConfig::new(failing_factory()).with_persistence(PersistencePolicy::Flush, dir.clone()),
+        RuntimeConfig::new(failing_factory())
+            .with_persistence(PersistencePolicy::Flush, dir.clone()),
     )
     .unwrap();
     let mut gateway = NetworkGateway::new(runtime, NetworkConfig::new(), test_auth()).unwrap();
     let world = WorldId::from_u64(1); // fails on its first tick
-    gateway.control().create_world(world, SimulationConfig::new()).unwrap();
+    gateway
+        .control()
+        .create_world(world, SimulationConfig::new())
+        .unwrap();
     gateway.control().start_world(world).unwrap();
     let max = gateway.config().max_frame_payload();
 
@@ -246,7 +275,10 @@ fn failed_tick_produces_no_wal_no_subscription_delta_no_realtime_update() {
     subscribe_players(&mut gateway, &mut client, max);
 
     gateway.step_worlds().unwrap();
-    assert_eq!(gateway.runtime().world_status(world).unwrap().state, WorldLifecycle::Failed);
+    assert_eq!(
+        gateway.runtime().world_status(world).unwrap().state,
+        WorldLifecycle::Failed
+    );
 
     // No WAL append, no subscription delta, no realtime update.
     assert_eq!(gateway.runtime().metrics().wal_appends, 0);
@@ -271,7 +303,10 @@ fn recovery_restores_state_without_replaying_history_as_live_updates() {
         .unwrap();
         let mut gateway = NetworkGateway::new(runtime, NetworkConfig::new(), test_auth()).unwrap();
         let world = WorldId::from_u64(0);
-        gateway.control().create_world(world, SimulationConfig::new()).unwrap();
+        gateway
+            .control()
+            .create_world(world, SimulationConfig::new())
+            .unwrap();
         gateway.control().start_world(world).unwrap();
         let max = gateway.config().max_frame_payload();
 

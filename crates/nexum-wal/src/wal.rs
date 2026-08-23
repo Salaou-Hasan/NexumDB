@@ -126,7 +126,9 @@ impl Wal {
             .create(true)
             .truncate(true)
             .open(path)
-            .map_err(|e| Error::internal(format!("wal: cannot create '{}': {e}", path.display())))?;
+            .map_err(|e| {
+                Error::internal(format!("wal: cannot create '{}': {e}", path.display()))
+            })?;
         let mut wal = Wal {
             file,
             path: path.to_path_buf(),
@@ -152,12 +154,7 @@ impl Wal {
             .read(true)
             .write(true)
             .open(path)
-            .map_err(|e| {
-                Error::not_found(format!(
-                    "wal: cannot open '{}': {e}",
-                    path.display()
-                ))
-            })?;
+            .map_err(|e| Error::not_found(format!("wal: cannot open '{}': {e}", path.display())))?;
         let len = file.metadata()?.len();
         if len == 0 {
             // Truncated-to-zero (or freshly created) log: write a header.
@@ -249,11 +246,7 @@ impl Wal {
     /// On any write/fsync failure the file is truncated back to the
     /// pre-append offset so no partial record is left behind, and the error
     /// is returned: the transaction is *committed in memory but not durable*.
-    pub fn append(
-        &mut self,
-        tx_id: TransactionId,
-        changes: &[Change],
-    ) -> Result<Lsn> {
+    pub fn append(&mut self, tx_id: TransactionId, changes: &[Change]) -> Result<Lsn> {
         let start = self.next_lsn;
         let mut buf = Vec::new();
         let mut cursor = start;
@@ -274,10 +267,7 @@ impl Wal {
         put_u64(&mut commit_payload, changes.len() as u64);
         cursor += write_record(&mut buf, KIND_COMMIT, &commit_payload) as u64;
 
-        let result = self
-            .file
-            .write_all(&buf)
-            .and_then(|()| self.apply_policy());
+        let result = self.file.write_all(&buf).and_then(|()| self.apply_policy());
         if let Err(error) = result {
             // Never leave a partial frame behind.
             let _ = self.file.set_len(start);
@@ -338,7 +328,7 @@ impl Wal {
                                 None => {
                                     return Err(Error::internal(
                                         "wal: change record outside a transaction group",
-                                    ))
+                                    ));
                                 }
                             }
                         }
@@ -361,7 +351,7 @@ impl Wal {
                         _ => {
                             return Err(Error::internal(format!(
                                 "wal: unknown record kind {kind}"
-                            )))
+                            )));
                         }
                     }
                     offset = next_offset;
@@ -432,10 +422,7 @@ fn read_record(file: &mut File, offset: u64) -> Result<ReadOutcome> {
     // verdict, not a multi-GiB allocation attempt (framing robustness,
     // ADR-005 D7). A record spans payload_len + 9 bytes: 4 length + 1 kind
     // + payload + 4 CRC.
-    let remaining = file
-        .metadata()?
-        .len()
-        .saturating_sub(offset);
+    let remaining = file.metadata()?.len().saturating_sub(offset);
     if payload_len as u64 + 9 > remaining {
         return Ok(ReadOutcome::IncompleteTail);
     }
@@ -527,7 +514,8 @@ fn decode_change(payload: &[u8]) -> Result<Change> {
             table_id,
             row_id,
             old_row.ok_or_else(|| Error::internal("wal: update change lacks an old row"))?,
-            old_version.ok_or_else(|| Error::internal("wal: update change lacks an old version"))?,
+            old_version
+                .ok_or_else(|| Error::internal("wal: update change lacks an old version"))?,
             new_row.ok_or_else(|| Error::internal("wal: update change lacks a new row"))?,
             new_version.ok_or_else(|| Error::internal("wal: update change lacks a new version"))?,
         ),
@@ -535,7 +523,8 @@ fn decode_change(payload: &[u8]) -> Result<Change> {
             table_id,
             row_id,
             old_row.ok_or_else(|| Error::internal("wal: delete change lacks an old row"))?,
-            old_version.ok_or_else(|| Error::internal("wal: delete change lacks an old version"))?,
+            old_version
+                .ok_or_else(|| Error::internal("wal: delete change lacks an old version"))?,
         ),
     })
 }
@@ -609,8 +598,8 @@ fn change_kind_from_tag(tag: u8) -> Result<ChangeKind> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nexum_core::row;
     use nexum_core::Version;
+    use nexum_core::row;
 
     fn sample_changes() -> Vec<Change> {
         vec![

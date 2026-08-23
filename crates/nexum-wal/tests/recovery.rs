@@ -18,7 +18,7 @@ use nexum_core::{
     Version,
 };
 use nexum_storage::Change;
-use nexum_table::{row, TableStore};
+use nexum_table::{TableStore, row};
 use nexum_tx::Transaction;
 use nexum_wal::{DurabilityPolicy, Snapshot, Wal, recover};
 
@@ -166,10 +166,12 @@ fn append_and_recover_roundtrips_transactions_in_order() {
     let mut store = world();
 
     let c1 = commit_one(&mut store, &mut wal, |tx, store| {
-        tx.insert(store, "players", row![1u64, 10u64, 100i32, 5u32]).unwrap();
+        tx.insert(store, "players", row![1u64, 10u64, 100i32, 5u32])
+            .unwrap();
     });
     let c2 = commit_one(&mut store, &mut wal, |tx, store| {
-        tx.insert(store, "players", row![2u64, 10u64, 90i32, 6u32]).unwrap();
+        tx.insert(store, "players", row![2u64, 10u64, 90i32, 6u32])
+            .unwrap();
         tx.insert(store, "economy", row![2u64, 200i64]).unwrap();
     });
     assert_eq!(c1.len(), 1);
@@ -194,18 +196,28 @@ fn incomplete_transaction_group_is_dropped() {
     raw_header(&mut bytes);
     // Tx 0: complete.
     raw_begin(&mut bytes, 0);
-    raw_change(&mut bytes, &insert_change(0, 1, row![1u64, 10u64, 100i32, 5u32]));
+    raw_change(
+        &mut bytes,
+        &insert_change(0, 1, row![1u64, 10u64, 100i32, 5u32]),
+    );
     raw_commit(&mut bytes, 0, 1);
     // Tx 1: BEGIN + one change written, then the process crashed before
     // COMMIT_TX.
     raw_begin(&mut bytes, 1);
-    raw_change(&mut bytes, &insert_change(0, 2, row![2u64, 20u64, 80i32, 7u32]));
+    raw_change(
+        &mut bytes,
+        &insert_change(0, 2, row![2u64, 20u64, 80i32, 7u32]),
+    );
     std::fs::write(&path, &bytes).unwrap();
 
     let mut wal = Wal::open(&path, DurabilityPolicy::Flush).unwrap();
     let (txs, truncated) = wal.recover_changes().unwrap();
     assert!(!truncated);
-    assert_eq!(txs.len(), 1, "the uncommitted transaction must be dropped whole");
+    assert_eq!(
+        txs.len(),
+        1,
+        "the uncommitted transaction must be dropped whole"
+    );
     assert_eq!(txs[0].tx_id, TransactionId::from_u64(0));
 }
 
@@ -216,11 +228,13 @@ fn truncated_record_tail_is_dropped_and_appends_stay_recoverable() {
     let mut wal = Wal::create(&path, DurabilityPolicy::Flush).unwrap();
     let mut store = world();
     commit_one(&mut store, &mut wal, |tx, store| {
-        tx.insert(store, "players", row![1u64, 10u64, 100i32, 5u32]).unwrap();
+        tx.insert(store, "players", row![1u64, 10u64, 100i32, 5u32])
+            .unwrap();
     });
     let lsn_after_tx0 = wal.lsn().as_u64();
     commit_one(&mut store, &mut wal, |tx, store| {
-        tx.insert(store, "players", row![2u64, 10u64, 90i32, 6u32]).unwrap();
+        tx.insert(store, "players", row![2u64, 10u64, 90i32, 6u32])
+            .unwrap();
     });
 
     // Simulate a crash mid-record: tear the tail of the second transaction.
@@ -236,7 +250,10 @@ fn truncated_record_tail_is_dropped_and_appends_stay_recoverable() {
     // (the last fully valid record ends before the torn COMMIT of tx 1).
     let mut wal = Wal::open(&path, DurabilityPolicy::Flush).unwrap();
     assert!(wal.truncated_on_open(), "the torn tail was dropped");
-    assert!(wal.lsn().as_u64() > lsn_after_tx0, "tx 1's valid BEGIN+CHANGE records remain");
+    assert!(
+        wal.lsn().as_u64() > lsn_after_tx0,
+        "tx 1's valid BEGIN+CHANGE records remain"
+    );
     let (txs, _) = wal.recover_changes().unwrap();
     // Tx 1 has no valid COMMIT_TX: the whole group is dropped.
     assert_eq!(txs.len(), 1);
@@ -262,7 +279,10 @@ fn corrupted_checksum_stops_recovery_at_that_record() {
     raw_header(&mut bytes);
     for tx in 0..3u64 {
         raw_begin(&mut bytes, tx);
-        raw_change(&mut bytes, &insert_change(0, tx + 1, row![tx + 1, 10u64, 100i32, 5u32]));
+        raw_change(
+            &mut bytes,
+            &insert_change(0, tx + 1, row![tx + 1, 10u64, 100i32, 5u32]),
+        );
         raw_commit(&mut bytes, tx, 1);
     }
 
@@ -288,10 +308,12 @@ fn snapshot_writes_and_reads_back_exactly() {
     let mut wal = Wal::create(&dir.join("log.wal"), DurabilityPolicy::Sync).unwrap();
     let mut store = world();
     commit_one(&mut store, &mut wal, |tx, store| {
-        tx.insert(store, "players", row![1u64, 10u64, 100i32, 5u32]).unwrap();
+        tx.insert(store, "players", row![1u64, 10u64, 100i32, 5u32])
+            .unwrap();
     });
     let _ = commit_one(&mut store, &mut wal, |tx, store| {
-        tx.insert(store, "players", row![2u64, 10u64, 90i32, 6u32]).unwrap();
+        tx.insert(store, "players", row![2u64, 10u64, 90i32, 6u32])
+            .unwrap();
         tx.insert(store, "economy", row![2u64, 200i64]).unwrap();
     });
 
@@ -314,10 +336,12 @@ fn recovery_restores_snapshot_then_replays_wal_exactly() {
 
     // Phase 1: two transactions.
     let c1 = commit_one(&mut store, &mut wal, |tx, store| {
-        tx.insert(store, "players", row![1u64, 10u64, 100i32, 5u32]).unwrap();
+        tx.insert(store, "players", row![1u64, 10u64, 100i32, 5u32])
+            .unwrap();
     });
     let c2 = commit_one(&mut store, &mut wal, |tx, store| {
-        tx.insert(store, "players", row![2u64, 10u64, 90i32, 6u32]).unwrap();
+        tx.insert(store, "players", row![2u64, 10u64, 90i32, 6u32])
+            .unwrap();
         tx.insert(store, "economy", row![1u64, 100i64]).unwrap();
     });
     let alice = c1[0].row_id();
@@ -332,15 +356,19 @@ fn recovery_restores_snapshot_then_replays_wal_exactly() {
     assert_eq!(alice_zone_id, Some(Value::U64(10)));
 
     // Phase 2: snapshot here.
-    Snapshot::capture(&store, wal.lsn().as_u64()).write(&dir).unwrap();
+    Snapshot::capture(&store, wal.lsn().as_u64())
+        .write(&dir)
+        .unwrap();
 
     // Phase 3: two more transactions after the snapshot.
     commit_one(&mut store, &mut wal, |tx, store| {
-        tx.update(store, "players", alice, row![1u64, 30u64, 50i32, 5u32]).unwrap();
+        tx.update(store, "players", alice, row![1u64, 30u64, 50i32, 5u32])
+            .unwrap();
     });
     commit_one(&mut store, &mut wal, |tx, store| {
         tx.delete(store, "players", bob).unwrap();
-        tx.update(store, "economy", RowId::from_u64(0), row![1u64, 250i64]).unwrap();
+        tx.update(store, "economy", RowId::from_u64(0), row![1u64, 250i64])
+            .unwrap();
     });
 
     // Reference: what the pre-crash store looked like.
@@ -373,12 +401,23 @@ fn recovery_restores_snapshot_then_replays_wal_exactly() {
     assert!(players.get(bob).is_none());
     assert_eq!(players.version_of(alice), Some(Version::from_u64(1)));
     assert_eq!(players.epoch(), expected_epoch);
-    assert_eq!(players.lookup("by_zone", &[Value::U64(30)]).unwrap(), vec![alice]);
-    assert!(players.lookup("by_zone", &[Value::U64(10)]).unwrap().is_empty());
+    assert_eq!(
+        players.lookup("by_zone", &[Value::U64(30)]).unwrap(),
+        vec![alice]
+    );
+    assert!(
+        players
+            .lookup("by_zone", &[Value::U64(10)])
+            .unwrap()
+            .is_empty()
+    );
 
     let economy = fresh.table("economy").unwrap();
     assert_eq!(
-        economy.get(RowId::from_u64(0)).unwrap().get_named(economy.schema(), "coins"),
+        economy
+            .get(RowId::from_u64(0))
+            .unwrap()
+            .get_named(economy.schema(), "coins"),
         Some(&Value::I64(250))
     );
 
@@ -392,10 +431,18 @@ fn recovery_restores_snapshot_then_replays_wal_exactly() {
     // Recovered store is fully functional: new writes commit cleanly and
     // keep unique constraints (by_level) intact.
     let mut tx = Transaction::begin(&mut fresh);
-    tx.insert(&fresh, "players", row![9u64, 40u64, 10i32, 9u32]).unwrap();
+    tx.insert(&fresh, "players", row![9u64, 40u64, 10i32, 9u32])
+        .unwrap();
     let changes = tx.commit(&mut fresh).unwrap();
     assert_eq!(changes[0].row_id().as_u64(), 2); // RowId allocation continued
-    assert!(fresh.table("players").unwrap().get_by_primary_key(&[Value::U64(9)]).unwrap().is_some());
+    assert!(
+        fresh
+            .table("players")
+            .unwrap()
+            .get_by_primary_key(&[Value::U64(9)])
+            .unwrap()
+            .is_some()
+    );
 }
 
 #[test]
@@ -405,7 +452,8 @@ fn recovery_without_snapshot_replays_everything() {
     let mut store = world();
     for id in 1..=3u64 {
         commit_one(&mut store, &mut wal, |tx, store| {
-            tx.insert(store, "players", row![id, 10u64, 100i32, id as u32]).unwrap();
+            tx.insert(store, "players", row![id, 10u64, 100i32, id as u32])
+                .unwrap();
         });
     }
     let expected_next_tx = store.next_transaction_id();
@@ -429,12 +477,18 @@ fn crash_mid_multi_table_transaction_commits_nothing() {
     // Tx 0: complete — a players insert (the first insert in a fresh store,
     // so its recorded row id is 0).
     raw_begin(&mut bytes, 0);
-    raw_change(&mut bytes, &insert_change(0, 0, row![1u64, 10u64, 100i32, 5u32]));
+    raw_change(
+        &mut bytes,
+        &insert_change(0, 0, row![1u64, 10u64, 100i32, 5u32]),
+    );
     raw_commit(&mut bytes, 0, 1);
     // Tx 1: BEGIN, players change AND economy change written, then crash
     // before COMMIT — nothing from tx 1 may survive.
     raw_begin(&mut bytes, 1);
-    raw_change(&mut bytes, &insert_change(0, 1, row![2u64, 10u64, 90i32, 6u32]));
+    raw_change(
+        &mut bytes,
+        &insert_change(0, 1, row![2u64, 10u64, 90i32, 6u32]),
+    );
     raw_change(&mut bytes, &insert_change(1, 0, row![2u64, 200i64]));
     std::fs::write(&path, &bytes).unwrap();
 
@@ -445,7 +499,14 @@ fn crash_mid_multi_table_transaction_commits_nothing() {
 
     // Neither the players row nor the economy row of tx 1 exists.
     assert_eq!(fresh.table("players").unwrap().len(), 1);
-    assert!(fresh.table("players").unwrap().get_by_primary_key(&[Value::U64(2)]).unwrap().is_none());
+    assert!(
+        fresh
+            .table("players")
+            .unwrap()
+            .get_by_primary_key(&[Value::U64(2)])
+            .unwrap()
+            .is_none()
+    );
     assert!(fresh.table("economy").unwrap().is_empty());
 }
 
@@ -455,14 +516,24 @@ fn replay_is_idempotent_across_recoveries() {
     let mut wal = Wal::create(&dir.join("log.wal"), DurabilityPolicy::Sync).unwrap();
     let mut store = world();
     let c1 = commit_one(&mut store, &mut wal, |tx, store| {
-        tx.insert(store, "players", row![1u64, 10u64, 100i32, 5u32]).unwrap();
+        tx.insert(store, "players", row![1u64, 10u64, 100i32, 5u32])
+            .unwrap();
     });
     commit_one(&mut store, &mut wal, |tx, store| {
-        tx.update(store, "players", c1[0].row_id(), row![1u64, 30u64, 25i32, 5u32]).unwrap();
+        tx.update(
+            store,
+            "players",
+            c1[0].row_id(),
+            row![1u64, 30u64, 25i32, 5u32],
+        )
+        .unwrap();
     });
-    Snapshot::capture(&store, wal.lsn().as_u64()).write(&dir).unwrap();
+    Snapshot::capture(&store, wal.lsn().as_u64())
+        .write(&dir)
+        .unwrap();
     commit_one(&mut store, &mut wal, |tx, store| {
-        tx.insert(store, "players", row![2u64, 40u64, 90i32, 6u32]).unwrap();
+        tx.insert(store, "players", row![2u64, 40u64, 90i32, 6u32])
+            .unwrap();
     });
 
     let shape = |store: &TableStore| -> Vec<(u64, u64, String)> {
@@ -501,9 +572,12 @@ fn snapshot_restore_rejects_a_non_empty_store() {
     // Write a snapshot into the dir.
     let mut store = world();
     commit_one(&mut store, &mut wal, |tx, store| {
-        tx.insert(store, "players", row![1u64, 10u64, 100i32, 5u32]).unwrap();
+        tx.insert(store, "players", row![1u64, 10u64, 100i32, 5u32])
+            .unwrap();
     });
-    Snapshot::capture(&store, wal.lsn().as_u64()).write(&dir).unwrap();
+    Snapshot::capture(&store, wal.lsn().as_u64())
+        .write(&dir)
+        .unwrap();
 
     // Restoring the snapshot into a store that already has tables fails.
     let mut fresh = world(); // NOT empty
@@ -529,7 +603,10 @@ fn corrupt_huge_length_field_is_dropped_without_allocating() {
     raw_header(&mut bytes);
     // Tx 0: complete (first insert in a fresh store → row id 0).
     raw_begin(&mut bytes, 0);
-    raw_change(&mut bytes, &insert_change(0, 0, row![1u64, 10u64, 100i32, 5u32]));
+    raw_change(
+        &mut bytes,
+        &insert_change(0, 0, row![1u64, 10u64, 100i32, 5u32]),
+    );
     raw_commit(&mut bytes, 0, 1);
     // Corrupt record: huge length, a kind byte, and a stub payload.
     bytes.extend_from_slice(&0xFFFF_FFFEu32.to_le_bytes());

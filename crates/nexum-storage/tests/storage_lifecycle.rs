@@ -33,7 +33,10 @@ fn full_lifecycle_with_versions_and_changes() {
     // Read row + version atomically (the OCC-friendly read).
     let stored: Option<&StoredRow> = players.get(alice);
     assert_eq!(stored.unwrap().version(), Version::from_u64(2));
-    assert_eq!(stored.unwrap().row().get_named(players.schema(), "health"), Some(&nexum_core::Value::I32(20)));
+    assert_eq!(
+        stored.unwrap().row().get_named(players.schema(), "health"),
+        Some(&nexum_core::Value::I32(20))
+    );
 
     // Delete.
     players.delete(bob).unwrap();
@@ -106,7 +109,10 @@ fn empty_table_and_scan() {
 
     let a = table.insert(row![1u64, 10u64, 100i32]).unwrap();
     let b = table.insert(row![2u64, 20u64, 90i32]).unwrap();
-    let scanned: Vec<_> = table.scan().map(|(id, stored)| (id, stored.row().clone())).collect();
+    let scanned: Vec<_> = table
+        .scan()
+        .map(|(id, stored)| (id, stored.row().clone()))
+        .collect();
     assert_eq!(scanned.len(), 2);
     assert_eq!(scanned[0].0, a);
     assert_eq!(scanned[1].0, b);

@@ -47,7 +47,10 @@ fn ensure_ledger(store: &mut TableStore) {
 }
 
 /// The shared `transfer` handler used by every bench world.
-fn transfer_handler(ctx: &mut nexum_reducer::ReducerContext<'_>, args: &ReducerArgs) -> nexum_core::Result<nexum_core::Value> {
+fn transfer_handler(
+    ctx: &mut nexum_reducer::ReducerContext<'_>,
+    args: &ReducerArgs,
+) -> nexum_core::Result<nexum_core::Value> {
     let amount = args.require_i64("amount")?;
     let to = args.require_u64("to")?;
     let from = args.require_u64("from")?;
@@ -59,55 +62,22 @@ fn transfer_handler(ctx: &mut nexum_reducer::ReducerContext<'_>, args: &ReducerA
 /// A partition world with a `transfer` handler and a ring sender (1 message
 /// per tick to the next partition). Capture-free.
 fn partition_factory() -> WorldFactory {
-    Box::new(|id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-        ensure_ledger(&mut store);
-        let mut world = World::new(id, store, sim)?;
-        world
-            .native_mut()
-            .register(
-                ReducerDefinition::new(ReducerId::from_u64(0), "transfer", transfer_handler)
-                    .unwrap(),
-            )
-            .unwrap();
-        world
-            .add_system(SystemDefinition::new(SystemId::from_u64(0), "sender", 0, |ctx, _| {
-                let from = ctx.partition().as_u64();
-                let target = (from + 1) % 4;
-                let tick = ctx.tick().as_u64();
-                ctx.send_to(
-                    PartitionId::from_u64(target),
-                    "transfer",
-                    ReducerArgs::new()
-                        .insert("amount", 10i64)
-                        .insert("to", target)
-                        .insert("from", from)
-                        .insert("seq", tick),
-                )?;
-                Ok(())
-            })
-            .unwrap())?;
-        Ok(world)
-    })
-}
-
-/// A message-heavy variant: 10 messages per tick per sender. Capture-free.
-fn partition_bulk_factory() -> WorldFactory {
-    Box::new(|id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-        ensure_ledger(&mut store);
-        let mut world = World::new(id, store, sim)?;
-        world
-            .native_mut()
-            .register(
-                ReducerDefinition::new(ReducerId::from_u64(0), "transfer", transfer_handler)
-                    .unwrap(),
-            )
-            .unwrap();
-        world
-            .add_system(SystemDefinition::new(SystemId::from_u64(0), "bulk", 0, |ctx, _| {
-                let from = ctx.partition().as_u64();
-                let target = (from + 1) % 4;
-                let tick = ctx.tick().as_u64();
-                for i in 0..10u64 {
+    Box::new(
+        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
+            ensure_ledger(&mut store);
+            let mut world = World::new(id, store, sim)?;
+            world
+                .native_mut()
+                .register(
+                    ReducerDefinition::new(ReducerId::from_u64(0), "transfer", transfer_handler)
+                        .unwrap(),
+                )
+                .unwrap();
+            world.add_system(
+                SystemDefinition::new(SystemId::from_u64(0), "sender", 0, |ctx, _| {
+                    let from = ctx.partition().as_u64();
+                    let target = (from + 1) % 4;
+                    let tick = ctx.tick().as_u64();
                     ctx.send_to(
                         PartitionId::from_u64(target),
                         "transfer",
@@ -115,14 +85,53 @@ fn partition_bulk_factory() -> WorldFactory {
                             .insert("amount", 10i64)
                             .insert("to", target)
                             .insert("from", from)
-                            .insert("seq", tick * 10 + i),
+                            .insert("seq", tick),
                     )?;
-                }
-                Ok(())
-            })
-            .unwrap())?;
-        Ok(world)
-    })
+                    Ok(())
+                })
+                .unwrap(),
+            )?;
+            Ok(world)
+        },
+    )
+}
+
+/// A message-heavy variant: 10 messages per tick per sender. Capture-free.
+fn partition_bulk_factory() -> WorldFactory {
+    Box::new(
+        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
+            ensure_ledger(&mut store);
+            let mut world = World::new(id, store, sim)?;
+            world
+                .native_mut()
+                .register(
+                    ReducerDefinition::new(ReducerId::from_u64(0), "transfer", transfer_handler)
+                        .unwrap(),
+                )
+                .unwrap();
+            world.add_system(
+                SystemDefinition::new(SystemId::from_u64(0), "bulk", 0, |ctx, _| {
+                    let from = ctx.partition().as_u64();
+                    let target = (from + 1) % 4;
+                    let tick = ctx.tick().as_u64();
+                    for i in 0..10u64 {
+                        ctx.send_to(
+                            PartitionId::from_u64(target),
+                            "transfer",
+                            ReducerArgs::new()
+                                .insert("amount", 10i64)
+                                .insert("to", target)
+                                .insert("from", from)
+                                .insert("seq", tick * 10 + i),
+                        )?;
+                    }
+                    Ok(())
+                })
+                .unwrap(),
+            )?;
+            Ok(world)
+        },
+    )
 }
 
 fn temp_dir(name: &str) -> std::path::PathBuf {
@@ -219,10 +228,14 @@ fn main() {
                 .unwrap();
             runtime.start_world(WorldId::from_u64(p)).unwrap();
         }
-        bench("2 partitions, delivery + commit (2 steps)", iterations / 2, || {
-            runtime.step().unwrap(); // send at tick N
-            runtime.step().unwrap(); // deliver at tick N+1
-        });
+        bench(
+            "2 partitions, delivery + commit (2 steps)",
+            iterations / 2,
+            || {
+                runtime.step().unwrap(); // send at tick N
+                runtime.step().unwrap(); // deliver at tick N+1
+            },
+        );
     }
 
     // 8. Tick + WAL append on a partition.

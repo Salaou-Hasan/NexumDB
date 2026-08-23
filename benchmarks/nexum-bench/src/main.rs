@@ -32,7 +32,9 @@ fn main() -> ExitCode {
     }
     if args.iter().any(|a| a == "--list") {
         println!("micro: storage, tx, reducer, wasm, sub, sim, runtime, wal");
-        println!("scale: 100K / 1M / 5M / 10M row workloads (insert, lookup, update, scan, index, subscription, snapshot, WAL, recovery)");
+        println!(
+            "scale: 100K / 1M / 5M / 10M row workloads (insert, lookup, update, scan, index, subscription, snapshot, WAL, recovery)"
+        );
         return ExitCode::SUCCESS;
     }
     if let Some(pos) = args.iter().position(|a| a == "--micro") {
@@ -45,16 +47,19 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
     if let Some(pos) = args.iter().position(|a| a == "--scale") {
-        let rows: u64 = args
-            .get(pos + 1)
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(0);
+        let rows: u64 = args.get(pos + 1).and_then(|v| v.parse().ok()).unwrap_or(0);
         nexum_bench::scale::run(rows);
         return ExitCode::SUCCESS;
     }
     if let Some(pos) = args.iter().position(|a| a == "--large-tick") {
-        let total: u64 = args.get(pos + 1).and_then(|v| v.parse().ok()).unwrap_or(10_000_000);
-        let active: u64 = args.get(pos + 2).and_then(|v| v.parse().ok()).unwrap_or(100);
+        let total: u64 = args
+            .get(pos + 1)
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(10_000_000);
+        let active: u64 = args
+            .get(pos + 2)
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(100);
         nexum_bench::scale::large_state_tick(total, active);
         return ExitCode::SUCCESS;
     }

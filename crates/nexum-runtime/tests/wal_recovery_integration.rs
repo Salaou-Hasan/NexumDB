@@ -92,61 +92,63 @@ fn players_table(store: &mut TableStore) {
 /// (id = tick), native (id = 200 + tick); plus the fixed WASM row at tick 0.
 fn full_factory() -> WorldFactory {
     let module = wasm_module();
-    Box::new(move |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-        if store.table("players").is_none() {
-            players_table(&mut store);
-        }
-        let mut world = World::new(id, store, sim)?;
-        world
-            .native_mut()
-            .register(
-                ReducerDefinition::new(ReducerId::from_u64(0), "spawn", |ctx, args| {
-                    let id = args.require_u64("id")?;
-                    ctx.insert("players", row![id, 10u64, 50i32])?;
-                    ctx.emit("spawned", id)?;
-                    Ok(Value::U64(id))
-                })
-                .unwrap(),
-            )
-            .unwrap();
-        let mut wasm = WasmModuleRegistry::new(WasmLimits::default()).unwrap();
-        wasm.register("wspawn", 1, module.clone()).unwrap();
-        world.set_wasm(wasm);
+    Box::new(
+        move |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
+            if store.table("players").is_none() {
+                players_table(&mut store);
+            }
+            let mut world = World::new(id, store, sim)?;
+            world
+                .native_mut()
+                .register(
+                    ReducerDefinition::new(ReducerId::from_u64(0), "spawn", |ctx, args| {
+                        let id = args.require_u64("id")?;
+                        ctx.insert("players", row![id, 10u64, 50i32])?;
+                        ctx.emit("spawned", id)?;
+                        Ok(Value::U64(id))
+                    })
+                    .unwrap(),
+                )
+                .unwrap();
+            let mut wasm = WasmModuleRegistry::new(WasmLimits::default()).unwrap();
+            wasm.register("wspawn", 1, module.clone()).unwrap();
+            world.set_wasm(wasm);
 
-        world
-            .add_system(
-                SystemDefinition::new(SystemId::from_u64(0), "writer", 10, |ctx, _| {
-                    ctx.insert("players", row![ctx.tick().as_u64(), 10u64, 100i32])?;
-                    Ok(())
-                })
-                .unwrap(),
-            )
-            .unwrap();
-        world
-            .add_system(
-                SystemDefinition::new(SystemId::from_u64(1), "native_invoker", 20, |ctx, _| {
-                    ctx.invoke_reducer(
-                        "spawn",
-                        &ReducerArgs::new().insert("id", 200 + ctx.tick().as_u64()),
-                    )?;
-                    Ok(())
-                })
-                .unwrap(),
-            )
-            .unwrap();
-        world
-            .add_system(
-                SystemDefinition::new(SystemId::from_u64(2), "wasm_invoker", 30, |ctx, _| {
-                    if ctx.tick().as_u64() == 0 {
-                        ctx.invoke_wasm("wspawn", &ReducerArgs::new())?;
-                    }
-                    Ok(())
-                })
-                .unwrap(),
-            )
-            .unwrap();
-        Ok(world)
-    })
+            world
+                .add_system(
+                    SystemDefinition::new(SystemId::from_u64(0), "writer", 10, |ctx, _| {
+                        ctx.insert("players", row![ctx.tick().as_u64(), 10u64, 100i32])?;
+                        Ok(())
+                    })
+                    .unwrap(),
+                )
+                .unwrap();
+            world
+                .add_system(
+                    SystemDefinition::new(SystemId::from_u64(1), "native_invoker", 20, |ctx, _| {
+                        ctx.invoke_reducer(
+                            "spawn",
+                            &ReducerArgs::new().insert("id", 200 + ctx.tick().as_u64()),
+                        )?;
+                        Ok(())
+                    })
+                    .unwrap(),
+                )
+                .unwrap();
+            world
+                .add_system(
+                    SystemDefinition::new(SystemId::from_u64(2), "wasm_invoker", 30, |ctx, _| {
+                        if ctx.tick().as_u64() == 0 {
+                            ctx.invoke_wasm("wspawn", &ReducerArgs::new())?;
+                        }
+                        Ok(())
+                    })
+                    .unwrap(),
+                )
+                .unwrap();
+            Ok(world)
+        },
+    )
 }
 
 fn temp_dir(name: &str) -> PathBuf {
@@ -181,7 +183,9 @@ fn crash_then_recover_reconstructs_identical_state_and_continues() {
                 .with_persistence(PersistencePolicy::Flush, dir.clone()),
         )
         .unwrap();
-        runtime.create_world(world, SimulationConfig::new()).unwrap();
+        runtime
+            .create_world(world, SimulationConfig::new())
+            .unwrap();
         runtime.start_world(world).unwrap();
         for _ in 0..3 {
             runtime.step().unwrap();
@@ -192,8 +196,7 @@ fn crash_then_recover_reconstructs_identical_state_and_continues() {
     // snapshots — the WAL-only recovery mode; the factory defines the
     // schema first).
     let mut runtime = Runtime::new(
-        RuntimeConfig::new(full_factory())
-            .with_persistence(PersistencePolicy::Flush, dir.clone()),
+        RuntimeConfig::new(full_factory()).with_persistence(PersistencePolicy::Flush, dir.clone()),
     )
     .unwrap();
     let report = runtime
@@ -232,7 +235,9 @@ fn snapshot_recovery_uses_the_snapshot_and_resumes() {
                 .with_snapshot_interval(2),
         )
         .unwrap();
-        runtime.create_world(world, SimulationConfig::new()).unwrap();
+        runtime
+            .create_world(world, SimulationConfig::new())
+            .unwrap();
         runtime.start_world(world).unwrap();
         for _ in 0..4 {
             runtime.step().unwrap();
@@ -241,8 +246,7 @@ fn snapshot_recovery_uses_the_snapshot_and_resumes() {
     }
 
     let mut runtime = Runtime::new(
-        RuntimeConfig::new(full_factory())
-            .with_persistence(PersistencePolicy::Flush, dir.clone()),
+        RuntimeConfig::new(full_factory()).with_persistence(PersistencePolicy::Flush, dir.clone()),
     )
     .unwrap();
     let report = runtime
@@ -265,7 +269,9 @@ fn a_failed_worker_s_world_can_be_recovered_onto_another_worker() {
         .with_persistence(PersistencePolicy::Flush, dir.clone());
     let mut runtime = Runtime::new(config).unwrap();
     let world = WorldId::from_u64(0);
-    runtime.create_world(world, SimulationConfig::new()).unwrap();
+    runtime
+        .create_world(world, SimulationConfig::new())
+        .unwrap();
     runtime.start_world(world).unwrap();
     runtime.step().unwrap();
     runtime.step().unwrap();

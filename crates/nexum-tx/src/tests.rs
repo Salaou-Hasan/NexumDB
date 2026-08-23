@@ -7,7 +7,7 @@
 //! handles · lifecycle enforcement · determinism.
 
 use nexum_core::{ChangeKind, ColumnType, Error, RowId, TableSchema, Value};
-use nexum_table::{row, TableStore};
+use nexum_table::{TableStore, row};
 
 use crate::{Transaction, TransactionState};
 
@@ -101,11 +101,18 @@ fn get_returns_live_row_and_records_observation() {
 
     let mut tx = Transaction::begin(&mut store);
     let fetched = tx.get(&store, "players", p0).unwrap().expect("row exists");
-    assert_eq!(fetched.get_named(store.table("players").unwrap().schema(), "health"), Some(&Value::I32(100)));
+    assert_eq!(
+        fetched.get_named(store.table("players").unwrap().schema(), "health"),
+        Some(&Value::I32(100))
+    );
     assert_eq!(tx.read_count(), 1);
     assert_eq!(
         tx.reads().collect::<Vec<_>>(),
-        vec![(nexum_core::TableId::from_u64(0), p0, Some(nexum_core::Version::ZERO))]
+        vec![(
+            nexum_core::TableId::from_u64(0),
+            p0,
+            Some(nexum_core::Version::ZERO)
+        )]
     );
 }
 
@@ -113,7 +120,9 @@ fn get_returns_live_row_and_records_observation() {
 fn get_missing_row_observes_absent() {
     let mut store = player_store();
     let mut tx = Transaction::begin(&mut store);
-    let absent = tx.get(&store, "players", nexum_core::RowId::from_u64(9)).unwrap();
+    let absent = tx
+        .get(&store, "players", nexum_core::RowId::from_u64(9))
+        .unwrap();
     assert!(absent.is_none());
     assert_eq!(tx.read_count(), 1);
     let (_, row_id, observed) = tx.reads().next().unwrap();
@@ -132,7 +141,10 @@ fn contains_records_observation_and_returns_existence() {
 
     let mut tx = Transaction::begin(&mut store);
     assert!(tx.contains(&store, "players", p0).unwrap());
-    assert!(!tx.contains(&store, "players", nexum_core::RowId::from_u64(7)).unwrap());
+    assert!(
+        !tx.contains(&store, "players", nexum_core::RowId::from_u64(7))
+            .unwrap()
+    );
     assert_eq!(tx.read_count(), 2);
 }
 
@@ -140,8 +152,13 @@ fn contains_records_observation_and_returns_existence() {
 fn insert_returns_a_provisional_handle() {
     let mut store = player_store();
     let mut tx = Transaction::begin(&mut store);
-    let handle = tx.insert(&store, "players", row![1u64, 10u64, 100i32, 5u32]).unwrap();
-    assert!(handle.as_u64() & (1 << 63) != 0, "provisional ids set the high bit");
+    let handle = tx
+        .insert(&store, "players", row![1u64, 10u64, 100i32, 5u32])
+        .unwrap();
+    assert!(
+        handle.as_u64() & (1 << 63) != 0,
+        "provisional ids set the high bit"
+    );
     assert_eq!(tx.write_count(), 1);
 }
 
@@ -149,14 +166,23 @@ fn insert_returns_a_provisional_handle() {
 fn full_lifecycle_commit_applies_everything() {
     let mut store = player_store();
     let mut tx = Transaction::begin(&mut store);
-    let handle = tx.insert(&store, "players", row![1u64, 10u64, 100i32, 5u32]).unwrap();
-    tx.update(&store, "players", handle, row![1u64, 10u64, 80i32, 5u32]).unwrap();
+    let handle = tx
+        .insert(&store, "players", row![1u64, 10u64, 100i32, 5u32])
+        .unwrap();
+    tx.update(&store, "players", handle, row![1u64, 10u64, 80i32, 5u32])
+        .unwrap();
     let changes = tx.commit(&mut store).unwrap();
 
     // insert→update coalesced: exactly one Insert change with the final row.
     assert_eq!(changes.len(), 1);
     assert_eq!(changes[0].kind(), ChangeKind::Insert);
-    assert_eq!(changes[0].new_row().unwrap().get_named(store.table("players").unwrap().schema(), "health"), Some(&Value::I32(80)));
+    assert_eq!(
+        changes[0]
+            .new_row()
+            .unwrap()
+            .get_named(store.table("players").unwrap().schema(), "health"),
+        Some(&Value::I32(80))
+    );
     assert_eq!(store.table("players").unwrap().len(), 1);
     assert_eq!(tx.state(), TransactionState::Committed);
 }
@@ -170,19 +196,28 @@ fn committed_transaction_cannot_be_reused() {
     tx.commit(&mut store).unwrap();
 
     assert!(matches!(
-        tx.get(&store, "players", nexum_core::RowId::from_u64(0)).unwrap_err(),
+        tx.get(&store, "players", nexum_core::RowId::from_u64(0))
+            .unwrap_err(),
         Error::AlreadyCommitted(_)
     ));
     assert!(matches!(
-        tx.insert(&store, "players", row![1u64, 10u64, 100i32, 5u32]).unwrap_err(),
+        tx.insert(&store, "players", row![1u64, 10u64, 100i32, 5u32])
+            .unwrap_err(),
         Error::AlreadyCommitted(_)
     ));
     assert!(matches!(
-        tx.update(&store, "players", nexum_core::RowId::from_u64(0), row![1u64, 10u64, 100i32, 5u32]).unwrap_err(),
+        tx.update(
+            &store,
+            "players",
+            nexum_core::RowId::from_u64(0),
+            row![1u64, 10u64, 100i32, 5u32]
+        )
+        .unwrap_err(),
         Error::AlreadyCommitted(_)
     ));
     assert!(matches!(
-        tx.delete(&store, "players", nexum_core::RowId::from_u64(0)).unwrap_err(),
+        tx.delete(&store, "players", nexum_core::RowId::from_u64(0))
+            .unwrap_err(),
         Error::AlreadyCommitted(_)
     ));
     assert!(matches!(
@@ -203,7 +238,8 @@ fn aborted_transaction_cannot_commit() {
         Error::AlreadyAborted(_)
     ));
     assert!(matches!(
-        tx.get(&store, "players", nexum_core::RowId::from_u64(0)).unwrap_err(),
+        tx.get(&store, "players", nexum_core::RowId::from_u64(0))
+            .unwrap_err(),
         Error::AlreadyAborted(_)
     ));
 }
@@ -218,7 +254,10 @@ fn abort_is_idempotent_and_committed_cannot_abort() {
 
     let mut tx = Transaction::begin(&mut store);
     tx.commit(&mut store).unwrap();
-    assert!(matches!(tx.abort().unwrap_err(), Error::AlreadyCommitted(_)));
+    assert!(matches!(
+        tx.abort().unwrap_err(),
+        Error::AlreadyCommitted(_)
+    ));
 }
 
 #[test]
@@ -280,10 +319,18 @@ fn missing_row_read_conflicts_when_row_appears() {
     let mut tx = Transaction::begin(&mut store);
 
     // Row 0 is absent when read...
-    assert!(tx.get(&store, "players", nexum_core::RowId::from_u64(0)).unwrap().is_none());
+    assert!(
+        tx.get(&store, "players", nexum_core::RowId::from_u64(0))
+            .unwrap()
+            .is_none()
+    );
 
     // ...and another writer inserts exactly row 0 before the commit.
-    store.table_mut("players").unwrap().insert(row![1u64, 10u64, 100i32, 5u32]).unwrap();
+    store
+        .table_mut("players")
+        .unwrap()
+        .insert(row![1u64, 10u64, 100i32, 5u32])
+        .unwrap();
 
     let err = tx.commit(&mut store).unwrap_err();
     assert!(matches!(err, Error::Conflict(_)));
@@ -319,7 +366,8 @@ fn fresh_read_after_write_commits_cleanly() {
 
     let mut tx = Transaction::begin(&mut store);
     tx.get(&store, "players", p0).unwrap();
-    tx.update(&store, "players", p0, row![1u64, 10u64, 90i32, 5u32]).unwrap();
+    tx.update(&store, "players", p0, row![1u64, 10u64, 90i32, 5u32])
+        .unwrap();
     tx.commit(&mut store).unwrap();
     assert_eq!(
         store.table("players").unwrap().version_of(p0),
@@ -340,13 +388,15 @@ fn write_write_conflict_detected() {
     // T1 reads v0 and commits an update (v1).
     let mut t1 = Transaction::begin(&mut store);
     t1.get(&store, "players", p0).unwrap();
-    t1.update(&store, "players", p0, row![1u64, 10u64, 50i32, 5u32]).unwrap();
+    t1.update(&store, "players", p0, row![1u64, 10u64, 50i32, 5u32])
+        .unwrap();
     t1.commit(&mut store).unwrap();
 
     // T2 starts with a fresh read (v1): commits cleanly.
     let mut t2 = Transaction::begin(&mut store);
     t2.get(&store, "players", p0).unwrap();
-    t2.update(&store, "players", p0, row![1u64, 10u64, 25i32, 5u32]).unwrap();
+    t2.update(&store, "players", p0, row![1u64, 10u64, 25i32, 5u32])
+        .unwrap();
     t2.commit(&mut store).unwrap();
 
     // T3 reads v1 but another writer bumps to v2 before T3 commits.
@@ -367,8 +417,10 @@ fn write_write_conflict_detected() {
 fn multi_table_atomic_commit() {
     let mut store = world_store();
     let mut tx = Transaction::begin(&mut store);
-    tx.insert(&store, "players", row![1u64, 10u64, 100i32, 5u32]).unwrap();
-    tx.insert(&store, "items", row![1u64, "sword".to_string()]).unwrap();
+    tx.insert(&store, "players", row![1u64, 10u64, 100i32, 5u32])
+        .unwrap();
+    tx.insert(&store, "items", row![1u64, "sword".to_string()])
+        .unwrap();
     tx.insert(&store, "matches", row![5u64, 10u64]).unwrap();
     let changes = tx.commit(&mut store).unwrap();
 
@@ -401,7 +453,8 @@ fn failure_in_one_table_leaves_other_tables_untouched() {
 
     // Valid write to players + conflicting insert to matches (PK collision).
     let mut tx = Transaction::begin(&mut store);
-    tx.update(&store, "players", p0, row![1u64, 10u64, 50i32, 5u32]).unwrap();
+    tx.update(&store, "players", p0, row![1u64, 10u64, 50i32, 5u32])
+        .unwrap();
     tx.insert(&store, "matches", row![7u64, 2u64]).unwrap();
 
     let err = tx.commit(&mut store).unwrap_err();
@@ -415,7 +468,12 @@ fn failure_in_one_table_leaves_other_tables_untouched() {
         "players update must not have been applied"
     );
     assert_eq!(
-        store.table("players").unwrap().get(p0).unwrap().get_named(store.table("players").unwrap().schema(), "health"),
+        store
+            .table("players")
+            .unwrap()
+            .get(p0)
+            .unwrap()
+            .get_named(store.table("players").unwrap().schema(), "health"),
         Some(&Value::I32(100))
     );
     assert_eq!(store.table("matches").unwrap().len(), 1);
@@ -461,8 +519,12 @@ fn read_conflict_in_one_table_aborts_whole_transaction() {
 fn transactional_ops_keep_indexes_consistent() {
     let mut store = player_store();
     let mut tx = Transaction::begin(&mut store);
-    let alice_handle = tx.insert(&store, "players", row![1u64, 10u64, 100i32, 5u32]).unwrap();
-    let bob_handle = tx.insert(&store, "players", row![2u64, 10u64, 90i32, 6u32]).unwrap();
+    let alice_handle = tx
+        .insert(&store, "players", row![1u64, 10u64, 100i32, 5u32])
+        .unwrap();
+    let bob_handle = tx
+        .insert(&store, "players", row![2u64, 10u64, 90i32, 6u32])
+        .unwrap();
     let changes = tx.commit(&mut store).unwrap();
 
     // The handles were provisional (high bit set); the real ids come from
@@ -474,19 +536,52 @@ fn transactional_ops_keep_indexes_consistent() {
 
     // Indexes were built from the committed rows.
     assert_eq!(
-        store.table("players").unwrap().lookup("by_zone", &[Value::U64(10)]).unwrap(),
+        store
+            .table("players")
+            .unwrap()
+            .lookup("by_zone", &[Value::U64(10)])
+            .unwrap(),
         vec![alice, bob]
     );
 
     // Move Alice to zone 30 and level 9 via a transaction.
     let mut tx = Transaction::begin(&mut store);
-    tx.update(&store, "players", alice, row![1u64, 30u64, 50i32, 9u32]).unwrap();
+    tx.update(&store, "players", alice, row![1u64, 30u64, 50i32, 9u32])
+        .unwrap();
     tx.commit(&mut store).unwrap();
 
-    assert_eq!(store.table("players").unwrap().lookup("by_zone", &[Value::U64(10)]).unwrap(), vec![bob]);
-    assert_eq!(store.table("players").unwrap().lookup("by_zone", &[Value::U64(30)]).unwrap(), vec![alice]);
-    assert_eq!(store.table("players").unwrap().lookup("by_level", &[Value::U32(9)]).unwrap(), vec![alice]);
-    assert!(store.table("players").unwrap().lookup("by_level", &[Value::U32(5)]).unwrap().is_empty());
+    assert_eq!(
+        store
+            .table("players")
+            .unwrap()
+            .lookup("by_zone", &[Value::U64(10)])
+            .unwrap(),
+        vec![bob]
+    );
+    assert_eq!(
+        store
+            .table("players")
+            .unwrap()
+            .lookup("by_zone", &[Value::U64(30)])
+            .unwrap(),
+        vec![alice]
+    );
+    assert_eq!(
+        store
+            .table("players")
+            .unwrap()
+            .lookup("by_level", &[Value::U32(9)])
+            .unwrap(),
+        vec![alice]
+    );
+    assert!(
+        store
+            .table("players")
+            .unwrap()
+            .lookup("by_level", &[Value::U32(5)])
+            .unwrap()
+            .is_empty()
+    );
 
     // Delete Bob via a transaction: indexes must shed him too.
     let mut tx = Transaction::begin(&mut store);
@@ -494,8 +589,22 @@ fn transactional_ops_keep_indexes_consistent() {
     tx.commit(&mut store).unwrap();
 
     assert!(store.table("players").unwrap().get(bob).is_none());
-    assert!(store.table("players").unwrap().lookup("by_zone", &[Value::U64(10)]).unwrap().is_empty());
-    assert!(store.table("players").unwrap().get_by_primary_key(&[Value::U64(2)]).unwrap().is_none());
+    assert!(
+        store
+            .table("players")
+            .unwrap()
+            .lookup("by_zone", &[Value::U64(10)])
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        store
+            .table("players")
+            .unwrap()
+            .get_by_primary_key(&[Value::U64(2)])
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(store.table("players").unwrap().len(), 1);
 }
 
@@ -503,8 +612,10 @@ fn transactional_ops_keep_indexes_consistent() {
 fn indexes_never_diverge_after_transactional_mutations() {
     let mut store = player_store();
     let mut tx = Transaction::begin(&mut store);
-    tx.insert(&store, "players", row![1u64, 10u64, 100i32, 5u32]).unwrap();
-    tx.insert(&store, "players", row![2u64, 10u64, 90i32, 6u32]).unwrap();
+    tx.insert(&store, "players", row![1u64, 10u64, 100i32, 5u32])
+        .unwrap();
+    tx.insert(&store, "players", row![2u64, 10u64, 90i32, 6u32])
+        .unwrap();
     let changes = tx.commit(&mut store).unwrap();
     store.drain_changes();
 
@@ -513,7 +624,8 @@ fn indexes_never_diverge_after_transactional_mutations() {
     let bob = changes[1].row_id();
     let mut tx = Transaction::begin(&mut store);
     tx.delete(&store, "players", bob).unwrap();
-    tx.update(&store, "players", alice, row![1u64, 30u64, 40i32, 5u32]).unwrap();
+    tx.update(&store, "players", alice, row![1u64, 30u64, 40i32, 5u32])
+        .unwrap();
     tx.commit(&mut store).unwrap();
 
     let table = store.table("players").unwrap();
@@ -523,7 +635,10 @@ fn indexes_never_diverge_after_transactional_mutations() {
         .map(|(id, _)| id)
         .collect();
     assert_eq!(table.lookup("by_zone", &[Value::U64(30)]).unwrap(), zone30);
-    assert_eq!(table.lookup("by_level", &[Value::U32(5)]).unwrap(), vec![alice]);
+    assert_eq!(
+        table.lookup("by_level", &[Value::U32(5)]).unwrap(),
+        vec![alice]
+    );
     assert_eq!(table.len(), table.scan().count());
     assert_eq!(table.len(), 1); // Bob was deleted; only Alice remains.
 }
@@ -548,8 +663,11 @@ fn successful_commit_produces_ordered_change_records() {
     // Delete p1, update p0, insert a third row — all in one transaction.
     let mut tx = Transaction::begin(&mut store);
     tx.delete(&store, "players", p1).unwrap();
-    tx.update(&store, "players", p0, row![1u64, 20u64, 80i32, 7u32]).unwrap();
-    let inserted = tx.insert(&store, "players", row![3u64, 30u64, 70i32, 8u32]).unwrap();
+    tx.update(&store, "players", p0, row![1u64, 20u64, 80i32, 7u32])
+        .unwrap();
+    let inserted = tx
+        .insert(&store, "players", row![3u64, 30u64, 70i32, 8u32])
+        .unwrap();
     let changes = tx.commit(&mut store).unwrap();
 
     // Deterministic order: deletes first, then updates/inserts by RowId.
@@ -561,13 +679,19 @@ fn successful_commit_produces_ordered_change_records() {
     assert_eq!(changes[1].kind(), ChangeKind::Update);
     assert_eq!(changes[1].row_id(), p0);
     assert_eq!(changes[1].old_version(), Some(nexum_core::Version::ZERO));
-    assert_eq!(changes[1].new_version(), Some(nexum_core::Version::from_u64(1)));
+    assert_eq!(
+        changes[1].new_version(),
+        Some(nexum_core::Version::from_u64(1))
+    );
 
     assert_eq!(changes[2].kind(), ChangeKind::Insert);
     assert_eq!(changes[2].new_version(), Some(nexum_core::Version::ZERO));
     // Storage assigned a real id (row id 2 — the third insert).
     assert_eq!(changes[2].row_id().as_u64(), 2);
-    assert!(inserted.as_u64() & (1 << 63) != 0, "the handle was provisional");
+    assert!(
+        inserted.as_u64() & (1 << 63) != 0,
+        "the handle was provisional"
+    );
 }
 
 #[test]
@@ -607,7 +731,8 @@ fn commit_returns_only_this_transactions_changes() {
     // Deliberately do NOT drain: the direct insert's change is buffered.
 
     let mut tx = Transaction::begin(&mut store);
-    tx.update(&store, "players", p0, row![1u64, 10u64, 50i32, 5u32]).unwrap();
+    tx.update(&store, "players", p0, row![1u64, 10u64, 50i32, 5u32])
+        .unwrap();
     let changes = tx.commit(&mut store).unwrap();
 
     // Only the transaction's own update is returned, not the stale insert.
@@ -621,15 +746,21 @@ fn commit_returns_only_this_transactions_changes() {
 fn insert_then_update_coalesces_to_one_insert() {
     let mut store = player_store();
     let mut tx = Transaction::begin(&mut store);
-    let handle = tx.insert(&store, "players", row![1u64, 10u64, 100i32, 5u32]).unwrap();
-    tx.update(&store, "players", handle, row![1u64, 10u64, 25i32, 5u32]).unwrap();
+    let handle = tx
+        .insert(&store, "players", row![1u64, 10u64, 100i32, 5u32])
+        .unwrap();
+    tx.update(&store, "players", handle, row![1u64, 10u64, 25i32, 5u32])
+        .unwrap();
 
     assert_eq!(tx.write_count(), 1);
     let changes = tx.commit(&mut store).unwrap();
     assert_eq!(changes.len(), 1);
     assert_eq!(changes[0].kind(), ChangeKind::Insert);
     assert_eq!(
-        changes[0].new_row().unwrap().get_named(store.table("players").unwrap().schema(), "health"),
+        changes[0]
+            .new_row()
+            .unwrap()
+            .get_named(store.table("players").unwrap().schema(), "health"),
         Some(&Value::I32(25))
     );
 }
@@ -638,7 +769,9 @@ fn insert_then_update_coalesces_to_one_insert() {
 fn insert_then_delete_is_a_net_noop() {
     let mut store = player_store();
     let mut tx = Transaction::begin(&mut store);
-    let handle = tx.insert(&store, "players", row![1u64, 10u64, 100i32, 5u32]).unwrap();
+    let handle = tx
+        .insert(&store, "players", row![1u64, 10u64, 100i32, 5u32])
+        .unwrap();
     tx.delete(&store, "players", handle).unwrap();
 
     assert!(tx.write_count() == 0);
@@ -658,15 +791,20 @@ fn update_then_update_keeps_latest() {
     store.drain_changes();
 
     let mut tx = Transaction::begin(&mut store);
-    tx.update(&store, "players", p0, row![1u64, 10u64, 50i32, 5u32]).unwrap();
-    tx.update(&store, "players", p0, row![1u64, 10u64, 25i32, 5u32]).unwrap();
+    tx.update(&store, "players", p0, row![1u64, 10u64, 50i32, 5u32])
+        .unwrap();
+    tx.update(&store, "players", p0, row![1u64, 10u64, 25i32, 5u32])
+        .unwrap();
 
     assert_eq!(tx.write_count(), 1);
     let changes = tx.commit(&mut store).unwrap();
     assert_eq!(changes.len(), 1);
     assert_eq!(changes[0].kind(), ChangeKind::Update);
     assert_eq!(
-        changes[0].new_row().unwrap().get_named(store.table("players").unwrap().schema(), "health"),
+        changes[0]
+            .new_row()
+            .unwrap()
+            .get_named(store.table("players").unwrap().schema(), "health"),
         Some(&Value::I32(25))
     );
 }
@@ -682,7 +820,8 @@ fn update_then_delete_becomes_delete() {
     store.drain_changes();
 
     let mut tx = Transaction::begin(&mut store);
-    tx.update(&store, "players", p0, row![1u64, 10u64, 50i32, 5u32]).unwrap();
+    tx.update(&store, "players", p0, row![1u64, 10u64, 50i32, 5u32])
+        .unwrap();
     tx.delete(&store, "players", p0).unwrap();
 
     assert_eq!(tx.write_count(), 1);
@@ -731,7 +870,8 @@ fn dangling_provisional_handles_are_rejected() {
     let phantom = nexum_core::RowId::from_u64(1 << 63 | 5);
     let mut tx = Transaction::begin(&mut store);
     assert!(matches!(
-        tx.update(&store, "players", phantom, row![1u64, 10u64, 100i32, 5u32]).unwrap_err(),
+        tx.update(&store, "players", phantom, row![1u64, 10u64, 100i32, 5u32])
+            .unwrap_err(),
         Error::InvalidTransaction(_)
     ));
     assert!(matches!(
@@ -745,21 +885,28 @@ fn dangling_provisional_handles_are_rejected() {
 #[test]
 fn change_order_is_deterministic_across_tables() {
     let shape = |changes: Vec<nexum_storage::Change>| -> Vec<(u64, nexum_core::RowId)> {
-        changes.into_iter().map(|c| (c.table_id().as_u64(), c.row_id())).collect()
+        changes
+            .into_iter()
+            .map(|c| (c.table_id().as_u64(), c.row_id()))
+            .collect()
     };
 
     // Identical logical content, but submission order differs.
     let mut store_a = world_store();
     let mut tx_a = Transaction::begin(&mut store_a);
     tx_a.insert(&store_a, "matches", row![5u64, 10u64]).unwrap();
-    tx_a.insert(&store_a, "players", row![1u64, 10u64, 100i32, 5u32]).unwrap();
-    tx_a.insert(&store_a, "players", row![2u64, 10u64, 90i32, 6u32]).unwrap();
+    tx_a.insert(&store_a, "players", row![1u64, 10u64, 100i32, 5u32])
+        .unwrap();
+    tx_a.insert(&store_a, "players", row![2u64, 10u64, 90i32, 6u32])
+        .unwrap();
     let changes_a = tx_a.commit(&mut store_a).unwrap();
 
     let mut store_b = world_store();
     let mut tx_b = Transaction::begin(&mut store_b);
-    tx_b.insert(&store_b, "players", row![2u64, 10u64, 90i32, 6u32]).unwrap();
-    tx_b.insert(&store_b, "players", row![1u64, 10u64, 100i32, 5u32]).unwrap();
+    tx_b.insert(&store_b, "players", row![2u64, 10u64, 90i32, 6u32])
+        .unwrap();
+    tx_b.insert(&store_b, "players", row![1u64, 10u64, 100i32, 5u32])
+        .unwrap();
     tx_b.insert(&store_b, "matches", row![5u64, 10u64]).unwrap();
     let changes_b = tx_b.commit(&mut store_b).unwrap();
 
@@ -775,11 +922,13 @@ fn missing_table_is_not_found() {
     let mut store = player_store();
     let mut tx = Transaction::begin(&mut store);
     assert!(matches!(
-        tx.get(&store, "nope", nexum_core::RowId::from_u64(0)).unwrap_err(),
+        tx.get(&store, "nope", nexum_core::RowId::from_u64(0))
+            .unwrap_err(),
         Error::NotFound(_)
     ));
     assert!(matches!(
-        tx.insert(&store, "nope", row![1u64, 10u64, 100i32, 5u32]).unwrap_err(),
+        tx.insert(&store, "nope", row![1u64, 10u64, 100i32, 5u32])
+            .unwrap_err(),
         Error::NotFound(_)
     ));
 }
@@ -797,12 +946,17 @@ fn schema_violation_rejected_at_write_time() {
 #[test]
 fn unique_violation_detected_at_commit() {
     let mut store = player_store();
-    store.table_mut("players").unwrap().insert(row![1u64, 10u64, 100i32, 5u32]).unwrap();
+    store
+        .table_mut("players")
+        .unwrap()
+        .insert(row![1u64, 10u64, 100i32, 5u32])
+        .unwrap();
     store.drain_changes();
 
     // Same level 5 (unique by_level) as the live row.
     let mut tx = Transaction::begin(&mut store);
-    tx.insert(&store, "players", row![2u64, 20u64, 50i32, 5u32]).unwrap();
+    tx.insert(&store, "players", row![2u64, 20u64, 50i32, 5u32])
+        .unwrap();
     let err = tx.commit(&mut store).unwrap_err();
     assert!(matches!(err, Error::AlreadyExists(_)));
     assert_eq!(store.table("players").unwrap().len(), 1);
@@ -813,8 +967,10 @@ fn unique_violation_detected_at_commit() {
 fn cross_write_unique_collision_detected_at_commit() {
     let mut store = player_store();
     let mut tx = Transaction::begin(&mut store);
-    tx.insert(&store, "players", row![1u64, 10u64, 100i32, 5u32]).unwrap();
-    tx.insert(&store, "players", row![2u64, 20u64, 50i32, 5u32]).unwrap(); // same level
+    tx.insert(&store, "players", row![1u64, 10u64, 100i32, 5u32])
+        .unwrap();
+    tx.insert(&store, "players", row![2u64, 20u64, 50i32, 5u32])
+        .unwrap(); // same level
 
     let err = tx.commit(&mut store).unwrap_err();
     assert!(matches!(err, Error::AlreadyExists(_)));
@@ -825,7 +981,8 @@ fn cross_write_unique_collision_detected_at_commit() {
 fn delete_of_missing_row_is_not_found() {
     let mut store = player_store();
     let mut tx = Transaction::begin(&mut store);
-    tx.delete(&store, "players", nexum_core::RowId::from_u64(9)).unwrap();
+    tx.delete(&store, "players", nexum_core::RowId::from_u64(9))
+        .unwrap();
     let err = tx.commit(&mut store).unwrap_err();
     assert!(matches!(err, Error::NotFound(_)));
     assert_eq!(tx.state(), TransactionState::Aborted);
@@ -835,7 +992,9 @@ fn delete_of_missing_row_is_not_found() {
 fn reads_observe_pending_writes_after_correction() {
     let mut store = player_store();
     let mut tx = Transaction::begin(&mut store);
-    let handle = tx.insert(&store, "players", row![1u64, 10u64, 100i32, 5u32]).unwrap();
+    let handle = tx
+        .insert(&store, "players", row![1u64, 10u64, 100i32, 5u32])
+        .unwrap();
     // The Phase 4 correction made reads observe the transaction's own
     // uncommitted writes (read-your-writes, ADR-004 D12).
     assert!(tx.get(&store, "players", handle).unwrap().is_some());
@@ -856,14 +1015,20 @@ fn deleted_row_key_can_be_reused_by_same_transaction() {
     // Delete p0 (owns level 5) and insert a fresh row claiming level 5.
     let mut tx = Transaction::begin(&mut store);
     tx.delete(&store, "players", p0).unwrap();
-    let handle = tx.insert(&store, "players", row![2u64, 20u64, 50i32, 5u32]).unwrap();
+    let handle = tx
+        .insert(&store, "players", row![2u64, 20u64, 50i32, 5u32])
+        .unwrap();
     let changes = tx.commit(&mut store).unwrap();
 
     assert_eq!(changes.len(), 2);
     assert_eq!(changes[0].kind(), ChangeKind::Delete);
     assert_eq!(changes[1].kind(), ChangeKind::Insert);
     assert_eq!(
-        store.table("players").unwrap().lookup("by_level", &[Value::U32(5)]).unwrap(),
+        store
+            .table("players")
+            .unwrap()
+            .lookup("by_level", &[Value::U32(5)])
+            .unwrap(),
         vec![nexum_core::RowId::from_u64(1)]
     );
     let _ = handle;
@@ -889,7 +1054,8 @@ fn aborted_transaction_changes_nothing() {
     store.drain_changes(); // clear the direct insert's change
 
     let mut tx = Transaction::begin(&mut store);
-    tx.update(&store, "players", p0, row![1u64, 10u64, 1i32, 5u32]).unwrap();
+    tx.update(&store, "players", p0, row![1u64, 10u64, 1i32, 5u32])
+        .unwrap();
     tx.delete(&store, "players", p0).unwrap(); // coalesced to delete
     tx.abort().unwrap();
 
@@ -912,9 +1078,14 @@ fn health<'s>(row: &'s nexum_core::Row, schema: &nexum_core::TableSchema) -> &'s
 fn insert_then_get_sees_pending_row() {
     let mut store = player_store();
     let mut tx = Transaction::begin(&mut store);
-    let handle = tx.insert(&store, "players", row![1u64, 10u64, 100i32, 5u32]).unwrap();
+    let handle = tx
+        .insert(&store, "players", row![1u64, 10u64, 100i32, 5u32])
+        .unwrap();
 
-    let fetched = tx.get(&store, "players", handle).unwrap().expect("pending insert visible");
+    let fetched = tx
+        .get(&store, "players", handle)
+        .unwrap()
+        .expect("pending insert visible");
     let schema = store.table("players").unwrap().schema();
     assert_eq!(health(&fetched, schema), &Value::I32(100));
     // The write entry governs validation: no row observation recorded.
@@ -926,8 +1097,11 @@ fn insert_then_get_sees_pending_row() {
 fn insert_then_update_then_get_sees_final_row() {
     let mut store = player_store();
     let mut tx = Transaction::begin(&mut store);
-    let handle = tx.insert(&store, "players", row![1u64, 10u64, 100i32, 5u32]).unwrap();
-    tx.update(&store, "players", handle, row![1u64, 10u64, 40i32, 5u32]).unwrap();
+    let handle = tx
+        .insert(&store, "players", row![1u64, 10u64, 100i32, 5u32])
+        .unwrap();
+    tx.update(&store, "players", handle, row![1u64, 10u64, 40i32, 5u32])
+        .unwrap();
 
     let fetched = tx.get(&store, "players", handle).unwrap().unwrap();
     let schema = store.table("players").unwrap().schema();
@@ -938,7 +1112,9 @@ fn insert_then_update_then_get_sees_final_row() {
 fn insert_then_delete_then_get_observes_absence() {
     let mut store = player_store();
     let mut tx = Transaction::begin(&mut store);
-    let handle = tx.insert(&store, "players", row![1u64, 10u64, 100i32, 5u32]).unwrap();
+    let handle = tx
+        .insert(&store, "players", row![1u64, 10u64, 100i32, 5u32])
+        .unwrap();
     tx.delete(&store, "players", handle).unwrap(); // net no-op
 
     assert!(tx.get(&store, "players", handle).unwrap().is_none());
@@ -960,8 +1136,12 @@ fn update_then_get_sees_pending_row() {
     store.drain_changes();
 
     let mut tx = Transaction::begin(&mut store);
-    tx.update(&store, "players", p0, row![1u64, 10u64, 25i32, 5u32]).unwrap();
-    let fetched = tx.get(&store, "players", p0).unwrap().expect("pending update visible");
+    tx.update(&store, "players", p0, row![1u64, 10u64, 25i32, 5u32])
+        .unwrap();
+    let fetched = tx
+        .get(&store, "players", p0)
+        .unwrap()
+        .expect("pending update visible");
     let schema = store.table("players").unwrap().schema();
     assert_eq!(health(&fetched, schema), &Value::I32(25));
     // The write-time capture is the only observation (no duplicate read).
@@ -979,8 +1159,10 @@ fn update_then_update_then_get_sees_latest() {
     store.drain_changes();
 
     let mut tx = Transaction::begin(&mut store);
-    tx.update(&store, "players", p0, row![1u64, 10u64, 50i32, 5u32]).unwrap();
-    tx.update(&store, "players", p0, row![1u64, 10u64, 5i32, 5u32]).unwrap();
+    tx.update(&store, "players", p0, row![1u64, 10u64, 50i32, 5u32])
+        .unwrap();
+    tx.update(&store, "players", p0, row![1u64, 10u64, 5i32, 5u32])
+        .unwrap();
     let fetched = tx.get(&store, "players", p0).unwrap().unwrap();
     let schema = store.table("players").unwrap().schema();
     assert_eq!(health(&fetched, schema), &Value::I32(5));
@@ -997,7 +1179,8 @@ fn update_then_delete_then_get_observes_absence() {
     store.drain_changes();
 
     let mut tx = Transaction::begin(&mut store);
-    tx.update(&store, "players", p0, row![1u64, 10u64, 50i32, 5u32]).unwrap();
+    tx.update(&store, "players", p0, row![1u64, 10u64, 50i32, 5u32])
+        .unwrap();
     tx.delete(&store, "players", p0).unwrap();
     assert!(tx.get(&store, "players", p0).unwrap().is_none());
     assert!(!tx.contains(&store, "players", p0).unwrap());
@@ -1054,7 +1237,10 @@ fn scan_then_external_insert_conflicts() {
         .unwrap();
     store.drain_changes();
 
-    assert!(matches!(tx.commit(&mut store).unwrap_err(), Error::Conflict(_)));
+    assert!(matches!(
+        tx.commit(&mut store).unwrap_err(),
+        Error::Conflict(_)
+    ));
     assert_eq!(tx.state(), TransactionState::Aborted);
 }
 
@@ -1073,7 +1259,10 @@ fn scan_then_external_delete_conflicts() {
     store.table_mut("players").unwrap().delete(p0).unwrap();
     store.drain_changes();
 
-    assert!(matches!(tx.commit(&mut store).unwrap_err(), Error::Conflict(_)));
+    assert!(matches!(
+        tx.commit(&mut store).unwrap_err(),
+        Error::Conflict(_)
+    ));
 }
 
 #[test]
@@ -1095,7 +1284,10 @@ fn scan_then_external_update_conflicts() {
         .unwrap();
     store.drain_changes();
 
-    assert!(matches!(tx.commit(&mut store).unwrap_err(), Error::Conflict(_)));
+    assert!(matches!(
+        tx.commit(&mut store).unwrap_err(),
+        Error::Conflict(_)
+    ));
 }
 
 #[test]
@@ -1141,7 +1333,8 @@ fn scan_then_own_write_commits_cleanly() {
     let mut store = player_store();
     let mut tx = Transaction::begin(&mut store);
     tx.scan(&store, "players").unwrap();
-    tx.insert(&store, "players", row![1u64, 10u64, 100i32, 5u32]).unwrap();
+    tx.insert(&store, "players", row![1u64, 10u64, 100i32, 5u32])
+        .unwrap();
     // The transaction's own write is not a phantom: validation runs before
     // apply, so the observed epoch still matches at commit time.
     let changes = tx.commit(&mut store).unwrap();
@@ -1196,8 +1389,7 @@ fn scan_records_a_table_epoch_observation() {
     tx.scan(&store, "players").unwrap();
 
     assert_eq!(tx.read_count(), 1);
-    let observations: Vec<(nexum_core::TableId, nexum_core::Version)> =
-        tx.table_reads().collect();
+    let observations: Vec<(nexum_core::TableId, nexum_core::Version)> = tx.table_reads().collect();
     assert_eq!(observations.len(), 1);
     assert_eq!(observations[0].0, nexum_core::TableId::from_u64(0));
     assert_eq!(observations[0].1, nexum_core::Version::ZERO);
@@ -1221,9 +1413,12 @@ fn scan_overlays_pending_writes_deterministically() {
     store.drain_changes();
 
     let mut tx = Transaction::begin(&mut store);
-    tx.update(&store, "players", p0, row![1u64, 10u64, 25i32, 5u32]).unwrap();
+    tx.update(&store, "players", p0, row![1u64, 10u64, 25i32, 5u32])
+        .unwrap();
     tx.delete(&store, "players", p1).unwrap();
-    let handle = tx.insert(&store, "players", row![3u64, 20u64, 80i32, 7u32]).unwrap();
+    let handle = tx
+        .insert(&store, "players", row![3u64, 20u64, 80i32, 7u32])
+        .unwrap();
 
     let scanned = tx.scan(&store, "players").unwrap();
     let schema = store.table("players").unwrap().schema();
@@ -1233,7 +1428,10 @@ fn scan_overlays_pending_writes_deterministically() {
     assert_eq!(scanned[0].0, p0);
     assert_eq!(health(&scanned[0].1, schema), &Value::I32(25));
     assert_eq!(scanned[1].0, handle);
-    assert_eq!(scanned[1].1.get_named(schema, "zone_id"), Some(&Value::U64(20)));
+    assert_eq!(
+        scanned[1].1.get_named(schema, "zone_id"),
+        Some(&Value::U64(20))
+    );
     assert!(!scanned.iter().any(|(id, _)| *id == p1));
 
     // And it commits cleanly (own writes are not phantom conflicts): the
@@ -1259,19 +1457,28 @@ fn lookup_unique_overlays_pending_writes() {
 
     let mut tx = Transaction::begin(&mut store);
     // Move p0 off level 5, and add a pending insert claiming level 6.
-    tx.update(&store, "players", p0, row![1u64, 10u64, 100i32, 9u32]).unwrap();
-    let handle = tx.insert(&store, "players", row![2u64, 20u64, 90i32, 6u32]).unwrap();
+    tx.update(&store, "players", p0, row![1u64, 10u64, 100i32, 9u32])
+        .unwrap();
+    let handle = tx
+        .insert(&store, "players", row![2u64, 20u64, 90i32, 6u32])
+        .unwrap();
 
     // The pending insert is visible under its key...
     assert_eq!(
-        tx.lookup_unique(&store, "players", "by_level", &[Value::U32(6)]).unwrap(),
+        tx.lookup_unique(&store, "players", "by_level", &[Value::U32(6)])
+            .unwrap(),
         vec![handle]
     );
     // ...the updated row's old key is released in the tx view...
-    assert!(tx.lookup_unique(&store, "players", "by_level", &[Value::U32(5)]).unwrap().is_empty());
+    assert!(
+        tx.lookup_unique(&store, "players", "by_level", &[Value::U32(5)])
+            .unwrap()
+            .is_empty()
+    );
     // ...and its new key is visible.
     assert_eq!(
-        tx.lookup_unique(&store, "players", "by_level", &[Value::U32(9)]).unwrap(),
+        tx.lookup_unique(&store, "players", "by_level", &[Value::U32(9)])
+            .unwrap(),
         vec![p0]
     );
 }
@@ -1289,19 +1496,31 @@ fn lookup_unique_hides_logically_deleted_rows() {
     let mut tx = Transaction::begin(&mut store);
     tx.delete(&store, "players", p0).unwrap();
     // The logically-deleted row no longer owns level 5 in the tx view.
-    assert!(tx.lookup_unique(&store, "players", "by_level", &[Value::U32(5)]).unwrap().is_empty());
+    assert!(
+        tx.lookup_unique(&store, "players", "by_level", &[Value::U32(5)])
+            .unwrap()
+            .is_empty()
+    );
 
     // delete X then insert a new X with the same key must be possible:
     // the key is free within this transaction.
-    let handle = tx.insert(&store, "players", row![9u64, 30u64, 1i32, 5u32]).unwrap();
+    let handle = tx
+        .insert(&store, "players", row![9u64, 30u64, 1i32, 5u32])
+        .unwrap();
     assert_eq!(
-        tx.lookup_unique(&store, "players", "by_level", &[Value::U32(5)]).unwrap(),
+        tx.lookup_unique(&store, "players", "by_level", &[Value::U32(5)])
+            .unwrap(),
         vec![handle]
     );
     // And it commits cleanly: the released key is reused by the insert.
     tx.commit(&mut store).unwrap();
     assert_eq!(
-        store.table("players").unwrap().lookup_unique("by_level", &[Value::U32(5)]).unwrap().len(),
+        store
+            .table("players")
+            .unwrap()
+            .lookup_unique("by_level", &[Value::U32(5)])
+            .unwrap()
+            .len(),
         1
     );
 }
@@ -1323,19 +1542,28 @@ fn lookup_index_overlays_pending_writes() {
 
     let mut tx = Transaction::begin(&mut store);
     // Move p0 out of zone 10 and add a pending insert claiming zone 20.
-    tx.update(&store, "players", p0, row![1u64, 30u64, 100i32, 5u32]).unwrap();
-    let handle = tx.insert(&store, "players", row![3u64, 20u64, 80i32, 7u32]).unwrap();
+    tx.update(&store, "players", p0, row![1u64, 30u64, 100i32, 5u32])
+        .unwrap();
+    let handle = tx
+        .insert(&store, "players", row![3u64, 20u64, 80i32, 7u32])
+        .unwrap();
 
     // The pending insert is visible under its key (ascending ids, deduped)...
     assert_eq!(
-        tx.lookup_index(&store, "players", "by_zone", &[Value::U64(20)]).unwrap(),
+        tx.lookup_index(&store, "players", "by_zone", &[Value::U64(20)])
+            .unwrap(),
         vec![p1, handle]
     );
     // ...the updated row's old key is released in the tx view...
-    assert!(tx.lookup_index(&store, "players", "by_zone", &[Value::U64(10)]).unwrap().is_empty());
+    assert!(
+        tx.lookup_index(&store, "players", "by_zone", &[Value::U64(10)])
+            .unwrap()
+            .is_empty()
+    );
     // ...and its new key is visible.
     assert_eq!(
-        tx.lookup_index(&store, "players", "by_zone", &[Value::U64(30)]).unwrap(),
+        tx.lookup_index(&store, "players", "by_zone", &[Value::U64(30)])
+            .unwrap(),
         vec![p0]
     );
 
@@ -1344,11 +1572,19 @@ fn lookup_index_overlays_pending_writes() {
     // monotonic RowId).
     tx.commit(&mut store).unwrap();
     assert_eq!(
-        store.table("players").unwrap().lookup("by_zone", &[Value::U64(20)]).unwrap(),
+        store
+            .table("players")
+            .unwrap()
+            .lookup("by_zone", &[Value::U64(20)])
+            .unwrap(),
         vec![p1, RowId::from_u64(2)]
     );
     assert_eq!(
-        store.table("players").unwrap().lookup("by_zone", &[Value::U64(30)]).unwrap(),
+        store
+            .table("players")
+            .unwrap()
+            .lookup("by_zone", &[Value::U64(30)])
+            .unwrap(),
         vec![p0]
     );
 }
@@ -1366,12 +1602,19 @@ fn lookup_index_hides_logically_deleted_rows() {
     let mut tx = Transaction::begin(&mut store);
     tx.delete(&store, "players", p0).unwrap();
     // The logically-deleted row no longer owns zone 10 in the tx view.
-    assert!(tx.lookup_index(&store, "players", "by_zone", &[Value::U64(10)]).unwrap().is_empty());
+    assert!(
+        tx.lookup_index(&store, "players", "by_zone", &[Value::U64(10)])
+            .unwrap()
+            .is_empty()
+    );
 
     // delete X then insert a new X with the same zone must be visible.
-    let handle = tx.insert(&store, "players", row![9u64, 10u64, 1i32, 9u32]).unwrap();
+    let handle = tx
+        .insert(&store, "players", row![9u64, 10u64, 1i32, 9u32])
+        .unwrap();
     assert_eq!(
-        tx.lookup_index(&store, "players", "by_zone", &[Value::U64(10)]).unwrap(),
+        tx.lookup_index(&store, "players", "by_zone", &[Value::U64(10)])
+            .unwrap(),
         vec![handle]
     );
 }
@@ -1395,8 +1638,13 @@ fn lookup_index_results_are_sorted_ascending() {
     store.drain_changes();
 
     let mut tx = Transaction::begin(&mut store);
-    let owners = tx.lookup_index(&store, "players", "by_zone", &[Value::U64(10)]).unwrap();
-    assert_eq!(owners, ids, "ascending RowId order, matching the committed set");
+    let owners = tx
+        .lookup_index(&store, "players", "by_zone", &[Value::U64(10)])
+        .unwrap();
+    assert_eq!(
+        owners, ids,
+        "ascending RowId order, matching the committed set"
+    );
 }
 
 // ------------------------------------- correction: write-time version capture
@@ -1414,7 +1662,8 @@ fn write_write_conflict_detected_without_prior_read() {
     // T1 updates p0 WITHOUT reading it first — the write itself captures the
     // committed version (v0).
     let mut t1 = Transaction::begin(&mut store);
-    t1.update(&store, "players", p0, row![1u64, 10u64, 50i32, 5u32]).unwrap();
+    t1.update(&store, "players", p0, row![1u64, 10u64, 50i32, 5u32])
+        .unwrap();
 
     // A concurrent writer bumps p0 to v1 before T1 commits.
     store
@@ -1444,7 +1693,8 @@ fn write_without_prior_read_commits_cleanly_when_unchanged() {
     store.drain_changes();
 
     let mut tx = Transaction::begin(&mut store);
-    tx.update(&store, "players", p0, row![1u64, 10u64, 25i32, 5u32]).unwrap();
+    tx.update(&store, "players", p0, row![1u64, 10u64, 25i32, 5u32])
+        .unwrap();
     tx.commit(&mut store).unwrap();
     assert_eq!(
         store.table("players").unwrap().version_of(p0),
@@ -1527,8 +1777,10 @@ fn branch_merge_is_equivalent_to_serial_commit() {
     // a-insert, b-insert, c-insert: same keys, same real-id assignment.
     let changes = tx.commit(&mut store).unwrap();
     assert_eq!(changes.len(), 3);
-    let ids: Vec<(u64, nexum_core::RowId)> =
-        changes.iter().map(|c| (c.table_id().as_u64(), c.row_id())).collect();
+    let ids: Vec<(u64, nexum_core::RowId)> = changes
+        .iter()
+        .map(|c| (c.table_id().as_u64(), c.row_id()))
+        .collect();
     assert_eq!(ids[0], (0, nexum_core::RowId::from_u64(0))); // a's insert
     assert_eq!(ids[1], (1, nexum_core::RowId::from_u64(0))); // b's insert
     assert_eq!(ids[2], (2, nexum_core::RowId::from_u64(0))); // c's insert
@@ -1542,12 +1794,18 @@ fn absorb_rejects_committed_or_aborted_children() {
 
     let mut child = Transaction::new(nexum_core::TransactionId::from_u64(1));
     child.abort().unwrap();
-    assert!(matches!(tx.absorb(child).unwrap_err(), Error::AlreadyAborted(_)));
+    assert!(matches!(
+        tx.absorb(child).unwrap_err(),
+        Error::AlreadyAborted(_)
+    ));
 
     let mut child = Transaction::new(nexum_core::TransactionId::from_u64(2));
     child.branch_of(&tx).unwrap();
     child.commit(&mut store).unwrap();
-    assert!(matches!(tx.absorb(child).unwrap_err(), Error::AlreadyCommitted(_)));
+    assert!(matches!(
+        tx.absorb(child).unwrap_err(),
+        Error::AlreadyCommitted(_)
+    ));
 }
 
 #[test]
@@ -1556,17 +1814,16 @@ fn branch_of_rejects_non_active_parent() {
     let mut tx = Transaction::begin(&mut store);
     tx.abort().unwrap();
     let mut child = Transaction::new(nexum_core::TransactionId::from_u64(1));
-    assert!(matches!(child.branch_of(&tx).unwrap_err(), Error::AlreadyAborted(_)));
+    assert!(matches!(
+        child.branch_of(&tx).unwrap_err(),
+        Error::AlreadyAborted(_)
+    ));
 }
 
 #[test]
 fn absorb_folds_read_observations_and_epochs() {
     let mut store = parallel_store();
-    let p0 = store
-        .table_mut("a")
-        .unwrap()
-        .insert(row![1u64])
-        .unwrap();
+    let p0 = store.table_mut("a").unwrap().insert(row![1u64]).unwrap();
     store.drain_changes();
 
     let mut tx = Transaction::begin(&mut store);

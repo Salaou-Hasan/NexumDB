@@ -2,14 +2,14 @@
 //! processing, transaction semantics, correctness, determinism,
 //! backpressure, and resync (Phase 8 brief §19).
 
-use nexum_core::schema::TableSchema;
-use nexum_core::{ColumnType, Error, RowId, Value};
-use nexum_core::row;
-use nexum_storage::Change;
 use crate::{
     ComparisonOp, OrderDirection, Query, SubscriptionConfig, SubscriptionRegistry,
     SubscriptionState, SubscriptionUpdate,
 };
+use nexum_core::row;
+use nexum_core::schema::TableSchema;
+use nexum_core::{ColumnType, Error, RowId, Value};
+use nexum_storage::Change;
 use nexum_table::TableStore;
 use nexum_tx::Transaction;
 
@@ -56,7 +56,10 @@ fn player(id: u64, zone: u64, health: i32, level: u32) -> nexum_core::Row {
 }
 
 fn zone10() -> Query {
-    Query::builder("players").predicate_eq("zone_id", 10u64).build().unwrap()
+    Query::builder("players")
+        .predicate_eq("zone_id", 10u64)
+        .build()
+        .unwrap()
 }
 
 // ------------------------------------------------------------- lifecycle
@@ -65,7 +68,9 @@ fn zone10() -> Query {
 fn subscribe_on_missing_table_fails() {
     let store = world();
     let mut registry = SubscriptionRegistry::new();
-    let err = registry.subscribe(&store, Query::builder("ghosts").build().unwrap()).unwrap_err();
+    let err = registry
+        .subscribe(&store, Query::builder("ghosts").build().unwrap())
+        .unwrap_err();
     assert!(matches!(err, Error::NotFound(_)));
 }
 
@@ -83,7 +88,10 @@ fn subscribe_on_empty_table_delivers_empty_initial() {
         }
         other => panic!("expected Initial, got {other:?}"),
     }
-    assert_eq!(registry.lookup(sub).unwrap().state(), SubscriptionState::Active);
+    assert_eq!(
+        registry.lookup(sub).unwrap().state(),
+        SubscriptionState::Active
+    );
 }
 
 #[test]
@@ -119,9 +127,18 @@ fn unsubscribe_and_drain_errors() {
         registry.unsubscribe(sub).unwrap_err(),
         Error::NotFound(_)
     ));
-    assert!(matches!(registry.drain(sub).unwrap_err(), Error::NotFound(_)));
-    assert!(matches!(registry.is_stale(sub).unwrap_err(), Error::NotFound(_)));
-    assert!(matches!(registry.resync(&store, sub).unwrap_err(), Error::NotFound(_)));
+    assert!(matches!(
+        registry.drain(sub).unwrap_err(),
+        Error::NotFound(_)
+    ));
+    assert!(matches!(
+        registry.is_stale(sub).unwrap_err(),
+        Error::NotFound(_)
+    ));
+    assert!(matches!(
+        registry.resync(&store, sub).unwrap_err(),
+        Error::NotFound(_)
+    ));
 }
 
 #[test]
@@ -280,14 +297,18 @@ fn update_inside_inside_delivers_update() {
     registry.drain(sub).unwrap();
 
     let changes = commit(&mut store, |tx, store| {
-        tx.update(store, "players", RowId::from_u64(0), player(1, 10, 50, 1)).unwrap();
+        tx.update(store, "players", RowId::from_u64(0), player(1, 10, 50, 1))
+            .unwrap();
     });
     registry.apply_changes(&store, &changes);
     let updates = registry.drain(sub).unwrap();
     match &updates[0] {
         SubscriptionUpdate::Update { row, .. } => {
-            assert_eq!(row.row().get_named(store.table("players").unwrap().schema(), "health"),
-                       Some(&Value::I32(50)));
+            assert_eq!(
+                row.row()
+                    .get_named(store.table("players").unwrap().schema(), "health"),
+                Some(&Value::I32(50))
+            );
         }
         other => panic!("expected Update, got {other:?}"),
     }
@@ -304,11 +325,14 @@ fn update_inside_outside_delivers_delete() {
     registry.drain(sub).unwrap();
 
     let changes = commit(&mut store, |tx, store| {
-        tx.update(store, "players", RowId::from_u64(0), player(1, 20, 100, 1)).unwrap();
+        tx.update(store, "players", RowId::from_u64(0), player(1, 20, 100, 1))
+            .unwrap();
     });
     registry.apply_changes(&store, &changes);
     let updates = registry.drain(sub).unwrap();
-    assert!(matches!(&updates[0], SubscriptionUpdate::Delete { row_id, .. } if *row_id == RowId::from_u64(0)));
+    assert!(
+        matches!(&updates[0], SubscriptionUpdate::Delete { row_id, .. } if *row_id == RowId::from_u64(0))
+    );
 }
 
 #[test]
@@ -322,11 +346,14 @@ fn update_outside_inside_delivers_insert() {
     registry.drain(sub).unwrap();
 
     let changes = commit(&mut store, |tx, store| {
-        tx.update(store, "players", RowId::from_u64(0), player(1, 10, 100, 1)).unwrap();
+        tx.update(store, "players", RowId::from_u64(0), player(1, 10, 100, 1))
+            .unwrap();
     });
     registry.apply_changes(&store, &changes);
     let updates = registry.drain(sub).unwrap();
-    assert!(matches!(&updates[0], SubscriptionUpdate::Insert { row, .. } if row.row_id() == RowId::from_u64(0)));
+    assert!(
+        matches!(&updates[0], SubscriptionUpdate::Insert { row, .. } if row.row_id() == RowId::from_u64(0))
+    );
 }
 
 #[test]
@@ -340,7 +367,8 @@ fn update_outside_outside_delivers_nothing() {
     registry.drain(sub).unwrap();
 
     let changes = commit(&mut store, |tx, store| {
-        tx.update(store, "players", RowId::from_u64(0), player(1, 30, 100, 1)).unwrap();
+        tx.update(store, "players", RowId::from_u64(0), player(1, 30, 100, 1))
+            .unwrap();
     });
     registry.apply_changes(&store, &changes);
     assert!(registry.drain(sub).unwrap().is_empty());
@@ -365,7 +393,9 @@ fn delete_visible_and_invisible() {
     let updates = registry.drain(sub).unwrap();
     // Only the visible row's deletion is delivered.
     assert_eq!(updates.len(), 1);
-    assert!(matches!(&updates[0], SubscriptionUpdate::Delete { row_id, .. } if *row_id == RowId::from_u64(0)));
+    assert!(
+        matches!(&updates[0], SubscriptionUpdate::Delete { row_id, .. } if *row_id == RowId::from_u64(0))
+    );
 }
 
 #[test]
@@ -393,8 +423,12 @@ fn limit_window_insert_evicts() {
     registry.apply_changes(&store, &changes);
     let updates = registry.drain(sub).unwrap();
     assert_eq!(updates.len(), 2);
-    assert!(matches!(&updates[0], SubscriptionUpdate::Delete { row_id, .. } if *row_id == RowId::from_u64(1)));
-    assert!(matches!(&updates[1], SubscriptionUpdate::Insert { row, .. } if row.row_id() == RowId::from_u64(3)));
+    assert!(
+        matches!(&updates[0], SubscriptionUpdate::Delete { row_id, .. } if *row_id == RowId::from_u64(1))
+    );
+    assert!(
+        matches!(&updates[1], SubscriptionUpdate::Insert { row, .. } if row.row_id() == RowId::from_u64(3))
+    );
 
     // A matching insert that ranks outside the window: no net change.
     let changes = commit(&mut store, |tx, store| {
@@ -429,8 +463,12 @@ fn limit_window_delete_backfills() {
     registry.apply_changes(&store, &changes);
     let updates = registry.drain(sub).unwrap();
     assert_eq!(updates.len(), 2);
-    assert!(matches!(&updates[0], SubscriptionUpdate::Delete { row_id, .. } if *row_id == RowId::from_u64(2)));
-    assert!(matches!(&updates[1], SubscriptionUpdate::Insert { row, .. } if row.row_id() == RowId::from_u64(0)));
+    assert!(
+        matches!(&updates[0], SubscriptionUpdate::Delete { row_id, .. } if *row_id == RowId::from_u64(2))
+    );
+    assert!(
+        matches!(&updates[1], SubscriptionUpdate::Insert { row, .. } if row.row_id() == RowId::from_u64(0))
+    );
     assert_eq!(registry.lookup(sub).unwrap().visible_len(), 2);
 }
 
@@ -471,28 +509,41 @@ fn limit_window_update_reorders_and_evicts() {
     // Update the top row to health 5: it drops out of the window and the
     // next-best previously-invisible row (health 10) backfills into it.
     let changes = commit(&mut store, |tx, store| {
-        tx.update(store, "players", RowId::from_u64(2), player(3, 10, 5, 3)).unwrap();
+        tx.update(store, "players", RowId::from_u64(2), player(3, 10, 5, 3))
+            .unwrap();
     });
     registry.apply_changes(&store, &changes);
     let updates = registry.drain(sub).unwrap();
-    assert_eq!(updates.len(), 2, "Delete the demoted row, Insert the backfill");
-    assert!(matches!(&updates[0], SubscriptionUpdate::Delete { row_id, .. } if *row_id == RowId::from_u64(2)));
-    assert!(matches!(&updates[1], SubscriptionUpdate::Insert { row, .. } if row.row_id() == RowId::from_u64(0)));
+    assert_eq!(
+        updates.len(),
+        2,
+        "Delete the demoted row, Insert the backfill"
+    );
+    assert!(
+        matches!(&updates[0], SubscriptionUpdate::Delete { row_id, .. } if *row_id == RowId::from_u64(2))
+    );
+    assert!(
+        matches!(&updates[1], SubscriptionUpdate::Insert { row, .. } if row.row_id() == RowId::from_u64(0))
+    );
 
     // Update the backfilled row to the top: it stays visible, so only an
     // Update is emitted (membership is unchanged).
     let changes = commit(&mut store, |tx, store| {
-        tx.update(store, "players", RowId::from_u64(0), player(1, 10, 95, 1)).unwrap();
+        tx.update(store, "players", RowId::from_u64(0), player(1, 10, 95, 1))
+            .unwrap();
     });
     registry.apply_changes(&store, &changes);
     let updates = registry.drain(sub).unwrap();
     assert_eq!(updates.len(), 1);
-    assert!(matches!(&updates[0], SubscriptionUpdate::Update { row, .. } if row.row_id() == RowId::from_u64(0)));
+    assert!(
+        matches!(&updates[0], SubscriptionUpdate::Update { row, .. } if row.row_id() == RowId::from_u64(0))
+    );
 
     // A matching update of an invisible row that still ranks outside the
     // window produces nothing.
     let changes = commit(&mut store, |tx, store| {
-        tx.update(store, "players", RowId::from_u64(2), player(3, 10, 7, 3)).unwrap();
+        tx.update(store, "players", RowId::from_u64(2), player(3, 10, 7, 3))
+            .unwrap();
     });
     registry.apply_changes(&store, &changes);
     assert!(registry.drain(sub).unwrap().is_empty());
@@ -534,8 +585,12 @@ fn multiple_changes_in_one_commit_deliver_in_order() {
     let report = registry.apply_changes(&store, &changes);
     let updates = registry.drain(sub).unwrap();
     assert_eq!(updates.len(), 2);
-    assert!(matches!(&updates[0], SubscriptionUpdate::Insert { row, .. } if row.row_id() == RowId::from_u64(0)));
-    assert!(matches!(&updates[1], SubscriptionUpdate::Insert { row, .. } if row.row_id() == RowId::from_u64(1)));
+    assert!(
+        matches!(&updates[0], SubscriptionUpdate::Insert { row, .. } if row.row_id() == RowId::from_u64(0))
+    );
+    assert!(
+        matches!(&updates[1], SubscriptionUpdate::Insert { row, .. } if row.row_id() == RowId::from_u64(1))
+    );
     assert!(updates.iter().all(|u| update_seq(u) == report.seq()));
 }
 
@@ -547,7 +602,10 @@ fn multi_table_atomic_delivery() {
     let economy = registry
         .subscribe(
             &store,
-            Query::builder("economy").predicate_gt("coins", 0i64).build().unwrap(),
+            Query::builder("economy")
+                .predicate_gt("coins", 0i64)
+                .build()
+                .unwrap(),
         )
         .unwrap();
     registry.drain(players).unwrap();
@@ -596,14 +654,17 @@ fn no_missed_no_duplicate_changes() {
 
     for id in 1..=5u64 {
         let changes = commit(&mut store, |tx, store| {
-            tx.insert(store, "players", player(id, 10, 100, id as u32)).unwrap();
+            tx.insert(store, "players", player(id, 10, 100, id as u32))
+                .unwrap();
         });
         registry.apply_changes(&store, &changes);
     }
     let updates = registry.drain(sub).unwrap();
     assert_eq!(updates.len(), 5, "exactly one delta per commit");
     for (index, update) in updates.iter().enumerate() {
-        assert!(matches!(&update, SubscriptionUpdate::Insert { row, .. } if row.row_id() == RowId::from_u64(index as u64)));
+        assert!(
+            matches!(&update, SubscriptionUpdate::Insert { row, .. } if row.row_id() == RowId::from_u64(index as u64))
+        );
         assert_eq!(update_seq(update), index as u64);
     }
 }
@@ -633,7 +694,9 @@ fn snapshot_live_boundary_is_exact() {
     registry.apply_changes(&store, &changes);
     let live = registry.drain(sub).unwrap();
     assert_eq!(live.len(), 1, "no duplicates, no missed change");
-    assert!(matches!(&live[0], SubscriptionUpdate::Insert { row, .. } if row.row_id() == RowId::from_u64(1)));
+    assert!(
+        matches!(&live[0], SubscriptionUpdate::Insert { row, .. } if row.row_id() == RowId::from_u64(1))
+    );
 }
 
 #[test]
@@ -676,7 +739,8 @@ fn deterministic_across_registries() {
         let sub = registry.subscribe(&store, query).unwrap();
         registry.drain(sub).unwrap();
         let changes = commit(&mut store, |tx, store| {
-            tx.update(store, "players", RowId::from_u64(0), player(1, 10, 5, 1)).unwrap();
+            tx.update(store, "players", RowId::from_u64(0), player(1, 10, 5, 1))
+                .unwrap();
             tx.insert(store, "players", player(4, 10, 120, 4)).unwrap();
         });
         registry.apply_changes(&store, &changes);
@@ -706,7 +770,8 @@ fn resync_rebuilds_the_exact_view() {
     // Two commits that shuffle the window.
     for (id, level) in [(9u64, 9u32), (8u64, 8u32)] {
         let changes = commit(&mut store, |tx, store| {
-            tx.insert(store, "players", player(id, 10, 1, level)).unwrap();
+            tx.insert(store, "players", player(id, 10, 1, level))
+                .unwrap();
         });
         registry.apply_changes(&store, &changes);
     }
@@ -723,11 +788,22 @@ fn resync_rebuilds_the_exact_view() {
     };
     // The two highest-health rows remain, in order.
     assert_eq!(rows.len(), 2);
-    assert_eq!(rows[0].row().get_named(store.table("players").unwrap().schema(), "health"),
-               Some(&Value::I32(90)));
-    assert_eq!(rows[1].row().get_named(store.table("players").unwrap().schema(), "health"),
-               Some(&Value::I32(50)));
-    assert_eq!(registry.lookup(sub).unwrap().state(), SubscriptionState::Active);
+    assert_eq!(
+        rows[0]
+            .row()
+            .get_named(store.table("players").unwrap().schema(), "health"),
+        Some(&Value::I32(90))
+    );
+    assert_eq!(
+        rows[1]
+            .row()
+            .get_named(store.table("players").unwrap().schema(), "health"),
+        Some(&Value::I32(50))
+    );
+    assert_eq!(
+        registry.lookup(sub).unwrap().state(),
+        SubscriptionState::Active
+    );
 }
 
 // ---------------------------------------------------------- backpressure
@@ -813,10 +889,16 @@ fn dropped_table_marks_stale_and_resync_fails() {
     let report = registry.apply_changes(&store, &economy_changes);
     assert!(report.affected().contains(&sub));
     assert!(registry.is_stale(sub).unwrap());
-    assert!(matches!(registry.drain(sub).unwrap()[0], SubscriptionUpdate::Stale { .. }));
+    assert!(matches!(
+        registry.drain(sub).unwrap()[0],
+        SubscriptionUpdate::Stale { .. }
+    ));
 
     // The table is gone: resync cannot rebuild the view.
-    assert!(matches!(registry.resync(&store, sub).unwrap_err(), Error::NotFound(_)));
+    assert!(matches!(
+        registry.resync(&store, sub).unwrap_err(),
+        Error::NotFound(_)
+    ));
 
     // On-demand detection is also available without a commit.
     let mut store = world();
@@ -862,8 +944,12 @@ fn dropped_and_recreated_table_resync_reattaches() {
         other => panic!("expected Resync, got {other:?}"),
     };
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].row().get_named(store.table("players").unwrap().schema(), "health"),
-               Some(&Value::I32(42)));
+    assert_eq!(
+        rows[0]
+            .row()
+            .get_named(store.table("players").unwrap().schema(), "health"),
+        Some(&Value::I32(42))
+    );
 
     // The re-attached subscription is live again.
     let changes = commit(&mut store, |tx, store| {
@@ -920,7 +1006,8 @@ fn shared_row_payloads_across_subscriptions() {
     // Row 0 is player 1 (first insert). Update it in a new commit.
     let row_id = RowId::from_u64(0);
     let updates = commit(&mut store, |tx, store| {
-        tx.update(store, "players", row_id, player(1, 10, 50, 3)).unwrap();
+        tx.update(store, "players", row_id, player(1, 10, 50, 3))
+            .unwrap();
     });
     let report = registry.apply_changes(&store, &updates);
 
@@ -984,10 +1071,12 @@ fn identical_subscriptions_share_one_view_and_evaluate_once() {
         assert_eq!(registry.drain(*sub).unwrap(), first);
     }
     assert_eq!(first.len(), 3, "Initial snapshot + 2 inserts");
-    assert!(first
-        .iter()
-        .skip(1)
-        .all(|u| matches!(u, SubscriptionUpdate::Insert { .. })));
+    assert!(
+        first
+            .iter()
+            .skip(1)
+            .all(|u| matches!(u, SubscriptionUpdate::Insert { .. }))
+    );
 }
 
 // Distinct queries are NOT grouped: each gets its own view and evaluation.
@@ -1045,11 +1134,13 @@ fn unsubscribe_member_leaves_others_intact_and_frees_orphan_views() {
     });
     let report = registry.apply_changes(&store, &changes);
     assert_eq!(report.affected(), &[b]);
-    assert!(registry
-        .drain(b)
-        .unwrap()
-        .iter()
-        .any(|u| matches!(u, SubscriptionUpdate::Insert { .. })));
+    assert!(
+        registry
+            .drain(b)
+            .unwrap()
+            .iter()
+            .any(|u| matches!(u, SubscriptionUpdate::Insert { .. }))
+    );
 
     registry.unsubscribe(b).unwrap();
     assert_eq!(registry.view_count(), 0, "orphan view freed");
@@ -1088,7 +1179,7 @@ fn member_joining_live_group_snapshots_current_view() {
 #[test]
 fn comparison_ops_are_usable_in_queries() {
     let query = Query::builder("players")
-        .predicate( "zone_id", ComparisonOp::Eq, 10u64)
+        .predicate("zone_id", ComparisonOp::Eq, 10u64)
         .predicate_ne("zone_id", 0u64)
         .predicate_lt("health", 200i32)
         .predicate_lte("health", 100i32)

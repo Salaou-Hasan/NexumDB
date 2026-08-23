@@ -11,10 +11,10 @@
 use std::collections::VecDeque;
 use std::time::Instant;
 
-use nexum_core::schema::TableSchema;
-use nexum_core::row;
 use nexum_core::ColumnType;
 use nexum_core::RowId;
+use nexum_core::row;
+use nexum_core::schema::TableSchema;
 use nexum_subscription::{Query, SubscriptionRegistry, SubscriptionUpdate};
 use nexum_table::TableStore;
 use nexum_tx::Transaction;
@@ -80,7 +80,10 @@ fn bench(name: &str, iterations: usize, mut f: impl FnMut()) {
 }
 
 fn zone10() -> Query {
-    Query::builder("players").predicate_eq("zone_id", 10u64).build().unwrap()
+    Query::builder("players")
+        .predicate_eq("zone_id", 10u64)
+        .build()
+        .unwrap()
 }
 
 fn main() {
@@ -126,7 +129,8 @@ fn main() {
         let mut next = 10_000u64;
         bench("one sub + one change (matching insert)", 10_000, || {
             let changes = commit_one(&mut store, |tx, store| {
-                tx.insert(store, "players", row![next, 10u64, 50i32, 1u32]).unwrap();
+                tx.insert(store, "players", row![next, 10u64, 50i32, 1u32])
+                    .unwrap();
                 next += 1;
             });
             registry.apply_changes(&store, &changes);
@@ -146,7 +150,10 @@ fn main() {
         let query = if matching {
             zone10()
         } else {
-            Query::builder("players").predicate_eq("zone_id", 99u64).build().unwrap()
+            Query::builder("players")
+                .predicate_eq("zone_id", 99u64)
+                .build()
+                .unwrap()
         };
         let mut subs = Vec::new();
         for _ in 0..count {
@@ -157,7 +164,8 @@ fn main() {
         let mut next = 20_000u64;
         bench(&label, 1_000, || {
             let changes = commit_one(&mut store, |tx, store| {
-                tx.insert(store, "players", row![next, 10u64, 50i32, 1u32]).unwrap();
+                tx.insert(store, "players", row![next, 10u64, 50i32, 1u32])
+                    .unwrap();
                 next += 1;
             });
             registry.apply_changes(&store, &changes);
@@ -180,7 +188,8 @@ fn main() {
         let mut next = 30_000u64;
         bench("1,000 subs, change matches every sub", 1_000, || {
             let changes = commit_one(&mut store, |tx, store| {
-                tx.insert(store, "players", row![next, 10u64, 50i32, 1u32]).unwrap();
+                tx.insert(store, "players", row![next, 10u64, 50i32, 1u32])
+                    .unwrap();
                 next += 1;
             });
             registry.apply_changes(&store, &changes);
@@ -197,15 +206,21 @@ fn main() {
         let mut registry = SubscriptionRegistry::new();
         let sub = registry.subscribe(&store, zone10()).unwrap();
         let _ = registry.drain(sub).unwrap();
-        let mut zone20_rows: VecDeque<RowId> =
-            (1..50).step_by(2).map(RowId::from_u64).collect();
+        let mut zone20_rows: VecDeque<RowId> = (1..50).step_by(2).map(RowId::from_u64).collect();
         let mut next = 40_000u64;
         let mut row_count = 50u64;
         bench("update entering predicate", 10_000, || {
             let victim = zone20_rows.pop_front().unwrap();
             let changes = commit_one(&mut store, |tx, store| {
-                tx.insert(store, "players", row![next, 20u64, 50i32, 1u32]).unwrap();
-                tx.update(store, "players", victim, row![victim.as_u64(), 10u64, 1i32, 1u32]).unwrap();
+                tx.insert(store, "players", row![next, 20u64, 50i32, 1u32])
+                    .unwrap();
+                tx.update(
+                    store,
+                    "players",
+                    victim,
+                    row![victim.as_u64(), 10u64, 1i32, 1u32],
+                )
+                .unwrap();
                 next += 1;
             });
             registry.apply_changes(&store, &changes);
@@ -222,15 +237,21 @@ fn main() {
         let mut registry = SubscriptionRegistry::new();
         let sub = registry.subscribe(&store, zone10()).unwrap();
         let _ = registry.drain(sub).unwrap();
-        let mut zone10_rows: VecDeque<RowId> =
-            (0..50).step_by(2).map(RowId::from_u64).collect();
+        let mut zone10_rows: VecDeque<RowId> = (0..50).step_by(2).map(RowId::from_u64).collect();
         let mut next = 50_000u64;
         let mut row_count = 50u64;
         bench("update leaving predicate", 10_000, || {
             let victim = zone10_rows.pop_front().unwrap();
             let changes = commit_one(&mut store, |tx, store| {
-                tx.insert(store, "players", row![next, 10u64, 50i32, 1u32]).unwrap();
-                tx.update(store, "players", victim, row![victim.as_u64(), 20u64, 1i32, 1u32]).unwrap();
+                tx.insert(store, "players", row![next, 10u64, 50i32, 1u32])
+                    .unwrap();
+                tx.update(
+                    store,
+                    "players",
+                    victim,
+                    row![victim.as_u64(), 20u64, 1i32, 1u32],
+                )
+                .unwrap();
                 next += 1;
             });
             registry.apply_changes(&store, &changes);
@@ -247,14 +268,14 @@ fn main() {
         let mut registry = SubscriptionRegistry::new();
         let sub = registry.subscribe(&store, zone10()).unwrap();
         let _ = registry.drain(sub).unwrap();
-        let mut victims: VecDeque<RowId> =
-            (0..50).step_by(2).map(RowId::from_u64).collect();
+        let mut victims: VecDeque<RowId> = (0..50).step_by(2).map(RowId::from_u64).collect();
         let mut next = 60_000u64;
         let mut row_count = 50u64;
         bench("delete visible row", 10_000, || {
             let victim = victims.pop_front().unwrap();
             let changes = commit_one(&mut store, |tx, store| {
-                tx.insert(store, "players", row![next, 10u64, 50i32, 1u32]).unwrap();
+                tx.insert(store, "players", row![next, 10u64, 50i32, 1u32])
+                    .unwrap();
                 tx.delete(store, "players", victim).unwrap();
                 next += 1;
             });
@@ -274,8 +295,10 @@ fn main() {
         let mut next = 70_000u64;
         bench("multi-table transaction", 10_000, || {
             let changes = commit_one(&mut store, |tx, store| {
-                tx.insert(store, "players", row![next, 10u64, 50i32, 1u32]).unwrap();
-                tx.insert(store, "economy", row![next, next as i64]).unwrap();
+                tx.insert(store, "players", row![next, 10u64, 50i32, 1u32])
+                    .unwrap();
+                tx.insert(store, "economy", row![next, next as i64])
+                    .unwrap();
                 next += 1;
             });
             registry.apply_changes(&store, &changes);
@@ -302,11 +325,10 @@ fn main() {
         let mut next = 80_000u64;
         bench("reference: raw commit (no subscriptions)", 10_000, || {
             commit_one(&mut store, |tx, store| {
-                tx.insert(store, "players", row![next, 10u64, 50i32, 1u32]).unwrap();
+                tx.insert(store, "players", row![next, 10u64, 50i32, 1u32])
+                    .unwrap();
                 next += 1;
             });
         });
     }
 }
-
-

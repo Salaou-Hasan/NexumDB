@@ -99,10 +99,7 @@ mod tests {
             max_result_bytes: ABI_OUT_CAP + 1,
             ..WasmLimits::default()
         };
-        assert!(matches!(
-            limits.validate(),
-            Err(Error::InvalidArgument(_))
-        ));
+        assert!(matches!(limits.validate(), Err(Error::InvalidArgument(_))));
     }
 
     #[test]
@@ -111,9 +108,6 @@ mod tests {
             max_fuel: 0,
             ..WasmLimits::default()
         };
-        assert!(matches!(
-            limits.validate(),
-            Err(Error::InvalidArgument(_))
-        ));
+        assert!(matches!(limits.validate(), Err(Error::InvalidArgument(_))));
     }
 }

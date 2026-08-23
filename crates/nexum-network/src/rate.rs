@@ -65,7 +65,6 @@ impl RateWindow {
             }
         }
     }
-
 }
 
 /// The per-connection rate-limit state: one fixed window per operation
@@ -98,14 +97,8 @@ impl RateLimiter {
                 config.auth_per_window,
                 Duration::from_secs(config.auth_window_secs),
             ),
-            input: RateWindow::new(
-                config.input_per_sec,
-                Duration::from_secs(1),
-            ),
-            reducer: RateWindow::new(
-                config.reducer_per_sec,
-                Duration::from_secs(1),
-            ),
+            input: RateWindow::new(config.input_per_sec, Duration::from_secs(1)),
+            reducer: RateWindow::new(config.reducer_per_sec, Duration::from_secs(1)),
             subscribe: RateWindow::new(
                 config.subscribe_per_window,
                 Duration::from_secs(config.subscribe_window_secs),

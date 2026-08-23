@@ -167,9 +167,9 @@ impl ReducerRegistry {
         name: &str,
         args: &ReducerArgs,
     ) -> Result<ReducerResult> {
-        let definition = self.lookup_by_name(name).ok_or_else(|| {
-            Error::not_found(format!("reducer '{name}' is not registered"))
-        })?;
+        let definition = self
+            .lookup_by_name(name)
+            .ok_or_else(|| Error::not_found(format!("reducer '{name}' is not registered")))?;
         let execute = definition.execute();
 
         let mut tx = Transaction::begin(store);
@@ -182,9 +182,7 @@ impl ReducerRegistry {
         // The single commit/abort decision point shared with the WASM host
         // (ADR-006 D1, ADR-007 D6).
         match outcome {
-            Ok((return_value, events)) => {
-                finish_invocation(store, tx, events, Ok(return_value))
-            }
+            Ok((return_value, events)) => finish_invocation(store, tx, events, Ok(return_value)),
             Err(error) => finish_invocation(store, tx, Vec::new(), Err(error)),
         }
     }
@@ -208,9 +206,9 @@ impl ReducerRegistry {
         name: &str,
         args: &ReducerArgs,
     ) -> Result<(Value, Vec<ReducerEvent>)> {
-        let definition = self.lookup_by_name(name).ok_or_else(|| {
-            Error::not_found(format!("reducer '{name}' is not registered"))
-        })?;
+        let definition = self
+            .lookup_by_name(name)
+            .ok_or_else(|| Error::not_found(format!("reducer '{name}' is not registered")))?;
         execute_against_tx(definition.execute(), name, args, store, tx)
     }
 }
@@ -232,9 +230,8 @@ fn execute_against_tx(
 ) -> Result<(Value, Vec<ReducerEvent>)> {
     let (events, outcome) = {
         let mut ctx = ReducerContext::new(tx, store);
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
-            || execute(&mut ctx, args),
-        ));
+        let outcome =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| execute(&mut ctx, args)));
         let events = ctx.take_events();
         let outcome = match outcome {
             Ok(Ok(return_value)) => Ok(return_value),

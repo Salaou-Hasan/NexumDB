@@ -29,7 +29,7 @@ use nexum_core::{Error, Result};
 use wasmi::core::ValType;
 use wasmi::{Engine, ExternType, Linker, Module as WasmModule, Mutability, Store, Val};
 
-use crate::host::{define_host, HostState};
+use crate::host::{HostState, define_host};
 use crate::limits::{ABI_IN_CAP, ABI_OUT_CAP, WasmLimits};
 
 /// The exported reducer entry point.
@@ -137,7 +137,9 @@ fn validate_imports(module: &WasmModule) -> Result<()> {
         ExternType::Func(_) => Err(Error::invalid_argument(
             "the ('nexum','op') import must have signature (i32, i32, i32, i32, i32) -> i32",
         )),
-        _ => Err(Error::invalid_argument("the nexum import must be a function")),
+        _ => Err(Error::invalid_argument(
+            "the nexum import must be a function",
+        )),
     }
 }
 
@@ -184,7 +186,11 @@ fn check_buffer_global(module: &WasmModule, name: &str) -> Result<()> {
 /// function runs at `InstancePre::start` under the armed fuel and memory
 /// budgets, and any attempt to perform a state op fails with a sticky ABI
 /// error that is observed here and rejects the module.
-fn validate_buffers(engine: &Engine, module: &WasmModule, limits: &WasmLimits) -> Result<(u32, u32)> {
+fn validate_buffers(
+    engine: &Engine,
+    module: &WasmModule,
+    limits: &WasmLimits,
+) -> Result<(u32, u32)> {
     let mut store = Store::new(engine, HostState::new(None, limits));
     store.limiter(|state: &mut HostState<'_, '_>| &mut state.memory_limiter);
     store

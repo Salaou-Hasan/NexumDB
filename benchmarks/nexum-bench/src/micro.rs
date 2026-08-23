@@ -5,7 +5,6 @@
 
 use std::time::Instant;
 
-
 use nexum_core::{ReducerId, RowId, SystemId, TickId, WorldId};
 use nexum_reducer::{ReducerArgs, ReducerContext, ReducerDefinition};
 use nexum_runtime::{Runtime, RuntimeConfig, WorldFactory};
@@ -78,15 +77,20 @@ fn storage() {
     // Batch insert: one tx with N rows.
     for batch in [10usize, 100, 1_000] {
         let iterations = 200;
-        bench_ns(&format!("batch insert {batch} rows (one tx)"), iterations, 10, || {
-            let mut fresh = nexum_table::TableStore::new();
-            ensure_players(&mut fresh);
-            let mut tx = Transaction::begin(&mut fresh);
-            for i in 0..batch as u64 {
-                tx.insert(&fresh, "players", player_row(i)).unwrap();
-            }
-            tx.commit(&mut fresh).unwrap();
-        });
+        bench_ns(
+            &format!("batch insert {batch} rows (one tx)"),
+            iterations,
+            10,
+            || {
+                let mut fresh = nexum_table::TableStore::new();
+                ensure_players(&mut fresh);
+                let mut tx = Transaction::begin(&mut fresh);
+                for i in 0..batch as u64 {
+                    tx.insert(&fresh, "players", player_row(i)).unwrap();
+                }
+                tx.commit(&mut fresh).unwrap();
+            },
+        );
     }
 
     // PK lookup through the table (no tx).
@@ -134,7 +138,8 @@ fn storage() {
         tx.insert(&fresh, "players", player_row(0)).unwrap();
         tx.commit(&mut fresh).unwrap();
         let mut tx = Transaction::begin(&mut fresh);
-        tx.update(&fresh, "players", RowId::from_u64(0), player_row(1)).unwrap();
+        tx.update(&fresh, "players", RowId::from_u64(0), player_row(1))
+            .unwrap();
         tx.commit(&mut fresh).unwrap();
     });
 
@@ -155,7 +160,9 @@ fn storage() {
 
     // Indexed lookup.
     bench_ns("index lookup (by_zone, 100K rows)", 20_000, 100, || {
-        let _ = table.lookup("by_zone", &[nexum_core::Value::U64(42)]).unwrap();
+        let _ = table
+            .lookup("by_zone", &[nexum_core::Value::U64(42)])
+            .unwrap();
     });
 
     // Delete.
@@ -220,11 +227,13 @@ fn transactions() {
                 for i in 0..rows_touched as u64 {
                     let _ = tx.get(&base, "players", RowId::from_u64(i)).unwrap();
                 }
-                tx.update(&base, "players", RowId::from_u64(0), player_row(1)).unwrap();
+                tx.update(&base, "players", RowId::from_u64(0), player_row(1))
+                    .unwrap();
                 let _ = tx.commit(&mut base).unwrap();
                 // Restore row 0 so the next iteration reads the original.
                 let mut tx = Transaction::begin(&mut base);
-                tx.update(&base, "players", RowId::from_u64(0), player_row(0)).unwrap();
+                tx.update(&base, "players", RowId::from_u64(0), player_row(0))
+                    .unwrap();
                 let _ = tx.commit(&mut base).unwrap();
             },
         );
@@ -246,7 +255,8 @@ fn transactions() {
                 setup.commit(&mut fresh).unwrap();
                 for _ in 0..2 {
                     let mut tx = Transaction::begin(&mut fresh);
-                    tx.update(&fresh, "players", RowId::from_u64(0), player_row(1)).unwrap();
+                    tx.update(&fresh, "players", RowId::from_u64(0), player_row(1))
+                        .unwrap();
                     let _ = tx.commit(&mut fresh);
                 }
             },
@@ -309,45 +319,53 @@ const WASM_BUMP_WAT: &str = r#"(module
 
 /// A world factory registering the native `bump` reducer.
 fn reducer_factory() -> WorldFactory {
-    Box::new(|id: WorldId, mut store: nexum_table::TableStore, sim: SimulationConfig| {
-        ensure_players(&mut store);
-        let mut world = World::new(id, store, sim)?;
-        world
-            .native_mut()
-            .register(
-                ReducerDefinition::new(ReducerId::from_u64(1), "bump", bump).unwrap(),
-            )
-            .unwrap();
-        Ok(world)
-    })
+    Box::new(
+        |id: WorldId, mut store: nexum_table::TableStore, sim: SimulationConfig| {
+            ensure_players(&mut store);
+            let mut world = World::new(id, store, sim)?;
+            world
+                .native_mut()
+                .register(ReducerDefinition::new(ReducerId::from_u64(1), "bump", bump).unwrap())
+                .unwrap();
+            Ok(world)
+        },
+    )
 }
 
 /// A world factory registering `bump` as a WASM reducer.
 fn wasm_factory() -> WorldFactory {
-    Box::new(|id: WorldId, mut store: nexum_table::TableStore, sim: SimulationConfig| {
-        ensure_players(&mut store);
-        let mut world = World::new(id, store, sim)?;
-        let mut wasm = WasmModuleRegistry::new(WasmLimits::default()).unwrap();
-        wasm
-            .register("bump", 1, wat::parse_str(WASM_BUMP_WAT).unwrap())
-            .unwrap();
-        world.set_wasm(wasm);
-        Ok(world)
-    })
+    Box::new(
+        |id: WorldId, mut store: nexum_table::TableStore, sim: SimulationConfig| {
+            ensure_players(&mut store);
+            let mut world = World::new(id, store, sim)?;
+            let mut wasm = WasmModuleRegistry::new(WasmLimits::default()).unwrap();
+            wasm.register("bump", 1, wat::parse_str(WASM_BUMP_WAT).unwrap())
+                .unwrap();
+            world.set_wasm(wasm);
+            Ok(world)
+        },
+    )
 }
 
 fn reducers(wasm_mode: bool) {
     let label = if wasm_mode { "WASM" } else { "native" };
     println!("== reducers ({label}) ==");
-    let factory: WorldFactory = if wasm_mode { wasm_factory() } else { reducer_factory() };
+    let factory: WorldFactory = if wasm_mode {
+        wasm_factory()
+    } else {
+        reducer_factory()
+    };
     let mut runtime = Runtime::new(RuntimeConfig::new(factory)).unwrap();
     let world = WorldId::from_u64(0);
-    runtime.create_world(world, SimulationConfig::new()).unwrap();
+    runtime
+        .create_world(world, SimulationConfig::new())
+        .unwrap();
     runtime.start_world(world).unwrap();
 
     // Seed the world with one player via a first tick.
     runtime
-        .submit_input(world, InputFrame::new(TickId::from_u64(0))).unwrap();
+        .submit_input(world, InputFrame::new(TickId::from_u64(0)))
+        .unwrap();
     runtime.step().unwrap();
     // Insert a player row through the reducer on the next tick.
     runtime
@@ -478,11 +496,31 @@ fn wasm_stages() {
     }
     let ns = |v: u64| v as f64 / n as f64;
     let total = ns(acc.total_ns).max(1.0);
-    println!("  store_setup {:>8.1} ns  ({:>5.1}%)", ns(acc.store_setup_ns), ns(acc.store_setup_ns) / total * 100.0);
-    println!("  instantiate {:>8.1} ns  ({:>5.1}%)", ns(acc.instantiate_ns), ns(acc.instantiate_ns) / total * 100.0);
-    println!("  encode      {:>8.1} ns  ({:>5.1}%)", ns(acc.encode_ns), ns(acc.encode_ns) / total * 100.0);
-    println!("  exec        {:>8.1} ns  ({:>5.1}%)", ns(acc.exec_ns), ns(acc.exec_ns) / total * 100.0);
-    println!("  result      {:>8.1} ns  ({:>5.1}%)", ns(acc.result_ns), ns(acc.result_ns) / total * 100.0);
+    println!(
+        "  store_setup {:>8.1} ns  ({:>5.1}%)",
+        ns(acc.store_setup_ns),
+        ns(acc.store_setup_ns) / total * 100.0
+    );
+    println!(
+        "  instantiate {:>8.1} ns  ({:>5.1}%)",
+        ns(acc.instantiate_ns),
+        ns(acc.instantiate_ns) / total * 100.0
+    );
+    println!(
+        "  encode      {:>8.1} ns  ({:>5.1}%)",
+        ns(acc.encode_ns),
+        ns(acc.encode_ns) / total * 100.0
+    );
+    println!(
+        "  exec        {:>8.1} ns  ({:>5.1}%)",
+        ns(acc.exec_ns),
+        ns(acc.exec_ns) / total * 100.0
+    );
+    println!(
+        "  result      {:>8.1} ns  ({:>5.1}%)",
+        ns(acc.result_ns),
+        ns(acc.result_ns) / total * 100.0
+    );
     println!("  total       {:>8.1} ns/call", total);
     println!();
 }
@@ -499,7 +537,12 @@ fn bench_calls(
     for _ in 0..10 {
         for request in 0..calls_per_tick as u64 {
             runtime
-                .submit_reducer_call(world, request, "bump", ReducerArgs::new().insert("player", 0u64))
+                .submit_reducer_call(
+                    world,
+                    request,
+                    "bump",
+                    ReducerArgs::new().insert("player", 0u64),
+                )
                 .unwrap();
         }
         runtime.step().unwrap();
@@ -508,7 +551,12 @@ fn bench_calls(
     for _ in 0..iterations {
         for request in 0..calls_per_tick as u64 {
             runtime
-                .submit_reducer_call(world, request, "bump", ReducerArgs::new().insert("player", 0u64))
+                .submit_reducer_call(
+                    world,
+                    request,
+                    "bump",
+                    ReducerArgs::new().insert("player", 0u64),
+                )
                 .unwrap();
         }
         runtime.step().unwrap();
@@ -554,7 +602,13 @@ fn subscriptions() {
         toggle = (toggle + 1) % 2;
         let changes = {
             let mut tx = Transaction::begin(&mut store);
-            tx.update(&store, "players", RowId::from_u64(0), player_row(1 + toggle as u64)).unwrap();
+            tx.update(
+                &store,
+                "players",
+                RowId::from_u64(0),
+                player_row(1 + toggle as u64),
+            )
+            .unwrap();
             tx.commit(&mut store).unwrap()
         };
         registry.apply_changes(&store, &changes);
@@ -568,7 +622,8 @@ fn subscriptions() {
         toggle = (toggle + 1) % 2;
         let changes = {
             let mut tx = Transaction::begin(&mut store);
-            tx.update(&store, "players", deep, player_row(1 + toggle as u64)).unwrap();
+            tx.update(&store, "players", deep, player_row(1 + toggle as u64))
+                .unwrap();
             tx.commit(&mut store).unwrap()
         };
         registry.apply_changes(&store, &changes);
@@ -581,10 +636,11 @@ fn subscriptions() {
 
 fn simulation() {
     println!("== simulation ticks ==");
-    let mut runtime =
-        Runtime::new(RuntimeConfig::new(sim_factory())).unwrap();
+    let mut runtime = Runtime::new(RuntimeConfig::new(sim_factory())).unwrap();
     let world = WorldId::from_u64(0);
-    runtime.create_world(world, SimulationConfig::new()).unwrap();
+    runtime
+        .create_world(world, SimulationConfig::new())
+        .unwrap();
     runtime.start_world(world).unwrap();
 
     for entities in [10u64, 1_000, 10_000] {
@@ -618,31 +674,33 @@ fn simulation() {
 /// A world whose `spawn` system inserts one row per frame command, and whose
 /// `scan-all` system reads every row each tick (the "active entities" pass).
 fn sim_factory() -> WorldFactory {
-    Box::new(|id: WorldId, mut store: nexum_table::TableStore, sim: SimulationConfig| {
-        ensure_players(&mut store);
-        let mut world = World::new(id, store, sim)?;
-        world
-            .add_system(
-                SystemDefinition::new(SystemId::from_u64(0), "spawn", 0, |ctx, frame| {
-                    for command in frame.commands() {
-                        ctx.insert("players", player_row(command.source()))?;
-                    }
-                    Ok(())
-                })
-                .unwrap(),
-            )
-            .unwrap();
-        world
-            .add_system(
-                SystemDefinition::new(SystemId::from_u64(1), "scan-all", 1, |ctx, _| {
-                    let _ = ctx.scan("players")?;
-                    Ok(())
-                })
-                .unwrap(),
-            )
-            .unwrap();
-        Ok(world)
-    })
+    Box::new(
+        |id: WorldId, mut store: nexum_table::TableStore, sim: SimulationConfig| {
+            ensure_players(&mut store);
+            let mut world = World::new(id, store, sim)?;
+            world
+                .add_system(
+                    SystemDefinition::new(SystemId::from_u64(0), "spawn", 0, |ctx, frame| {
+                        for command in frame.commands() {
+                            ctx.insert("players", player_row(command.source()))?;
+                        }
+                        Ok(())
+                    })
+                    .unwrap(),
+                )
+                .unwrap();
+            world
+                .add_system(
+                    SystemDefinition::new(SystemId::from_u64(1), "scan-all", 1, |ctx, _| {
+                        let _ = ctx.scan("players")?;
+                        Ok(())
+                    })
+                    .unwrap(),
+                )
+                .unwrap();
+            Ok(world)
+        },
+    )
 }
 
 // ------------------------------------------------------- runtime scheduler
@@ -674,9 +732,11 @@ fn runtime_scheduler() {
 }
 
 fn noop_factory() -> WorldFactory {
-    Box::new(|id: WorldId, store: nexum_table::TableStore, sim: SimulationConfig| {
-        World::new(id, store, sim)
-    })
+    Box::new(
+        |id: WorldId, store: nexum_table::TableStore, sim: SimulationConfig| {
+            World::new(id, store, sim)
+        },
+    )
 }
 
 // -------------------------------------------------------------------- wal
@@ -694,10 +754,15 @@ fn wal_append() {
         let mut tx = Transaction::begin(&mut store);
         tx.insert(&store, "players", player_row(0)).unwrap();
         let changes = tx.commit(&mut store).unwrap();
-        let iterations = if policy == DurabilityPolicy::Sync { 200 } else { 5_000 };
+        let iterations = if policy == DurabilityPolicy::Sync {
+            200
+        } else {
+            5_000
+        };
         let start = Instant::now();
         for _ in 0..iterations {
-            wal.append(nexum_core::TransactionId::from_u64(0), &changes).unwrap();
+            wal.append(nexum_core::TransactionId::from_u64(0), &changes)
+                .unwrap();
         }
         let ns = start.elapsed().as_secs_f64() * 1e9 / iterations as f64;
         println!(

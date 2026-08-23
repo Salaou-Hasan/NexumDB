@@ -11,17 +11,15 @@
 //! Reducer closures are `fn` pointers, so tests pass any row ids they need
 //! through [`ReducerArgs`] rather than capturing them.
 
-use nexum_core::{
-    ColumnType, Error, ReducerId, RowId, TableSchema, TransactionId, Value,
-};
-use nexum_table::{row, TableStore};
+use nexum_core::{ColumnType, Error, ReducerId, RowId, TableSchema, TransactionId, Value};
+use nexum_table::{TableStore, row};
 use nexum_tx::Transaction;
 
+use crate::ReducerFn;
 use crate::args::ReducerArgs;
 use crate::context::ReducerContext;
 use crate::definition::ReducerDefinition;
 use crate::registry::ReducerRegistry;
-use crate::ReducerFn;
 
 /// Two tables: `players` (with a secondary index and a unique index) and
 /// `economy`. Players columns: `[id, zone_id, health, level]` — `health` is
@@ -102,7 +100,9 @@ fn invoke_runs_a_reducer_and_returns_its_value() {
         Ok(Value::String("pong".into()))
     });
 
-    let result = registry.invoke(&mut store, "ping", &ReducerArgs::new()).unwrap();
+    let result = registry
+        .invoke(&mut store, "ping", &ReducerArgs::new())
+        .unwrap();
     assert_eq!(result.return_value(), &Value::String("pong".into()));
     assert!(result.changes().is_empty());
     assert!(result.events().is_empty());
@@ -139,19 +139,17 @@ fn registry_rejects_duplicate_id_and_duplicate_name() {
     let mut registry = ReducerRegistry::new();
     register(&mut registry, 0, "a", |_ctx, _args| Ok(Value::U64(0)));
 
-    let same_id = ReducerDefinition::new(ReducerId::from_u64(0), "b", |_ctx, _args| {
-        Ok(Value::U64(0))
-    })
-    .unwrap();
+    let same_id =
+        ReducerDefinition::new(ReducerId::from_u64(0), "b", |_ctx, _args| Ok(Value::U64(0)))
+            .unwrap();
     assert!(matches!(
         registry.register(same_id),
         Err(Error::AlreadyExists(_))
     ));
 
-    let same_name = ReducerDefinition::new(ReducerId::from_u64(1), "a", |_ctx, _args| {
-        Ok(Value::U64(0))
-    })
-    .unwrap();
+    let same_name =
+        ReducerDefinition::new(ReducerId::from_u64(1), "a", |_ctx, _args| Ok(Value::U64(0)))
+            .unwrap();
     assert!(matches!(
         registry.register(same_name),
         Err(Error::AlreadyExists(_))
@@ -177,10 +175,8 @@ fn registry_lists_deterministically_in_ascending_id_order() {
 
 #[test]
 fn reducer_name_must_not_be_empty() {
-    let err = ReducerDefinition::new(ReducerId::from_u64(0), "", |_ctx, _args| {
-        Ok(Value::U64(0))
-    })
-    .unwrap_err();
+    let err = ReducerDefinition::new(ReducerId::from_u64(0), "", |_ctx, _args| Ok(Value::U64(0)))
+        .unwrap_err();
     assert!(matches!(err, Error::InvalidArgument(_)));
 }
 
@@ -218,8 +214,14 @@ fn reducer_reads_writes_and_scans() {
     assert!(store.table("economy").unwrap().is_empty());
     // The by_zone index followed the update (Alice moved to zone 30).
     let players = store.table("players").unwrap();
-    assert_eq!(players.lookup("by_zone", &[Value::U64(30)]).unwrap(), vec![alice]);
-    assert_eq!(players.lookup("by_zone", &[Value::U64(20)]).unwrap(), vec![bob]);
+    assert_eq!(
+        players.lookup("by_zone", &[Value::U64(30)]).unwrap(),
+        vec![alice]
+    );
+    assert_eq!(
+        players.lookup("by_zone", &[Value::U64(20)]).unwrap(),
+        vec![bob]
+    );
 }
 
 #[test]
@@ -352,15 +354,30 @@ fn multi_table_reducer_commits_atomically() {
     // players insert (table id 0) before the two economy updates (table id
     // 1), and the economy updates in ascending row-id order.
     assert_eq!(result.changes().len(), 3);
-    assert_eq!(result.changes()[0].table_id(), nexum_core::TableId::from_u64(0));
+    assert_eq!(
+        result.changes()[0].table_id(),
+        nexum_core::TableId::from_u64(0)
+    );
     assert_eq!(result.changes()[0].kind(), nexum_core::ChangeKind::Insert);
-    assert_eq!(result.changes()[1].table_id(), nexum_core::TableId::from_u64(1));
-    assert_eq!(result.changes()[2].table_id(), nexum_core::TableId::from_u64(1));
+    assert_eq!(
+        result.changes()[1].table_id(),
+        nexum_core::TableId::from_u64(1)
+    );
+    assert_eq!(
+        result.changes()[2].table_id(),
+        nexum_core::TableId::from_u64(1)
+    );
     assert!(result.changes()[1].row_id() < result.changes()[2].row_id());
 
     let economy = store.table("economy").unwrap();
-    assert_eq!(coins(economy.get(RowId::from_u64(0)).unwrap()), &Value::I64(70));
-    assert_eq!(coins(economy.get(RowId::from_u64(1)).unwrap()), &Value::I64(80));
+    assert_eq!(
+        coins(economy.get(RowId::from_u64(0)).unwrap()),
+        &Value::I64(70)
+    );
+    assert_eq!(
+        coins(economy.get(RowId::from_u64(1)).unwrap()),
+        &Value::I64(80)
+    );
     assert_eq!(result.events().len(), 1);
 }
 
@@ -377,7 +394,9 @@ fn events_are_preserved_on_commit_in_emit_order() {
         Ok(Value::U64(0))
     });
 
-    let result = registry.invoke(&mut store, "story", &ReducerArgs::new()).unwrap();
+    let result = registry
+        .invoke(&mut store, "story", &ReducerArgs::new())
+        .unwrap();
     let names: Vec<&str> = result.events().iter().map(|e| e.name()).collect();
     assert_eq!(names, vec!["first", "second", "third"]);
     assert_eq!(result.events()[1].payload(), &Value::String("two".into()));
@@ -459,7 +478,8 @@ fn version_capture_detects_lost_updates_without_explicit_read() {
     let mut tx = Transaction::begin(&mut store);
     {
         let mut ctx = ReducerContext::new(&mut tx, &store);
-        ctx.update("players", alice, row![1u64, 10u64, 5i32, 5u32]).unwrap();
+        ctx.update("players", alice, row![1u64, 10u64, 5i32, 5u32])
+            .unwrap();
     }
     store
         .table_mut("players")
@@ -520,7 +540,9 @@ fn panic_aborts_with_zero_mutation_and_no_events() {
         ctx.insert("players", row![9u64, 40u64, 10i32, 9u32])
             .map(|id| Value::U64(id.as_u64()))
     });
-    let result = registry2.invoke(&mut store, "ok", &ReducerArgs::new()).unwrap();
+    let result = registry2
+        .invoke(&mut store, "ok", &ReducerArgs::new())
+        .unwrap();
     assert_eq!(result.changes().len(), 1);
 }
 
@@ -565,7 +587,11 @@ fn committed_changes_carry_real_row_ids() {
     });
     let args = ReducerArgs::new().insert("id", 42u64);
     let result = registry.invoke(&mut store, "spawn", &args).unwrap();
-    assert_eq!(result.changes()[0].row_id(), RowId::from_u64(2), "real storage id");
+    assert_eq!(
+        result.changes()[0].row_id(),
+        RowId::from_u64(2),
+        "real storage id"
+    );
 }
 
 // ------------------------------------------------------------- errors
@@ -589,7 +615,11 @@ fn missing_row_update_is_not_found_and_aborts() {
     let (mut store, _alice, _bob) = seeded();
     let mut registry = ReducerRegistry::new();
     register(&mut registry, 0, "poke", |ctx, _args| {
-        ctx.update("players", RowId::from_u64(99), row![99u64, 10u64, 1i32, 1u32])?;
+        ctx.update(
+            "players",
+            RowId::from_u64(99),
+            row![99u64, 10u64, 1i32, 1u32],
+        )?;
         Ok(Value::U64(0))
     });
     let err = registry

@@ -149,7 +149,10 @@ fn ticks_are_durable_and_recovery_reconstructs_identical_state() {
     world
         .add_system(
             SystemDefinition::new(SystemId::from_u64(1), "native_invoker", 20, |ctx, _| {
-                ctx.invoke_reducer("spawn", &ReducerArgs::new().insert("id", 200 + ctx.tick().as_u64()))?;
+                ctx.invoke_reducer(
+                    "spawn",
+                    &ReducerArgs::new().insert("id", 200 + ctx.tick().as_u64()),
+                )?;
                 Ok(())
             })
             .unwrap(),
@@ -170,14 +173,18 @@ fn ticks_are_durable_and_recovery_reconstructs_identical_state() {
     // Ticks 0..2 are appended to the WAL; then a snapshot; then ticks 3..4.
     let mut wal = Wal::create(&wal_path, DurabilityPolicy::Flush).unwrap();
     for tick in 0..3u64 {
-        let result = world.tick(&InputFrame::new(TickId::from_u64(tick))).unwrap();
+        let result = world
+            .tick(&InputFrame::new(TickId::from_u64(tick)))
+            .unwrap();
         wal.append(result.tx_id(), result.changes()).unwrap();
     }
     Snapshot::capture(world.store(), wal.lsn().as_u64())
         .write(&dir)
         .unwrap();
     for tick in 3..5u64 {
-        let result = world.tick(&InputFrame::new(TickId::from_u64(tick))).unwrap();
+        let result = world
+            .tick(&InputFrame::new(TickId::from_u64(tick)))
+            .unwrap();
         wal.append(result.tx_id(), result.changes()).unwrap();
     }
 

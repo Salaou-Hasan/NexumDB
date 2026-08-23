@@ -19,7 +19,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use nexum_core::{ColumnType, TableSchema};
-use nexum_table::{row, TableStore};
+use nexum_table::{TableStore, row};
 use nexum_tx::Transaction;
 use nexum_wal::{DurabilityPolicy, Snapshot, Wal, recover};
 
@@ -121,7 +121,8 @@ fn main() {
         store.create_table(player_schema()).unwrap();
         for id in 1..=n as u64 {
             let mut tx = Transaction::begin(&mut store);
-            tx.insert(&store, "players", row![id, 10u64, 100i32, id as u32]).unwrap();
+            tx.insert(&store, "players", row![id, 10u64, 100i32, id as u32])
+                .unwrap();
             let changes = tx.commit(&mut store).unwrap();
             wal.append(tx.id(), &changes).unwrap();
             store.drain_changes();

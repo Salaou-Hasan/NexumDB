@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 use nexum_core::{ColumnType, TableSchema, Value};
 use nexum_reducer::ReducerArgs;
-use nexum_table::{row, TableStore};
+use nexum_table::{TableStore, row};
 use nexum_wal::{DurabilityPolicy, Snapshot, Wal, recover};
 use nexum_wasm::{WasmLimits, WasmModuleRegistry};
 
@@ -135,12 +135,16 @@ fn wasm_reducer_commits_survive_crash_and_recovery() {
     (call $ret_u64 (i64.const 42))"#,
     );
 
-    let r = registry.invoke(&mut store, "spawn", &ReducerArgs::new()).unwrap();
+    let r = registry
+        .invoke(&mut store, "spawn", &ReducerArgs::new())
+        .unwrap();
     assert_eq!(r.events().len(), 1);
     wal.append(r.tx_id(), r.changes()).unwrap();
 
     // Snapshot after the first durable transaction.
-    Snapshot::capture(&store, wal.lsn().as_u64()).write(&dir).unwrap();
+    Snapshot::capture(&store, wal.lsn().as_u64())
+        .write(&dir)
+        .unwrap();
 
     // move: update players row 0 (the first storage row) to zone 30, health 50.
     register(
@@ -164,9 +168,13 @@ fn wasm_reducer_commits_survive_crash_and_recovery() {
     (call $ret_u64 (i64.const 0))"#,
     );
 
-    let r = registry.invoke(&mut store, "move", &ReducerArgs::new()).unwrap();
+    let r = registry
+        .invoke(&mut store, "move", &ReducerArgs::new())
+        .unwrap();
     wal.append(r.tx_id(), r.changes()).unwrap();
-    let r = registry.invoke(&mut store, "pay", &ReducerArgs::new()).unwrap();
+    let r = registry
+        .invoke(&mut store, "pay", &ReducerArgs::new())
+        .unwrap();
     wal.append(r.tx_id(), r.changes()).unwrap();
 
     // Reference state before the crash.
@@ -187,9 +195,18 @@ fn wasm_reducer_commits_survive_crash_and_recovery() {
     let players = fresh.table("players").unwrap();
     assert_eq!(players.len(), 1);
     let alice = players.get(nexum_core::RowId::from_u64(0)).unwrap();
-    assert_eq!(alice.get_named(players.schema(), "health"), Some(&Value::I32(50)));
-    assert_eq!(alice.get_named(players.schema(), "zone_id"), Some(&Value::U64(30)));
-    assert_eq!(players.version_of(nexum_core::RowId::from_u64(0)), Some(nexum_core::Version::from_u64(1)));
+    assert_eq!(
+        alice.get_named(players.schema(), "health"),
+        Some(&Value::I32(50))
+    );
+    assert_eq!(
+        alice.get_named(players.schema(), "zone_id"),
+        Some(&Value::U64(30))
+    );
+    assert_eq!(
+        players.version_of(nexum_core::RowId::from_u64(0)),
+        Some(nexum_core::Version::from_u64(1))
+    );
     assert_eq!(players.epoch(), expected_epoch_players);
     // The derived index was rebuilt from authoritative rows, not serialized.
     assert_eq!(
@@ -200,7 +217,10 @@ fn wasm_reducer_commits_survive_crash_and_recovery() {
     let economy = fresh.table("economy").unwrap();
     assert_eq!(economy.len(), 1);
     assert_eq!(
-        economy.get(nexum_core::RowId::from_u64(0)).unwrap().get_named(economy.schema(), "coins"),
+        economy
+            .get(nexum_core::RowId::from_u64(0))
+            .unwrap()
+            .get_named(economy.schema(), "coins"),
         Some(&Value::I64(100))
     );
     assert_eq!(economy.epoch(), expected_epoch_economy);
@@ -212,9 +232,14 @@ fn wasm_reducer_commits_survive_crash_and_recovery() {
 
     // The recovered store remains fully functional.
     let mut tx = nexum_tx::Transaction::begin(&mut fresh);
-    tx.insert(&fresh, "players", row![9u64, 40u64, 10i32, 9u32]).unwrap();
+    tx.insert(&fresh, "players", row![9u64, 40u64, 10i32, 9u32])
+        .unwrap();
     let changes = tx.commit(&mut fresh).unwrap();
-    assert_eq!(changes[0].row_id().as_u64(), 1, "row id allocation continued");
+    assert_eq!(
+        changes[0].row_id().as_u64(),
+        1,
+        "row id allocation continued"
+    );
 }
 
 #[test]

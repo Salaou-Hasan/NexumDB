@@ -14,8 +14,13 @@
 //! The same frame parser drives the TCP transport's length-delimited reader,
 //! so framing bounds are enforced at the transport too.
 
-use nexum_core::binary::{Crc32, get_bool, get_row, get_str, get_u64, get_value, put_bool, put_row, put_str, put_u64, put_value};
-use nexum_core::{Error, Row, RowId, SubscriptionId, TickId, TransactionId, Value, Version, WorldId};
+use nexum_core::binary::{
+    Crc32, get_bool, get_row, get_str, get_u64, get_value, put_bool, put_row, put_str, put_u64,
+    put_value,
+};
+use nexum_core::{
+    Error, Row, RowId, SubscriptionId, TickId, TransactionId, Value, Version, WorldId,
+};
 use nexum_reducer::{ReducerArgs, ReducerEvent};
 use nexum_simulation::{InputCommand, InputFrame};
 use nexum_storage::Change;
@@ -121,10 +126,7 @@ pub enum ServerMessage {
         error: Option<String>,
     },
     /// Outcome of `DetachWorld`.
-    DetachResult {
-        ok: bool,
-        error: Option<String>,
-    },
+    DetachResult { ok: bool, error: Option<String> },
     /// One committed world tick's authoritative changes and the events
     /// emitted during it (ADR-013 D5), in `emit` order.
     TickUpdate {
@@ -151,7 +153,10 @@ pub enum ServerMessage {
         row: Option<DeliveredRow>,
     },
     /// A subscription fell behind; its view is invalid until resync.
-    StaleNotification { subscription: SubscriptionId, seq: u64 },
+    StaleNotification {
+        subscription: SubscriptionId,
+        seq: u64,
+    },
     /// A protocol error with a stable code. `request_id` correlates the
     /// error to a request when known (a rejected `Subscribe`; 0 otherwise).
     Error {
@@ -272,7 +277,10 @@ pub fn encode_client(message: &ClientMessage, max_payload: u32) -> Result<Vec<u8
 /// Encodes a server message into one bounded frame.
 pub fn encode_server(message: &ServerMessage, max_payload: u32) -> Result<Vec<u8>, NetworkError> {
     let (kind, payload) = match message {
-        ServerMessage::HandshakeResponse { version, server_name } => {
+        ServerMessage::HandshakeResponse {
+            version,
+            server_name,
+        } => {
             let mut payload = Vec::new();
             put_u16(&mut payload, *version);
             put_str(&mut payload, server_name);
@@ -290,7 +298,10 @@ pub fn encode_server(message: &ServerMessage, max_payload: u32) -> Result<Vec<u8
                 put_u64(&mut payload, principal.id());
                 put_str(&mut payload, principal.name());
             } else {
-                put_str(&mut payload, error.as_deref().unwrap_or("authentication failed"));
+                put_str(
+                    &mut payload,
+                    error.as_deref().unwrap_or("authentication failed"),
+                );
             }
             (KIND_AUTH_RESULT, payload)
         }
@@ -298,7 +309,10 @@ pub fn encode_server(message: &ServerMessage, max_payload: u32) -> Result<Vec<u8
             let mut payload = Vec::new();
             put_bool(&mut payload, *ok);
             if *ok {
-                put_u64(&mut payload, world.expect("ok attach carries a world").as_u64());
+                put_u64(
+                    &mut payload,
+                    world.expect("ok attach carries a world").as_u64(),
+                );
             } else {
                 put_str(&mut payload, error.as_deref().unwrap_or("attach failed"));
             }
@@ -561,7 +575,10 @@ pub fn decode_server(frame: &[u8], max_payload: u32) -> Result<ServerMessage, Pr
             let version = get_u16(&mut cursor)?;
             let server_name = get_str(&mut cursor)?;
             ensure_consumed(cursor)?;
-            ServerMessage::HandshakeResponse { version, server_name }
+            ServerMessage::HandshakeResponse {
+                version,
+                server_name,
+            }
         }
         KIND_AUTH_RESULT => {
             let mut cursor = payload.as_slice();
@@ -611,11 +628,17 @@ pub fn decode_server(frame: &[u8], max_payload: u32) -> Result<ServerMessage, Pr
             let ok = get_bool(&mut cursor)?;
             if ok {
                 ensure_consumed(cursor)?;
-                ServerMessage::DetachResult { ok: true, error: None }
+                ServerMessage::DetachResult {
+                    ok: true,
+                    error: None,
+                }
             } else {
                 let error = get_str(&mut cursor)?;
                 ensure_consumed(cursor)?;
-                ServerMessage::DetachResult { ok: false, error: Some(error) }
+                ServerMessage::DetachResult {
+                    ok: false,
+                    error: Some(error),
+                }
             }
         }
         KIND_TICK_UPDATE => {
@@ -761,9 +784,17 @@ pub fn decode_server(frame: &[u8], max_payload: u32) -> Result<ServerMessage, Pr
                 let row_id = RowId::from_u64(get_u64(&mut cursor)?);
                 let row = match kind {
                     DeltaKind::Delete => None,
-                    _ => Some(std::sync::Arc::new(DeliveredRow::new(row_id, get_row(&mut cursor)?))),
+                    _ => Some(std::sync::Arc::new(DeliveredRow::new(
+                        row_id,
+                        get_row(&mut cursor)?,
+                    ))),
                 };
-                deltas.push(SubscriptionDeltaEntry { seq, kind, row_id, row });
+                deltas.push(SubscriptionDeltaEntry {
+                    seq,
+                    kind,
+                    row_id,
+                    row,
+                });
             }
             ensure_consumed(cursor)?;
             ServerMessage::SubscriptionDeltaBatch {
@@ -989,7 +1020,9 @@ fn decode_query(cursor: &mut &[u8]) -> Result<Query, ProtocolError> {
         let names: Vec<&str> = columns.iter().map(String::as_str).collect();
         builder = builder.project(&names);
     }
-    builder.build().map_err(|error| malformed(error.to_string()))
+    builder
+        .build()
+        .map_err(|error| malformed(error.to_string()))
 }
 
 /// Reducer args payload: `count | (name | value)*` — the deterministic
@@ -1008,7 +1041,9 @@ fn put_reducer_args(out: &mut Vec<u8>, args: &ReducerArgs) {
 fn get_reducer_args(cursor: &mut &[u8]) -> Result<ReducerArgs, ProtocolError> {
     let count = get_u64(cursor)?;
     if count > cursor.len() as u64 {
-        return Err(malformed("reducer args count exceeds the remaining payload"));
+        return Err(malformed(
+            "reducer args count exceeds the remaining payload",
+        ));
     }
     let mut args = ReducerArgs::new();
     for _ in 0..count {

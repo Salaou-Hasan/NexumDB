@@ -209,7 +209,11 @@ impl ServerConfig {
                     line_no + 1
                 ));
             };
-            self.set(key.trim(), value.trim(), &format!("{}:{}", path.display(), line_no + 1))?;
+            self.set(
+                key.trim(),
+                value.trim(),
+                &format!("{}:{}", path.display(), line_no + 1),
+            )?;
         }
         Ok(())
     }
@@ -218,9 +222,9 @@ impl ServerConfig {
     /// `where_from` is used in error messages.
     pub fn set(&mut self, key: &str, value: &str, where_from: &str) -> Result<(), String> {
         let parse_usize = |value: &str| -> Result<usize, String> {
-            value
-                .parse::<usize>()
-                .map_err(|_| format!("{where_from}: {key} expects a non-negative integer, got '{value}'"))
+            value.parse::<usize>().map_err(|_| {
+                format!("{where_from}: {key} expects a non-negative integer, got '{value}'")
+            })
         };
         let parse_u64 = |value: &str| -> Result<u64, String> {
             value
@@ -289,12 +293,14 @@ impl ServerConfig {
                 }
             }
             "auth_per_window" => {
-                self.rate_limits =
-                    self.rate_limits.with_auth_per_window(parse_u32(value)?, self.rate_limits.auth_window_secs);
+                self.rate_limits = self
+                    .rate_limits
+                    .with_auth_per_window(parse_u32(value)?, self.rate_limits.auth_window_secs);
             }
             "auth_window_secs" => {
-                self.rate_limits =
-                    self.rate_limits.with_auth_per_window(self.rate_limits.auth_per_window, parse_u64(value)?);
+                self.rate_limits = self
+                    .rate_limits
+                    .with_auth_per_window(self.rate_limits.auth_per_window, parse_u64(value)?);
             }
             "input_per_sec" => {
                 self.rate_limits = self.rate_limits.with_input_per_sec(parse_u32(value)?);
@@ -315,16 +321,14 @@ impl ServerConfig {
                 );
             }
             "resync_per_window" => {
-                self.rate_limits = self.rate_limits.with_resync_per_window(
-                    parse_u32(value)?,
-                    self.rate_limits.resync_window_secs,
-                );
+                self.rate_limits = self
+                    .rate_limits
+                    .with_resync_per_window(parse_u32(value)?, self.rate_limits.resync_window_secs);
             }
             "resync_window_secs" => {
-                self.rate_limits = self.rate_limits.with_resync_per_window(
-                    self.rate_limits.resync_per_window,
-                    parse_u64(value)?,
-                );
+                self.rate_limits = self
+                    .rate_limits
+                    .with_resync_per_window(self.rate_limits.resync_per_window, parse_u64(value)?);
             }
             "tick_hz" => self.tick_hz = parse_u32(value)?,
             "seed" => self.seed = parse_u64(value)?,
@@ -332,9 +336,9 @@ impl ServerConfig {
             "metrics_interval_ticks" => self.metrics_interval_ticks = parse_u64(value)?,
             "token" => {
                 // token = name:id  (repeated lines build the table)
-                let (name, id) = value
-                    .split_once(':')
-                    .ok_or_else(|| format!("{where_from}: token expects 'name:id', got '{value}'"))?;
+                let (name, id) = value.split_once(':').ok_or_else(|| {
+                    format!("{where_from}: token expects 'name:id', got '{value}'")
+                })?;
                 let name = name.trim();
                 if name.is_empty() {
                     return Err(format!("{where_from}: empty token name"));
@@ -346,9 +350,7 @@ impl ServerConfig {
                 self.tokens.insert(name.to_string(), id);
             }
             other => {
-                return Err(format!(
-                    "{where_from}: unknown configuration key '{other}'"
-                ));
+                return Err(format!("{where_from}: unknown configuration key '{other}'"));
             }
         }
         Ok(())
@@ -366,20 +368,38 @@ impl ServerConfig {
         for (name, value) in [
             ("max_connections", self.max_connections),
             ("max_queued_inbound_frames", self.max_queued_inbound_frames),
-            ("max_queued_outbound_frames", self.max_queued_outbound_frames),
-            ("max_subscriptions_per_session", self.max_subscriptions_per_session),
+            (
+                "max_queued_outbound_frames",
+                self.max_queued_outbound_frames,
+            ),
+            (
+                "max_subscriptions_per_session",
+                self.max_subscriptions_per_session,
+            ),
             ("max_commands_per_frame", self.max_commands_per_frame),
             ("max_reducer_name_len", self.max_reducer_name_len),
             ("max_reducer_args", self.max_reducer_args),
-            ("max_pending_calls_per_connection", self.max_pending_calls_per_connection),
+            (
+                "max_pending_calls_per_connection",
+                self.max_pending_calls_per_connection,
+            ),
             ("default_partitions", self.default_partitions),
             ("max_players", self.max_players),
-            ("subscription_limit_per_player", self.subscription_limit_per_player),
-            ("max_pending_commands_per_world", self.max_pending_commands_per_world),
+            (
+                "subscription_limit_per_player",
+                self.subscription_limit_per_player,
+            ),
+            (
+                "max_pending_commands_per_world",
+                self.max_pending_commands_per_world,
+            ),
             ("game_event_log_limit", self.game_event_log_limit),
             ("workers", self.workers),
             ("max_queued_inputs", self.max_queued_inputs),
-            ("max_queued_partition_messages", self.max_queued_partition_messages),
+            (
+                "max_queued_partition_messages",
+                self.max_queued_partition_messages,
+            ),
             ("max_queued_reducer_calls", self.max_queued_reducer_calls),
         ] {
             if value == 0 {
@@ -427,9 +447,7 @@ impl ServerConfig {
 
     /// Builds the [`nexum_game_server::GameServerConfig`] for this
     /// configuration.
-    pub fn game_server_config(
-        &self,
-    ) -> nexum_game_server::GameServerConfig {
+    pub fn game_server_config(&self) -> nexum_game_server::GameServerConfig {
         nexum_game_server::GameServerConfig::new()
             .with_default_partition_count(self.default_partitions)
             .with_default_max_players(self.max_players)
@@ -535,7 +553,10 @@ mod tests {
         config.validate().unwrap();
         let network = config.network_config();
         assert_eq!(network.max_connections(), config.max_connections);
-        assert_eq!(network.max_commands_per_frame(), config.max_commands_per_frame);
+        assert_eq!(
+            network.max_commands_per_frame(),
+            config.max_commands_per_frame
+        );
         let game = config.game_server_config();
         assert_eq!(game.default_partition_count(), config.default_partitions);
         assert_eq!(game.tick_rate_hz(), config.tick_hz);

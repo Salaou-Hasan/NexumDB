@@ -28,8 +28,8 @@ use crate::control::ControlPlane;
 use crate::error::NetworkError;
 use crate::metrics::NetworkMetrics;
 use crate::policy::{AllowAllPolicy, GamePolicy};
-use crate::rate::{RateBucket, RateLimitConfig, RateLimiter};
 use crate::protocol::{self, ClientMessage, DeltaKind, PROTOCOL_VERSION, ServerMessage};
+use crate::rate::{RateBucket, RateLimitConfig, RateLimiter};
 use crate::session::Session;
 use crate::transport::{Connection, TransportError};
 
@@ -248,11 +248,15 @@ impl NetworkGateway {
 
     /// O(1) slab access — ConnectionId is a u64 used directly as Vec index.
     fn conn_get(&self, id: ConnectionId) -> Option<&ConnectionEntry> {
-        self.connections.get(id.as_u64() as usize).and_then(|o| o.as_ref())
+        self.connections
+            .get(id.as_u64() as usize)
+            .and_then(|o| o.as_ref())
     }
 
     fn conn_get_mut(&mut self, id: ConnectionId) -> Option<&mut ConnectionEntry> {
-        self.connections.get_mut(id.as_u64() as usize).and_then(|o| o.as_mut())
+        self.connections
+            .get_mut(id.as_u64() as usize)
+            .and_then(|o| o.as_mut())
     }
 
     /// Registers a transport connection (bounded by `max_connections`).
@@ -268,9 +272,13 @@ impl NetworkGateway {
         let id = ConnectionId::from_u64(self.next_connection);
         self.next_connection += 1;
         if idx < self.connections.len() {
-            self.connections[idx] = Some(ConnectionEntry::new(connection, &self.config.rate_limits));
+            self.connections[idx] =
+                Some(ConnectionEntry::new(connection, &self.config.rate_limits));
         } else {
-            self.connections.push(Some(ConnectionEntry::new(connection, &self.config.rate_limits)));
+            self.connections.push(Some(ConnectionEntry::new(
+                connection,
+                &self.config.rate_limits,
+            )));
         }
         self.active_connections += 1;
         Self::push_event(
@@ -282,7 +290,11 @@ impl NetworkGateway {
     }
 
     /// Closes a connection, best-effort-delivering a `Disconnect` reason.
-    pub fn disconnect(&mut self, connection: ConnectionId, reason: &str) -> Result<(), NetworkError> {
+    pub fn disconnect(
+        &mut self,
+        connection: ConnectionId,
+        reason: &str,
+    ) -> Result<(), NetworkError> {
         let max_payload = self.config.max_frame_payload();
         if let Some(entry) = self.conn_get_mut(connection) {
             if let Ok(frame) = protocol::encode_server(
@@ -401,7 +413,8 @@ impl NetworkGateway {
                 if !self.check_rate(connection, RateBucket::Auth) {
                     return;
                 }
-                if self.conn_get(connection)
+                if self
+                    .conn_get(connection)
                     .is_some_and(|entry| entry.session.is_some())
                 {
                     let _ = self.send_error(connection, 20, "already authenticated");
@@ -501,7 +514,8 @@ impl NetworkGateway {
                     return;
                 }
                 // Get principal from immutable borrow.
-                let principal = self.conn_get(connection)
+                let principal = self
+                    .conn_get(connection)
                     .and_then(|entry| entry.session.as_ref())
                     .map(|s| s.principal().clone());
                 let Some(principal) = principal else {
@@ -520,7 +534,8 @@ impl NetworkGateway {
                     );
                     return;
                 }
-                if let Some(session) = self.conn_get_mut(connection)
+                if let Some(session) = self
+                    .conn_get_mut(connection)
                     .and_then(|e| e.session.as_mut())
                 {
                     session.attach(world);
@@ -553,7 +568,8 @@ impl NetworkGateway {
                 self.handle_subscribe(connection, request_id, query)
             }
             ClientMessage::Unsubscribe { subscription } => {
-                let removed = self.conn_get_mut(connection)
+                let removed = self
+                    .conn_get_mut(connection)
                     .and_then(|entry| entry.subscriptions.remove(&subscription));
                 match removed {
                     Some(net_sub) => {
@@ -571,7 +587,8 @@ impl NetworkGateway {
                 if !self.check_rate(connection, RateBucket::Resync) {
                     return;
                 }
-                let Some(net_sub) = self.conn_get_mut(connection)
+                let Some(net_sub) = self
+                    .conn_get_mut(connection)
                     .and_then(|entry| entry.subscriptions.get(&subscription).cloned())
                 else {
                     let _ = self.send_error(connection, 22, "unknown subscription");
@@ -593,7 +610,8 @@ impl NetworkGateway {
                 }
             }
             ClientMessage::DetachWorld => {
-                let Some(session) = self.conn_get_mut(connection)
+                let Some(session) = self
+                    .conn_get_mut(connection)
                     .and_then(|entry| entry.session.as_mut())
                 else {
                     let _ = self.send_error(connection, 20, "authentication required");
@@ -612,7 +630,8 @@ impl NetworkGateway {
                     }
                 }
                 // End every session subscription on the runtime registry.
-                let subs: Vec<(WorldId, SubscriptionId)> = self.conn_get_mut(connection)
+                let subs: Vec<(WorldId, SubscriptionId)> = self
+                    .conn_get_mut(connection)
                     .expect("session exists")
                     .subscriptions
                     .values()
@@ -629,14 +648,21 @@ impl NetworkGateway {
                     }
                 }
                 // Pending reducer calls die with the attachment.
-                self.pending_calls.retain(|_, pending| pending.connection != connection);
+                self.pending_calls
+                    .retain(|_, pending| pending.connection != connection);
                 self.pending_by_connection.remove(&connection);
                 Self::push_event(
                     &mut self.events,
                     self.config.event_log_limit(),
                     NetworkEvent::Detached { connection },
                 );
-                let _ = self.send(connection, &ServerMessage::DetachResult { ok: true, error: None });
+                let _ = self.send(
+                    connection,
+                    &ServerMessage::DetachResult {
+                        ok: true,
+                        error: None,
+                    },
+                );
             }
             ClientMessage::CallReducer {
                 request_id,
@@ -670,11 +696,16 @@ impl NetworkGateway {
         // calls (ADR-014 D3): a client claiming it would make correlation
         // ambiguous with `GameServer::invoke_reducer`, so it is rejected.
         if request_id & SERVER_REQUEST_MSB != 0 {
-            let _ = self.send_reducer_error(connection, request_id, "request id reserved for server use");
+            let _ = self.send_reducer_error(
+                connection,
+                request_id,
+                "request id reserved for server use",
+            );
             self.metrics.reducer_calls_rejected += 1;
             return;
         }
-        let Some(session) = self.conn_get(connection)
+        let Some(session) = self
+            .conn_get(connection)
             .and_then(|entry| entry.session.as_ref())
             .cloned()
         else {
@@ -683,7 +714,11 @@ impl NetworkGateway {
             return;
         };
         let Some(world) = session.attached_world() else {
-            let _ = self.send_reducer_error(connection, request_id, "attach to a world before calling a reducer");
+            let _ = self.send_reducer_error(
+                connection,
+                request_id,
+                "attach to a world before calling a reducer",
+            );
             self.metrics.reducer_calls_rejected += 1;
             return;
         };
@@ -705,7 +740,8 @@ impl NetworkGateway {
             .get(&connection)
             .map_or(0, BTreeSet::len);
         if pending_for_connection >= self.config.max_pending_calls_per_connection() {
-            let _ = self.send_reducer_error(connection, request_id, "too many pending reducer calls");
+            let _ =
+                self.send_reducer_error(connection, request_id, "too many pending reducer calls");
             self.metrics.reducer_calls_rejected += 1;
             return;
         }
@@ -722,22 +758,32 @@ impl NetworkGateway {
             self.metrics.reducer_calls_rejected += 1;
             return;
         }
-        if !self.policy.authorize_reducer(session.principal(), world, &reducer) {
+        if !self
+            .policy
+            .authorize_reducer(session.principal(), world, &reducer)
+        {
             self.metrics.policy_rejections += 1;
             self.metrics.reducer_calls_rejected += 1;
-            let _ = self.send_reducer_error(connection, request_id, "not authorized by game policy");
+            let _ =
+                self.send_reducer_error(connection, request_id, "not authorized by game policy");
             return;
         }
         // Stamp the caller's authoritative identity into a reserved argument
         // (ADR-013 D3 / ADR-014 D8): a client-supplied value for the key is
         // overwritten, so identity can never be forged through `args`.
-        let args = args.insert(CALLER_SOURCE_ARG, nexum_core::Value::U64(session.principal().id()));
+        let args = args.insert(
+            CALLER_SOURCE_ARG,
+            nexum_core::Value::U64(session.principal().id()),
+        );
         // Allocate a gateway-unique request id so concurrent calls from
         // different clients on the same world never collide (Phase 16
         // finding: all SDK clients start their ids at 1).
         let gateway_id = self.next_gateway_request;
         self.next_gateway_request += 1;
-        match self.runtime.submit_reducer_call(world, gateway_id, reducer, args) {
+        match self
+            .runtime
+            .submit_reducer_call(world, gateway_id, reducer, args)
+        {
             Ok(()) => {
                 self.pending_calls.insert(
                     (world, gateway_id),
@@ -754,11 +800,8 @@ impl NetworkGateway {
             }
             Err(error) => {
                 self.metrics.reducer_calls_rejected += 1;
-                let _ = self.send_reducer_error(
-                    connection,
-                    request_id,
-                    &runtime_error_message(&error),
-                );
+                let _ =
+                    self.send_reducer_error(connection, request_id, &runtime_error_message(&error));
             }
         }
     }
@@ -789,7 +832,8 @@ impl NetworkGateway {
     /// (anti-spoofing) and hands the frame to the runtime, which owns
     /// late/capacity/world rejection.
     fn handle_input(&mut self, connection: ConnectionId, frame: InputFrame) {
-        let Some(session) = self.conn_get(connection)
+        let Some(session) = self
+            .conn_get(connection)
             .and_then(|entry| entry.session.as_ref())
             .cloned()
         else {
@@ -821,24 +865,27 @@ impl NetworkGateway {
                 };
             stamped.push(command);
         }
-        if !self.policy.authorize_input(session.principal(), world, &stamped) {
+        if !self
+            .policy
+            .authorize_input(session.principal(), world, &stamped)
+        {
             self.metrics.policy_rejections += 1;
             self.metrics.inputs_rejected += 1;
             let _ = self.send_error(connection, 18, "not authorized by game policy");
             return;
         }
         match self.runtime.submit_input(world, stamped) {
-        Ok(()) => self.metrics.inputs_accepted += 1,
-        Err(error) => {
-            self.metrics.inputs_rejected += 1;
-            let _ = self.send_error(
-                connection,
-                runtime_error_code(&error),
-                &runtime_error_message(&error),
-            );
+            Ok(()) => self.metrics.inputs_accepted += 1,
+            Err(error) => {
+                self.metrics.inputs_rejected += 1;
+                let _ = self.send_error(
+                    connection,
+                    runtime_error_code(&error),
+                    &runtime_error_message(&error),
+                );
+            }
         }
     }
-}
 
     /// Establishes a session subscription on the attached world and
     /// delivers its Initial snapshot, echoing the client's `request_id` on
@@ -853,7 +900,8 @@ impl NetworkGateway {
         if !self.check_rate_for(connection, RateBucket::Subscribe, request_id) {
             return;
         }
-        let Some(session) = self.conn_get(connection)
+        let Some(session) = self
+            .conn_get(connection)
             .and_then(|entry| entry.session.as_ref())
             .cloned()
         else {
@@ -861,7 +909,12 @@ impl NetworkGateway {
             return;
         };
         let Some(world) = session.attached_world() else {
-            let _ = self.send_error_for(connection, 21, "attach to a world before subscribing", request_id);
+            let _ = self.send_error_for(
+                connection,
+                21,
+                "attach to a world before subscribing",
+                request_id,
+            );
             return;
         };
         if self.conn_get(connection).is_some_and(|entry| {
@@ -875,7 +928,10 @@ impl NetworkGateway {
                 if let Some(entry) = self.conn_get_mut(connection) {
                     entry.subscriptions.insert(
                         server_sub,
-                        NetworkSubscription { world, server: server_sub },
+                        NetworkSubscription {
+                            world,
+                            server: server_sub,
+                        },
                     );
                 }
                 self.world_subscribers
@@ -1012,7 +1068,10 @@ impl NetworkGateway {
     /// the fan-out half of [`step_worlds`](Self::step_worlds); composition
     /// layers (like the game server, ADR-014) call it directly after their
     /// own `step_detailed` so they can observe the committed results too.
-    pub fn fan_out_results(&mut self, results: &[(WorldId, nexum_simulation::TickResult)]) -> StepReport {
+    pub fn fan_out_results(
+        &mut self,
+        results: &[(WorldId, nexum_simulation::TickResult)],
+    ) -> StepReport {
         let mut report = StepReport::default();
         for (world, result) in results {
             let world = *world;
@@ -1053,10 +1112,7 @@ impl NetworkGateway {
                     .map(|set| set.iter().copied().collect())
                     .unwrap_or_default();
                 for connection in attached {
-                    if self
-                        .send(connection, &message)
-                        .unwrap_or(false)
-                    {
+                    if self.send(connection, &message).unwrap_or(false) {
                         report.tick_updates_sent += 1;
                         self.metrics.tick_updates_sent += 1;
                     } else {
@@ -1084,8 +1140,9 @@ impl NetworkGateway {
             // gateway-allocated id; translate it back to the client's own id
             // and the awaiting connection (Phase 16 namespace fix).
             for call_result in result.reducer_results() {
-                if let Some(pending) =
-                    self.pending_calls.remove(&(world, call_result.request_id()))
+                if let Some(pending) = self
+                    .pending_calls
+                    .remove(&(world, call_result.request_id()))
                 {
                     if let Some(ids) = self.pending_by_connection.get_mut(&pending.connection) {
                         ids.remove(&pending.client_request_id);
@@ -1161,7 +1218,10 @@ impl NetworkGateway {
             .connections
             .iter()
             .enumerate()
-            .filter_map(|(idx, slot)| slot.as_ref().map(|e| (ConnectionId::from_u64(idx as u64), e)))
+            .filter_map(|(idx, slot)| {
+                slot.as_ref()
+                    .map(|e| (ConnectionId::from_u64(idx as u64), e))
+            })
             .flat_map(|(id, entry)| {
                 entry
                     .subscriptions
@@ -1197,13 +1257,16 @@ impl NetworkGateway {
         // Fast path: try direct message passing (bypasses encode/decode).
         // Unified capacity ensures overflow/stale semantics are preserved.
         {
-            let entry = self.conn_get_mut(connection)
+            let entry = self
+                .conn_get_mut(connection)
                 .ok_or(NetworkError::UnknownConnection(connection))?;
 
             // Flush pending stale notifications via frame path.
             while let Some(pending) = entry.pending_stale.front().cloned() {
                 match entry.connection.try_send_frame(Arc::from(pending)) {
-                    Ok(()) => { entry.pending_stale.pop_front(); }
+                    Ok(()) => {
+                        entry.pending_stale.pop_front();
+                    }
                     Err(TransportError::Full) | Err(TransportError::Closed) => break,
                     Err(_) => break,
                 }
@@ -1251,13 +1314,16 @@ impl NetworkGateway {
         let is_stale: bool;
         let stale_subs: Vec<SubscriptionId>;
         {
-            let entry = self.conn_get_mut(connection)
+            let entry = self
+                .conn_get_mut(connection)
                 .ok_or(NetworkError::UnknownConnection(connection))?;
 
             // Flush any pending stale notifications.
             while let Some(pending) = entry.pending_stale.front().cloned() {
                 match entry.connection.try_send_frame(Arc::from(pending)) {
-                    Ok(()) => { entry.pending_stale.pop_front(); }
+                    Ok(()) => {
+                        entry.pending_stale.pop_front();
+                    }
                     Err(TransportError::Full) | Err(TransportError::Closed) => break,
                     Err(_) => break,
                 }
@@ -1384,7 +1450,8 @@ impl NetworkGateway {
         bucket: RateBucket,
         request_id: u64,
     ) -> bool {
-        let allowed = self.conn_get_mut(connection)
+        let allowed = self
+            .conn_get_mut(connection)
             .is_some_and(|entry| entry.rate.try_take(bucket, std::time::Instant::now()));
         if !allowed {
             self.metrics.rate_limited += 1;
@@ -1419,7 +1486,8 @@ impl NetworkGateway {
         // Drop the connection's pending reducer calls (ADR-013 D3): the
         // results can no longer be delivered. The runtime may still execute
         // accepted calls (fire-and-forget); the correlation state is gone.
-        self.pending_calls.retain(|_, pending| pending.connection != *connection);
+        self.pending_calls
+            .retain(|_, pending| pending.connection != *connection);
         self.pending_by_connection.remove(connection);
         // Remove the connection from its world's attached index (ADR-021 D3).
         if let Some(world) = entry.session.as_ref().and_then(Session::attached_world)

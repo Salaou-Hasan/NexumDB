@@ -9,13 +9,13 @@
 //! reducers read the caller from the gateway-stamped `__caller` argument
 //! (ADR-014 D8), so identity cannot be forged.
 
-use nexum_core::{row, Error, ReducerId, Result, Row, RowId, SystemId, TableSchema, Value, WorldId};
+use nexum_core::{
+    Error, ReducerId, Result, Row, RowId, SystemId, TableSchema, Value, WorldId, row,
+};
 use nexum_network::CALLER_SOURCE_ARG;
 use nexum_reducer::{ReducerArgs, ReducerContext, ReducerDefinition};
 use nexum_runtime::WorldFactory;
-use nexum_simulation::{
-    InputFrame, SimulationConfig, SimulationContext, SystemDefinition, World,
-};
+use nexum_simulation::{InputFrame, SimulationConfig, SimulationContext, SystemDefinition, World};
 use nexum_table::TableStore;
 use nexum_wasm::{WasmLimits, WasmModuleRegistry};
 
@@ -173,17 +173,7 @@ pub fn player_join(ctx: &mut ReducerContext, args: &ReducerArgs) -> Result<Value
     ctx.insert(
         TABLE,
         row![
-            player_id,
-            x,
-            y,
-            START_HP,
-            START_HP,
-            1i64,
-            0i64,
-            0i64,
-            FACING_E,
-            START_AMMO,
-            1i64
+            player_id, x, y, START_HP, START_HP, 1i64, 0i64, 0i64, FACING_E, START_AMMO, 1i64
         ],
     )?;
     ctx.emit("join", Value::U64(player_id))?;
@@ -242,14 +232,21 @@ pub fn move_player(ctx: &mut ReducerContext, args: &ReducerArgs) -> Result<Value
         if other_id == row_id {
             return false;
         }
-        ctx.get(TABLE, other_id).ok().flatten().is_some_and(|other| alive(&other))
+        ctx.get(TABLE, other_id)
+            .ok()
+            .flatten()
+            .is_some_and(|other| alive(&other))
     });
     if occupied {
         return Err(Error::invalid_argument("cell is occupied"));
     }
     let facing = facing_of(dx, dy);
     let row = with(
-        with(with(player.clone(), COL_X, Value::I64(nx)), COL_Y, Value::I64(ny)),
+        with(
+            with(player.clone(), COL_X, Value::I64(nx)),
+            COL_Y,
+            Value::I64(ny),
+        ),
         COL_FACING,
         Value::I64(facing),
     );
@@ -282,11 +279,7 @@ pub fn respawn_player(ctx: &mut ReducerContext, args: &ReducerArgs) -> Result<Va
     let (x, y) = spawn(caller);
     let row = with(
         with(
-            with(
-                with(player, COL_X, Value::I64(x)),
-                COL_Y,
-                Value::I64(y),
-            ),
+            with(with(player, COL_X, Value::I64(x)), COL_Y, Value::I64(y)),
             COL_HP,
             Value::I64(START_HP),
         ),
@@ -307,11 +300,9 @@ pub fn respawn_player(ctx: &mut ReducerContext, args: &ReducerArgs) -> Result<Va
 /// `player_id`; a player reaching zero health dies (and emits `kill`).
 pub fn take_damage(ctx: &mut ReducerContext, args: &ReducerArgs) -> Result<Value> {
     let player_id = args.require_u64("player_id")?;
-    let amount = args
-        .get("amount")
-        .and_then(Value::as_i64)
-        .unwrap_or(0);
-    let (row_id, player) = player_by_id(ctx, player_id)?.ok_or_else(|| Error::not_found("player"))?;
+    let amount = args.get("amount").and_then(Value::as_i64).unwrap_or(0);
+    let (row_id, player) =
+        player_by_id(ctx, player_id)?.ok_or_else(|| Error::not_found("player"))?;
     let hp = (get(&player, COL_HP) - amount).max(0);
     let row = with(player, COL_HP, Value::I64(hp));
     let row = if hp == 0 {
@@ -345,13 +336,10 @@ pub fn set_position(ctx: &mut ReducerContext, args: &ReducerArgs) -> Result<Valu
         .get("facing")
         .and_then(Value::as_i64)
         .unwrap_or(FACING_E);
-    let (row_id, player) = player_by_id(ctx, player_id)?.ok_or_else(|| Error::not_found("player"))?;
+    let (row_id, player) =
+        player_by_id(ctx, player_id)?.ok_or_else(|| Error::not_found("player"))?;
     let row = with(
-        with(
-            with(player, COL_X, Value::I64(x)),
-            COL_Y,
-            Value::I64(y),
-        ),
+        with(with(player, COL_X, Value::I64(x)), COL_Y, Value::I64(y)),
         COL_FACING,
         Value::I64(facing),
     );
@@ -371,7 +359,11 @@ fn cooldown_tick(ctx: &mut SimulationContext, _frame: &InputFrame) -> Result<()>
     for (row_id, row) in rows {
         let cooldown = get(&row, COL_COOLDOWN);
         if cooldown > 0 {
-            ctx.update(TABLE, row_id, with(row.clone(), COL_COOLDOWN, Value::I64(cooldown - 1)))?;
+            ctx.update(
+                TABLE,
+                row_id,
+                with(row.clone(), COL_COOLDOWN, Value::I64(cooldown - 1)),
+            )?;
         }
     }
     Ok(())
@@ -415,41 +407,44 @@ fn ensure_schema(store: &mut TableStore) {
 /// The game world factory: registers the native reducers, the cooldown
 /// system, and the WASM `fire_weapon` module on every world.
 pub fn game_factory() -> WorldFactory {
-    Box::new(|id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-        ensure_schema(&mut store);
-        let mut world = World::new(id, store, sim)?;
-        world
-            .add_system(
-                SystemDefinition::new(SystemId::from_u64(0), "cooldown_tick", 0, cooldown_tick)
-                    .unwrap(),
-            )
-            .unwrap();
-        type NativeReducer = fn(&mut ReducerContext, &ReducerArgs) -> Result<Value>;
-        let reducers: &[(&str, NativeReducer)] = &[
-            ("player_join", player_join),
-            ("player_leave", player_leave),
-            ("move_player", move_player),
-            ("reload_weapon", reload_weapon),
-            ("respawn_player", respawn_player),
-            ("take_damage", take_damage),
-            ("set_position", set_position),
-        ];
-        for (index, (name, function)) in reducers.iter().enumerate() {
+    Box::new(
+        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
+            ensure_schema(&mut store);
+            let mut world = World::new(id, store, sim)?;
             world
-                .native_mut()
-                .register(
-                    ReducerDefinition::new(
-                        ReducerId::from_u64((index + 1) as u64),
-                        *name,
-                        *function,
-                    )
-                    .unwrap(),
+                .add_system(
+                    SystemDefinition::new(SystemId::from_u64(0), "cooldown_tick", 0, cooldown_tick)
+                        .unwrap(),
                 )
                 .unwrap();
-        }
-        let mut wasm = WasmModuleRegistry::new(WasmLimits::default()).unwrap();
-        wasm.register("fire_weapon", 1, fire_weapon_module()).unwrap();
-        world.set_wasm(wasm);
-        Ok(world)
-    })
+            type NativeReducer = fn(&mut ReducerContext, &ReducerArgs) -> Result<Value>;
+            let reducers: &[(&str, NativeReducer)] = &[
+                ("player_join", player_join),
+                ("player_leave", player_leave),
+                ("move_player", move_player),
+                ("reload_weapon", reload_weapon),
+                ("respawn_player", respawn_player),
+                ("take_damage", take_damage),
+                ("set_position", set_position),
+            ];
+            for (index, (name, function)) in reducers.iter().enumerate() {
+                world
+                    .native_mut()
+                    .register(
+                        ReducerDefinition::new(
+                            ReducerId::from_u64((index + 1) as u64),
+                            *name,
+                            *function,
+                        )
+                        .unwrap(),
+                    )
+                    .unwrap();
+            }
+            let mut wasm = WasmModuleRegistry::new(WasmLimits::default()).unwrap();
+            wasm.register("fire_weapon", 1, fire_weapon_module())
+                .unwrap();
+            world.set_wasm(wasm);
+            Ok(world)
+        },
+    )
 }

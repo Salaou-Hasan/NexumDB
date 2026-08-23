@@ -8,9 +8,7 @@
 
 use nexum_core::row;
 use nexum_core::schema::TableSchema;
-use nexum_core::{
-    ColumnType, Error, ReducerId, Row, RowId, SystemId, TickId, Value, WorldId,
-};
+use nexum_core::{ColumnType, Error, ReducerId, Row, RowId, SystemId, TickId, Value, WorldId};
 use nexum_reducer::{ReducerArgs, ReducerDefinition};
 use nexum_table::TableStore;
 use nexum_tx::Transaction;
@@ -71,10 +69,13 @@ fn trace_of(world: &mut World, ticks: u64) -> Trace {
 #[test]
 fn plan_groups_disjoint_systems_and_splits_conflicts() {
     let mut world = fixture(SimulationConfig::new());
-    let sys = |id: u64, name: &str, priority: u32, access: SystemAccess| {
-        SystemDefinition::with_access(SystemId::from_u64(id), name, priority, access, |_, _| Ok(()))
+    let sys =
+        |id: u64, name: &str, priority: u32, access: SystemAccess| {
+            SystemDefinition::with_access(SystemId::from_u64(id), name, priority, access, |_, _| {
+                Ok(())
+            })
             .unwrap()
-    };
+        };
     world
         .add_system(sys(0, "a_writer", 10, SystemAccess::new(&[], &["a"])))
         .unwrap();
@@ -88,17 +89,12 @@ fn plan_groups_disjoint_systems_and_splits_conflicts() {
     // Opaque: always its own singleton group.
     world
         .add_system(
-            SystemDefinition::new(SystemId::from_u64(3), "opaque", 40, |_, _| Ok(()))
-                .unwrap(),
+            SystemDefinition::new(SystemId::from_u64(3), "opaque", 40, |_, _| Ok(())).unwrap(),
         )
         .unwrap();
 
     let plan = TickPlan::build(world.systems(), world.store()).unwrap();
-    let groups: Vec<Vec<usize>> = plan
-        .groups()
-        .iter()
-        .map(|g| g.systems().to_vec())
-        .collect();
+    let groups: Vec<Vec<usize>> = plan.groups().iter().map(|g| g.systems().to_vec()).collect();
     // [a_writer, bc_writer] are table-disjoint → one group; then rng_user;
     // then the opaque singleton.
     assert_eq!(groups, vec![vec![0, 1], vec![2], vec![3]]);
@@ -128,9 +124,15 @@ fn plan_is_deterministic_and_rejects_unknown_tables() {
         SystemDefinition::with_access(SystemId::from_u64(id), name, 0, access, |_, _| Ok(()))
             .unwrap()
     };
-    world.add_system(sys(0, "x", SystemAccess::new(&["a"], &["b"]))).unwrap();
-    world.add_system(sys(1, "y", SystemAccess::new(&["b"], &["c"]))).unwrap();
-    world.add_system(sys(2, "z", SystemAccess::new(&[], &["a"]))).unwrap();
+    world
+        .add_system(sys(0, "x", SystemAccess::new(&["a"], &["b"])))
+        .unwrap();
+    world
+        .add_system(sys(1, "y", SystemAccess::new(&["b"], &["c"])))
+        .unwrap();
+    world
+        .add_system(sys(2, "z", SystemAccess::new(&[], &["a"])))
+        .unwrap();
     let a = TickPlan::build(world.systems(), world.store()).unwrap();
     let b = TickPlan::build(world.systems(), world.store()).unwrap();
     assert_eq!(a, b);
@@ -216,7 +218,11 @@ fn rich_world(config: SimulationConfig) -> World {
         )
         .unwrap();
     world
-        .schedule(TickId::from_u64(2), "mark", ReducerArgs::new().insert("m", 999u64))
+        .schedule(
+            TickId::from_u64(2),
+            "mark",
+            ReducerArgs::new().insert("m", 999u64),
+        )
         .unwrap();
     world
 }
@@ -224,10 +230,17 @@ fn rich_world(config: SimulationConfig) -> World {
 #[test]
 fn worker_count_never_changes_the_trace() {
     let ticks = 8;
-    let serial = trace_of(&mut rich_world(SimulationConfig::new().with_execution(ExecutionMode::Serial)), ticks);
+    let serial = trace_of(
+        &mut rich_world(SimulationConfig::new().with_execution(ExecutionMode::Serial)),
+        ticks,
+    );
     for workers in [1usize, 2, 4, 8] {
-        let parallel =
-            trace_of(&mut rich_world(SimulationConfig::new().with_execution(ExecutionMode::Parallel(workers))), ticks);
+        let parallel = trace_of(
+            &mut rich_world(
+                SimulationConfig::new().with_execution(ExecutionMode::Parallel(workers)),
+            ),
+            ticks,
+        );
         assert_eq!(serial, parallel, "Parallel({workers}) diverged from serial");
     }
 }
@@ -235,11 +248,19 @@ fn worker_count_never_changes_the_trace() {
 #[test]
 fn repeated_parallel_runs_with_same_seed_are_identical() {
     let a = trace_of(
-        &mut rich_world(SimulationConfig::new().with_seed(7).with_execution(ExecutionMode::Parallel(4))),
+        &mut rich_world(
+            SimulationConfig::new()
+                .with_seed(7)
+                .with_execution(ExecutionMode::Parallel(4)),
+        ),
         10,
     );
     let b = trace_of(
-        &mut rich_world(SimulationConfig::new().with_seed(7).with_execution(ExecutionMode::Parallel(4))),
+        &mut rich_world(
+            SimulationConfig::new()
+                .with_seed(7)
+                .with_execution(ExecutionMode::Parallel(4)),
+        ),
         10,
     );
     assert_eq!(a, b);
@@ -248,11 +269,19 @@ fn repeated_parallel_runs_with_same_seed_are_identical() {
 #[test]
 fn different_seeds_diverge_in_parallel_mode() {
     let a = trace_of(
-        &mut rich_world(SimulationConfig::new().with_seed(1).with_execution(ExecutionMode::Parallel(4))),
+        &mut rich_world(
+            SimulationConfig::new()
+                .with_seed(1)
+                .with_execution(ExecutionMode::Parallel(4)),
+        ),
         6,
     );
     let b = trace_of(
-        &mut rich_world(SimulationConfig::new().with_seed(2).with_execution(ExecutionMode::Parallel(4))),
+        &mut rich_world(
+            SimulationConfig::new()
+                .with_seed(2)
+                .with_execution(ExecutionMode::Parallel(4)),
+        ),
         6,
     );
     assert_ne!(a, b);
@@ -376,7 +405,10 @@ fn same_table_interleaved_writes_assign_identical_real_ids() {
         assert_eq!(serial, parallel, "Parallel({workers}) diverged");
     }
     // Sanity: rows are [1,2,3] in ascending RowId order (call order).
-    let values: Vec<u64> = serial.iter().map(|(_, r)| r.get(0).unwrap().as_u64().unwrap()).collect();
+    let values: Vec<u64> = serial
+        .iter()
+        .map(|(_, r)| r.get(0).unwrap().as_u64().unwrap())
+        .collect();
     assert_eq!(values, vec![1, 2, 3]);
 }
 
@@ -385,7 +417,8 @@ fn same_table_interleaved_writes_assign_identical_real_ids() {
 #[test]
 fn read_your_writes_holds_inside_parallel_children() {
     for workers in [1usize, 2, 4] {
-        let mut world = fixture(SimulationConfig::new().with_execution(ExecutionMode::Parallel(workers)));
+        let mut world =
+            fixture(SimulationConfig::new().with_execution(ExecutionMode::Parallel(workers)));
         world
             .add_system(
                 SystemDefinition::with_access(
@@ -594,12 +627,16 @@ fn first_failure_in_system_order_fails_the_tick_identically() {
         (error.error().clone(), empty)
     };
 
-    let (serial_error, serial_empty) = run(SimulationConfig::new().with_execution(ExecutionMode::Serial));
+    let (serial_error, serial_empty) =
+        run(SimulationConfig::new().with_execution(ExecutionMode::Serial));
     for workers in [1usize, 2, 4] {
         let (parallel_error, parallel_empty) =
             run(SimulationConfig::new().with_execution(ExecutionMode::Parallel(workers)));
         assert_eq!(serial_error, parallel_error, "Parallel({workers})");
-        assert!(serial_empty && parallel_empty, "zero authoritative mutation");
+        assert!(
+            serial_empty && parallel_empty,
+            "zero authoritative mutation"
+        );
     }
 }
 
@@ -635,14 +672,18 @@ fn panicking_system_in_a_parallel_group_fails_atomically() {
             )
             .unwrap();
         let error = world.tick(&frame(0)).unwrap_err();
-        assert!(world.store().table("a").unwrap().is_empty(), "no partial mutation");
+        assert!(
+            world.store().table("a").unwrap().is_empty(),
+            "no partial mutation"
+        );
         error.error().clone()
     };
 
     let serial = run(SimulationConfig::new().with_execution(ExecutionMode::Serial));
     assert!(matches!(&serial, Error::Internal(message) if message.contains("parallel boom")));
     for workers in [1usize, 2, 4] {
-        let parallel = run(SimulationConfig::new().with_execution(ExecutionMode::Parallel(workers)));
+        let parallel =
+            run(SimulationConfig::new().with_execution(ExecutionMode::Parallel(workers)));
         assert_eq!(serial, parallel, "Parallel({workers}) panic error diverged");
     }
 }
@@ -655,19 +696,31 @@ fn event_budget_fails_parallel_ticks_deterministically() {
     let mut world = fixture(config);
     world
         .add_system(
-            SystemDefinition::with_access(SystemId::from_u64(0), "emitter_a", 10, SystemAccess::new(&[], &["a"]), |ctx, _| {
-                ctx.emit("a", 1u64)?;
-                Ok(())
-            })
+            SystemDefinition::with_access(
+                SystemId::from_u64(0),
+                "emitter_a",
+                10,
+                SystemAccess::new(&[], &["a"]),
+                |ctx, _| {
+                    ctx.emit("a", 1u64)?;
+                    Ok(())
+                },
+            )
             .unwrap(),
         )
         .unwrap();
     world
         .add_system(
-            SystemDefinition::with_access(SystemId::from_u64(1), "emitter_b", 20, SystemAccess::new(&[], &["b"]), |ctx, _| {
-                ctx.emit("b", 2u64)?;
-                Ok(())
-            })
+            SystemDefinition::with_access(
+                SystemId::from_u64(1),
+                "emitter_b",
+                20,
+                SystemAccess::new(&[], &["b"]),
+                |ctx, _| {
+                    ctx.emit("b", 2u64)?;
+                    Ok(())
+                },
+            )
             .unwrap(),
         )
         .unwrap();
@@ -718,7 +771,8 @@ fn native_reducer_invoked_from_a_parallel_child_commits_atomically() {
 
     let serial = run(SimulationConfig::new().with_execution(ExecutionMode::Serial));
     for workers in [1usize, 2, 4] {
-        let parallel = run(SimulationConfig::new().with_execution(ExecutionMode::Parallel(workers)));
+        let parallel =
+            run(SimulationConfig::new().with_execution(ExecutionMode::Parallel(workers)));
         assert_eq!(serial, parallel, "Parallel({workers})");
     }
     // The reducer emitted exactly one event that escaped on commit.
@@ -760,7 +814,8 @@ fn reducer_failure_inside_a_parallel_child_aborts_the_tick() {
         (error.error().clone(), empty)
     };
 
-    let (serial_error, serial_empty) = run(SimulationConfig::new().with_execution(ExecutionMode::Serial));
+    let (serial_error, serial_empty) =
+        run(SimulationConfig::new().with_execution(ExecutionMode::Serial));
     for workers in [1usize, 2, 4] {
         let (parallel_error, parallel_empty) =
             run(SimulationConfig::new().with_execution(ExecutionMode::Parallel(workers)));
@@ -837,7 +892,8 @@ fn wasm_reducer_invoked_from_a_parallel_child_is_sandboxed_and_atomic() {
 
     let serial = run(SimulationConfig::new().with_execution(ExecutionMode::Serial));
     for workers in [1usize, 2, 4] {
-        let parallel = run(SimulationConfig::new().with_execution(ExecutionMode::Parallel(workers)));
+        let parallel =
+            run(SimulationConfig::new().with_execution(ExecutionMode::Parallel(workers)));
         assert_eq!(serial, parallel, "Parallel({workers})");
     }
     // Exactly one committed insert, row [42], real id 0.
@@ -852,28 +908,48 @@ fn trapped_wasm_in_a_parallel_child_aborts_atomically() {
     let run = |config: SimulationConfig| {
         let mut world = fixture(config);
         let mut wasm = WasmModuleRegistry::new(WasmLimits::default()).unwrap();
-        wasm.register("explode", 1, wat::parse_str(r#"(module
+        wasm.register(
+            "explode",
+            1,
+            wat::parse_str(
+                r#"(module
           (import "nexum" "op" (func $op (param i32 i32 i32 i32 i32) (result i32)))
           (memory (export "memory") 16)
           (global (export "_nexum_in_ptr") i32 (i32.const 0))
           (global (export "_nexum_out_ptr") i32 (i32.const 16384))
-          (func (export "_nexum_reducer_run") (result i32) (unreachable)))"#).unwrap()).unwrap();
+          (func (export "_nexum_reducer_run") (result i32) (unreachable)))"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         world.set_wasm(wasm);
         world
             .add_system(
-                SystemDefinition::with_access(SystemId::from_u64(0), "writes", 10, SystemAccess::new(&[], &["a"]), |ctx, _| {
-                    ctx.insert("a", row![1u64])?;
-                    Ok(())
-                })
+                SystemDefinition::with_access(
+                    SystemId::from_u64(0),
+                    "writes",
+                    10,
+                    SystemAccess::new(&[], &["a"]),
+                    |ctx, _| {
+                        ctx.insert("a", row![1u64])?;
+                        Ok(())
+                    },
+                )
                 .unwrap(),
             )
             .unwrap();
         world
             .add_system(
-                SystemDefinition::with_access(SystemId::from_u64(1), "traps", 20, SystemAccess::new(&[], &["b"]), |ctx, _| {
-                    ctx.invoke_wasm("explode", &ReducerArgs::new())?;
-                    Ok(())
-                })
+                SystemDefinition::with_access(
+                    SystemId::from_u64(1),
+                    "traps",
+                    20,
+                    SystemAccess::new(&[], &["b"]),
+                    |ctx, _| {
+                        ctx.invoke_wasm("explode", &ReducerArgs::new())?;
+                        Ok(())
+                    },
+                )
                 .unwrap(),
             )
             .unwrap();
@@ -882,7 +958,8 @@ fn trapped_wasm_in_a_parallel_child_aborts_atomically() {
         (error.error().clone(), empty)
     };
 
-    let (serial_error, serial_empty) = run(SimulationConfig::new().with_execution(ExecutionMode::Serial));
+    let (serial_error, serial_empty) =
+        run(SimulationConfig::new().with_execution(ExecutionMode::Serial));
     for workers in [1usize, 2, 4] {
         let (parallel_error, parallel_empty) =
             run(SimulationConfig::new().with_execution(ExecutionMode::Parallel(workers)));
@@ -944,8 +1021,12 @@ fn one_hundred_systems_in_ten_groups_are_worker_count_independent() {
 
     let serial = run(SimulationConfig::new().with_execution(ExecutionMode::Serial));
     for workers in [1usize, 2, 4, 8] {
-        let parallel = run(SimulationConfig::new().with_execution(ExecutionMode::Parallel(workers)));
-        assert_eq!(serial, parallel, "Parallel({workers}) diverged for 100 systems");
+        let parallel =
+            run(SimulationConfig::new().with_execution(ExecutionMode::Parallel(workers)));
+        assert_eq!(
+            serial, parallel,
+            "Parallel({workers}) diverged for 100 systems"
+        );
     }
     // Sanity: 100 systems × 2 ticks = 200 committed inserts.
     let total: usize = serial.0.iter().map(|(c, _)| c.len()).sum();

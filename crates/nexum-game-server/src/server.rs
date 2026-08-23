@@ -174,7 +174,9 @@ impl GameServer {
         &mut self,
         config: GameInstanceConfig,
     ) -> Result<GameInstanceId, GameServerError> {
-        config.validate(&self.config).map_err(GameServerError::InvalidConfig)?;
+        config
+            .validate(&self.config)
+            .map_err(GameServerError::InvalidConfig)?;
         let id = GameInstanceId::from_u64(self.next_game);
         self.next_game += 1;
         if self.games.contains_key(&id) {
@@ -223,7 +225,10 @@ impl GameServer {
     /// ticking (idempotent when already running).
     pub fn start_game(&mut self, game_id: GameInstanceId) -> Result<(), GameServerError> {
         let worlds = {
-            let game = self.games.get_mut(&game_id).ok_or(GameServerError::UnknownGame(game_id))?;
+            let game = self
+                .games
+                .get_mut(&game_id)
+                .ok_or(GameServerError::UnknownGame(game_id))?;
             if !game.lifecycle.can_start() {
                 return Err(GameServerError::InvalidTransition {
                     game: game_id,
@@ -231,10 +236,15 @@ impl GameServer {
                 });
             }
             game.lifecycle = GameLifecycle::Starting;
-            game.partitions.iter().map(|partition| partition.world).collect::<Vec<_>>()
+            game.partitions
+                .iter()
+                .map(|partition| partition.world)
+                .collect::<Vec<_>>()
         };
         for world in worlds {
-            self.runtime_mut().start_world(world).map_err(GameServerError::Runtime)?;
+            self.runtime_mut()
+                .start_world(world)
+                .map_err(GameServerError::Runtime)?;
         }
         let game = self.games.get_mut(&game_id).expect("game exists");
         game.lifecycle = GameLifecycle::Running;
@@ -253,7 +263,10 @@ impl GameServer {
     /// their state (idempotent when already stopped).
     pub fn stop_game(&mut self, game_id: GameInstanceId) -> Result<(), GameServerError> {
         let worlds = {
-            let game = self.games.get_mut(&game_id).ok_or(GameServerError::UnknownGame(game_id))?;
+            let game = self
+                .games
+                .get_mut(&game_id)
+                .ok_or(GameServerError::UnknownGame(game_id))?;
             if !game.lifecycle.can_stop() {
                 return Err(GameServerError::InvalidTransition {
                     game: game_id,
@@ -261,10 +274,15 @@ impl GameServer {
                 });
             }
             game.lifecycle = GameLifecycle::Stopping;
-            game.partitions.iter().map(|partition| partition.world).collect::<Vec<_>>()
+            game.partitions
+                .iter()
+                .map(|partition| partition.world)
+                .collect::<Vec<_>>()
         };
         for world in &worlds {
-            self.runtime_mut().stop_world(*world).map_err(GameServerError::Runtime)?;
+            self.runtime_mut()
+                .stop_world(*world)
+                .map_err(GameServerError::Runtime)?;
         }
         // Buffered commands for a stopped world can never execute: reject
         // them explicitly (ADR-014 D3) rather than silently dropping.
@@ -305,8 +323,15 @@ impl GameServer {
     /// its worlds from the runtime. Committed data remains in each world's
     /// WAL on disk; nothing is silently erased.
     pub fn destroy_game(&mut self, game_id: GameInstanceId) -> Result<(), GameServerError> {
-        let game = self.games.remove(&game_id).ok_or(GameServerError::UnknownGame(game_id))?;
-        let worlds: Vec<WorldId> = game.partitions.iter().map(|partition| partition.world).collect();
+        let game = self
+            .games
+            .remove(&game_id)
+            .ok_or(GameServerError::UnknownGame(game_id))?;
+        let worlds: Vec<WorldId> = game
+            .partitions
+            .iter()
+            .map(|partition| partition.world)
+            .collect();
         // Tear down memberships first: revoke active-input grants, drop
         // server-side subscriptions, and remove the records.
         let players: Vec<(PlayerId, u64, WorldId)> = self
@@ -316,7 +341,10 @@ impl GameServer {
             .map(|player| (player.id, player.principal, player.world))
             .collect();
         {
-            let mut table = self.policy.lock().expect("game policy mutex is not poisoned");
+            let mut table = self
+                .policy
+                .lock()
+                .expect("game policy mutex is not poisoned");
             for (_, principal, world) in &players {
                 table.remove_active_player(*principal, *world);
             }
@@ -371,7 +399,9 @@ impl GameServer {
         config: GameInstanceConfig,
         resume_tick: Option<TickId>,
     ) -> Result<(GameInstanceId, GameRecoveryReport), GameServerError> {
-        config.validate(&self.config).map_err(GameServerError::InvalidConfig)?;
+        config
+            .validate(&self.config)
+            .map_err(GameServerError::InvalidConfig)?;
         let id = GameInstanceId::from_u64(self.next_game);
         self.next_game += 1;
         if self.games.contains_key(&id) {
@@ -430,7 +460,10 @@ impl GameServer {
 
     /// Returns a game's status.
     pub fn game_status(&self, game_id: GameInstanceId) -> Result<GameStatus, GameServerError> {
-        let game = self.games.get(&game_id).ok_or(GameServerError::UnknownGame(game_id))?;
+        let game = self
+            .games
+            .get(&game_id)
+            .ok_or(GameServerError::UnknownGame(game_id))?;
         let players = self
             .players
             .values()
@@ -487,7 +520,9 @@ impl GameServer {
         Self::push_event(
             &mut self.events,
             self.config.event_log_limit(),
-            GameServerEvent::ReducerExposed { reducer: reducer.to_string() },
+            GameServerEvent::ReducerExposed {
+                reducer: reducer.to_string(),
+            },
         );
         Ok(())
     }
@@ -495,7 +530,10 @@ impl GameServer {
     /// Revokes a reducer: it is no longer client-callable.
     pub fn revoke_reducer(&mut self, reducer: &str) -> Result<(), GameServerError> {
         {
-            let mut table = self.policy.lock().expect("game policy mutex is not poisoned");
+            let mut table = self
+                .policy
+                .lock()
+                .expect("game policy mutex is not poisoned");
             if table.reducer_policy(reducer).is_none() {
                 return Err(GameServerError::UnknownReducer(reducer.to_string()));
             }
@@ -504,7 +542,9 @@ impl GameServer {
         Self::push_event(
             &mut self.events,
             self.config.event_log_limit(),
-            GameServerEvent::ReducerRevoked { reducer: reducer.to_string() },
+            GameServerEvent::ReducerRevoked {
+                reducer: reducer.to_string(),
+            },
         );
         Ok(())
     }
@@ -575,7 +615,10 @@ impl GameServer {
         }
         // Fresh join.
         let (partition, world, on_join) = {
-            let game = self.games.get(&game_id).ok_or(GameServerError::UnknownGame(game_id))?;
+            let game = self
+                .games
+                .get(&game_id)
+                .ok_or(GameServerError::UnknownGame(game_id))?;
             if !game.lifecycle.is_running() {
                 return Err(game_state_error(game_id, game.lifecycle));
             }
@@ -599,7 +642,10 @@ impl GameServer {
             (partition, world, game.config.on_player_join.clone())
         };
         // The partition's world must be running.
-        let status = self.runtime().world_status(world).map_err(GameServerError::Runtime)?;
+        let status = self
+            .runtime()
+            .world_status(world)
+            .map_err(GameServerError::Runtime)?;
         if status.state != WorldLifecycle::Running {
             return Err(GameServerError::WorldFailed(world));
         }
@@ -629,7 +675,8 @@ impl GameServer {
                 );
             }
         }
-        self.player_by_principal.insert((principal_id, game_id), player_id);
+        self.player_by_principal
+            .insert((principal_id, game_id), player_id);
         self.policy
             .lock()
             .expect("game policy mutex is not poisoned")
@@ -685,7 +732,10 @@ impl GameServer {
     /// membership `Left`. Idempotent.
     pub fn leave_game(&mut self, player_id: PlayerId) -> Result<(), GameServerError> {
         let (game_id, world, principal, on_leave) = {
-            let record = self.players.get_mut(&player_id).ok_or(GameServerError::UnknownPlayer(player_id))?;
+            let record = self
+                .players
+                .get_mut(&player_id)
+                .ok_or(GameServerError::UnknownPlayer(player_id))?;
             if record.state == PlayerState::Left {
                 return Ok(());
             }
@@ -714,7 +764,10 @@ impl GameServer {
             .lock()
             .expect("game policy mutex is not poisoned")
             .remove_active_player(principal, world);
-        self.players.get_mut(&player_id).expect("player exists").state = PlayerState::Left;
+        self.players
+            .get_mut(&player_id)
+            .expect("player exists")
+            .state = PlayerState::Left;
         if let Some(subs) = self.player_subs.remove(&player_id) {
             for subscription in subs {
                 let _ = self.runtime_mut().unsubscribe(world, subscription);
@@ -724,7 +777,10 @@ impl GameServer {
         Self::push_event(
             &mut self.events,
             self.config.event_log_limit(),
-            GameServerEvent::PlayerLeft { game: game_id, player: player_id },
+            GameServerEvent::PlayerLeft {
+                game: game_id,
+                player: player_id,
+            },
         );
         Ok(())
     }
@@ -735,7 +791,10 @@ impl GameServer {
     /// principal reconnects. Idempotent.
     pub fn disconnect_player(&mut self, player_id: PlayerId) -> Result<(), GameServerError> {
         let (game_id, principal, world) = {
-            let record = self.players.get_mut(&player_id).ok_or(GameServerError::UnknownPlayer(player_id))?;
+            let record = self
+                .players
+                .get_mut(&player_id)
+                .ok_or(GameServerError::UnknownPlayer(player_id))?;
             match record.state {
                 PlayerState::Left => return Err(GameServerError::PlayerNotActive(player_id)),
                 PlayerState::Reconnecting => return Ok(()),
@@ -752,14 +811,20 @@ impl GameServer {
         Self::push_event(
             &mut self.events,
             self.config.event_log_limit(),
-            GameServerEvent::PlayerDisconnected { game: game_id, player: player_id },
+            GameServerEvent::PlayerDisconnected {
+                game: game_id,
+                player: player_id,
+            },
         );
         Ok(())
     }
 
     /// Returns a player's status.
     pub fn player_status(&self, player_id: PlayerId) -> Result<PlayerStatus, GameServerError> {
-        let record = self.players.get(&player_id).ok_or(GameServerError::UnknownPlayer(player_id))?;
+        let record = self
+            .players
+            .get(&player_id)
+            .ok_or(GameServerError::UnknownPlayer(player_id))?;
         Ok(PlayerStatus {
             id: record.id,
             principal: record.principal,
@@ -791,21 +856,31 @@ impl GameServer {
     ) -> Result<(), GameServerError> {
         let kind = kind.into();
         let world = {
-            let record = self.players.get(&player_id).ok_or(GameServerError::UnknownPlayer(player_id))?;
+            let record = self
+                .players
+                .get(&player_id)
+                .ok_or(GameServerError::UnknownPlayer(player_id))?;
             if record.state != PlayerState::Active {
                 return Err(GameServerError::PlayerNotActive(player_id));
             }
-            let game = self.games.get(&record.game).ok_or(GameServerError::UnknownGame(record.game))?;
+            let game = self
+                .games
+                .get(&record.game)
+                .ok_or(GameServerError::UnknownGame(record.game))?;
             if !game.lifecycle.is_running() {
                 return Err(game_state_error(record.game, game.lifecycle));
             }
-            let status = self.runtime().world_status(record.world).map_err(GameServerError::Runtime)?;
+            let status = self
+                .runtime()
+                .world_status(record.world)
+                .map_err(GameServerError::Runtime)?;
             if status.state != WorldLifecycle::Running {
                 return Err(GameServerError::WorldFailed(record.world));
             }
             record.world
         };
-        let command = InputCommand::new(player_id.as_u64(), kind, payload).map_err(GameServerError::Core)?;
+        let command =
+            InputCommand::new(player_id.as_u64(), kind, payload).map_err(GameServerError::Core)?;
         // Commands are buffered per world (ADR-014 D3) and merged into ONE
         // frame at `step()`. Submitting one frame per command would stamp
         // every frame with the same tick, and the runtime drains one frame
@@ -868,8 +943,7 @@ impl GameServer {
                     // Capture the sources before the frame is moved into the
                     // runtime, so a rejected frame can report accurate
                     // identity per command (ADR-014 D3).
-                    let sources: Vec<u64> =
-                        commands.iter().map(InputCommand::source).collect();
+                    let sources: Vec<u64> = commands.iter().map(InputCommand::source).collect();
                     let mut frame = InputFrame::new(status.next_tick);
                     for command in commands {
                         frame.push(command);
@@ -902,7 +976,10 @@ impl GameServer {
         args: ReducerArgs,
     ) -> Result<u64, GameServerError> {
         let world = {
-            let record = self.players.get(&player_id).ok_or(GameServerError::UnknownPlayer(player_id))?;
+            let record = self
+                .players
+                .get(&player_id)
+                .ok_or(GameServerError::UnknownPlayer(player_id))?;
             if record.state == PlayerState::Left {
                 return Err(GameServerError::PlayerNotActive(player_id));
             }
@@ -913,7 +990,10 @@ impl GameServer {
         // server result can never be misrouted to a client's pending call.
         let request_id = SERVER_REQUEST_MSB | self.next_request;
         self.next_request += 1;
-        match self.runtime_mut().submit_reducer_call(world, request_id, reducer, args) {
+        match self
+            .runtime_mut()
+            .submit_reducer_call(world, request_id, reducer, args)
+        {
             Ok(()) => {
                 self.metrics.reducer_calls += 1;
                 Ok(request_id)
@@ -936,19 +1016,35 @@ impl GameServer {
         query: Query,
     ) -> Result<SubscriptionId, GameServerError> {
         let world = {
-            let record = self.players.get(&player_id).ok_or(GameServerError::UnknownPlayer(player_id))?;
+            let record = self
+                .players
+                .get(&player_id)
+                .ok_or(GameServerError::UnknownPlayer(player_id))?;
             if record.state == PlayerState::Left {
                 return Err(GameServerError::PlayerNotActive(player_id));
             }
             record.world
         };
         let limit = self.config.subscription_limit_per_player;
-        if self.player_subs.get(&player_id).is_some_and(|subs| subs.len() >= limit) {
+        if self
+            .player_subs
+            .get(&player_id)
+            .is_some_and(|subs| subs.len() >= limit)
+        {
             self.metrics.subscription_limits_hit += 1;
-            return Err(GameServerError::SubscriptionLimit { player: player_id, limit });
+            return Err(GameServerError::SubscriptionLimit {
+                player: player_id,
+                limit,
+            });
         }
-        let subscription = self.runtime_mut().subscribe(world, query).map_err(GameServerError::Runtime)?;
-        self.player_subs.entry(player_id).or_default().insert(subscription);
+        let subscription = self
+            .runtime_mut()
+            .subscribe(world, query)
+            .map_err(GameServerError::Runtime)?;
+        self.player_subs
+            .entry(player_id)
+            .or_default()
+            .insert(subscription);
         self.metrics.subscriptions += 1;
         Ok(subscription)
     }
@@ -960,7 +1056,10 @@ impl GameServer {
         subscription: SubscriptionId,
     ) -> Result<(), GameServerError> {
         let world = {
-            let record = self.players.get(&player_id).ok_or(GameServerError::UnknownPlayer(player_id))?;
+            let record = self
+                .players
+                .get(&player_id)
+                .ok_or(GameServerError::UnknownPlayer(player_id))?;
             record.world
         };
         let tracked = self
@@ -986,7 +1085,10 @@ impl GameServer {
         subscription: SubscriptionId,
     ) -> Result<(), GameServerError> {
         let world = {
-            let record = self.players.get(&player_id).ok_or(GameServerError::UnknownPlayer(player_id))?;
+            let record = self
+                .players
+                .get(&player_id)
+                .ok_or(GameServerError::UnknownPlayer(player_id))?;
             record.world
         };
         self.runtime_mut()
@@ -1013,7 +1115,10 @@ impl GameServer {
     /// world either committed or the game is marked failed.
     pub fn step(&mut self) -> Result<Vec<(WorldId, TickResult)>, GameServerError> {
         self.flush_pending_commands();
-        let results = self.runtime_mut().step_detailed().map_err(GameServerError::Runtime)?;
+        let results = self
+            .runtime_mut()
+            .step_detailed()
+            .map_err(GameServerError::Runtime)?;
         self.gateway.fan_out_results(&results);
         self.observe_runtime_events();
         Ok(results)
@@ -1065,8 +1170,10 @@ impl GameServer {
                             reason: reason.to_string(),
                         },
                     );
-                    let all_failed =
-                        game.partitions.iter().all(|partition| partition.state == PartitionState::Failed);
+                    let all_failed = game
+                        .partitions
+                        .iter()
+                        .all(|partition| partition.state == PartitionState::Failed);
                     if all_failed && game.lifecycle.is_running() {
                         game.lifecycle = GameLifecycle::Failed;
                         self.metrics.games_failed += 1;
@@ -1130,7 +1237,11 @@ impl GameServer {
     /// current state; counters are monotonic).
     pub fn metrics(&self) -> GameServerMetrics {
         let mut metrics = self.metrics.clone();
-        metrics.games_active = self.games.values().filter(|game| game.lifecycle.is_running()).count();
+        metrics.games_active = self
+            .games
+            .values()
+            .filter(|game| game.lifecycle.is_running())
+            .count();
         metrics.players_active = self
             .players
             .values()
@@ -1154,7 +1265,9 @@ impl GameServer {
     /// scheduling, flushes every world's WAL (the durability contract), and
     /// releases resources.
     pub fn shutdown(&mut self) -> Result<(), GameServerError> {
-        self.runtime_mut().shutdown().map_err(GameServerError::Runtime)
+        self.runtime_mut()
+            .shutdown()
+            .map_err(GameServerError::Runtime)
     }
 
     // ------------------------------------------------------------- helpers

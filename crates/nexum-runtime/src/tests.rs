@@ -3,9 +3,7 @@
 use std::path::PathBuf;
 
 use nexum_core::row;
-use nexum_core::{
-    ColumnType, Error, PartitionId, ReducerId, SystemId, TickId, Value, WorldId,
-};
+use nexum_core::{ColumnType, Error, PartitionId, ReducerId, SystemId, TickId, Value, WorldId};
 use nexum_reducer::{ReducerArgs, ReducerDefinition};
 use nexum_simulation::{
     InputCommand, InputFrame, PartitionMessage, SimulationConfig, SystemDefinition, World,
@@ -43,65 +41,71 @@ fn ensure_players(store: &mut TableStore) {
 
 /// A factory whose worlds run a single writer system (one player per tick).
 fn writer_factory() -> WorldFactory {
-    Box::new(|id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-        ensure_players(&mut store);
-        let mut world = World::new(id, store, sim)?;
-        world.add_system(
-            SystemDefinition::new(SystemId::from_u64(0), "writer", 0, |ctx, _| {
-                let tick = ctx.tick().as_u64();
-                ctx.insert("players", row![tick, 10u64, 100i32])?;
-                Ok(())
-            })
-            .unwrap(),
-        )?;
-        Ok(world)
-    })
+    Box::new(
+        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
+            ensure_players(&mut store);
+            let mut world = World::new(id, store, sim)?;
+            world.add_system(
+                SystemDefinition::new(SystemId::from_u64(0), "writer", 0, |ctx, _| {
+                    let tick = ctx.tick().as_u64();
+                    ctx.insert("players", row![tick, 10u64, 100i32])?;
+                    Ok(())
+                })
+                .unwrap(),
+            )?;
+            Ok(world)
+        },
+    )
 }
 
 /// A factory where world 1 additionally runs a failing system (after the
 /// writer), for failure-isolation tests.
 fn failing_factory() -> WorldFactory {
-    Box::new(|id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-        ensure_players(&mut store);
-        let mut world = World::new(id, store, sim)?;
-        world.add_system(
-            SystemDefinition::new(SystemId::from_u64(0), "writer", 0, |ctx, _| {
-                ctx.insert("players", row![ctx.tick().as_u64(), 10u64, 100i32])?;
-                Ok(())
-            })
-            .unwrap(),
-        )?;
-        if id.as_u64() == 1 {
+    Box::new(
+        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
+            ensure_players(&mut store);
+            let mut world = World::new(id, store, sim)?;
             world.add_system(
-                SystemDefinition::new(SystemId::from_u64(1), "fails", 10, |_ctx, _| {
-                    Err(Error::invalid_argument("boom"))
+                SystemDefinition::new(SystemId::from_u64(0), "writer", 0, |ctx, _| {
+                    ctx.insert("players", row![ctx.tick().as_u64(), 10u64, 100i32])?;
+                    Ok(())
                 })
                 .unwrap(),
             )?;
-        }
-        Ok(world)
-    })
+            if id.as_u64() == 1 {
+                world.add_system(
+                    SystemDefinition::new(SystemId::from_u64(1), "fails", 10, |_ctx, _| {
+                        Err(Error::invalid_argument("boom"))
+                    })
+                    .unwrap(),
+                )?;
+            }
+            Ok(world)
+        },
+    )
 }
 
 /// A factory whose system consumes input commands as player rows.
 fn input_factory() -> WorldFactory {
-    Box::new(|id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-        ensure_players(&mut store);
-        let mut world = World::new(id, store, sim)?;
-        world.add_system(
-            SystemDefinition::new(SystemId::from_u64(0), "consumer", 0, |ctx, frame| {
-                for command in frame.commands() {
-                    if command.kind() == "spawn" {
-                        let id = command.payload().and_then(Value::as_u64).unwrap();
-                        ctx.insert("players", row![id, 10u64, 100i32])?;
+    Box::new(
+        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
+            ensure_players(&mut store);
+            let mut world = World::new(id, store, sim)?;
+            world.add_system(
+                SystemDefinition::new(SystemId::from_u64(0), "consumer", 0, |ctx, frame| {
+                    for command in frame.commands() {
+                        if command.kind() == "spawn" {
+                            let id = command.payload().and_then(Value::as_u64).unwrap();
+                            ctx.insert("players", row![id, 10u64, 100i32])?;
+                        }
                     }
-                }
-                Ok(())
-            })
-            .unwrap(),
-        )?;
-        Ok(world)
-    })
+                    Ok(())
+                })
+                .unwrap(),
+            )?;
+            Ok(world)
+        },
+    )
 }
 
 fn temp_dir(name: &str) -> PathBuf {
@@ -126,7 +130,9 @@ fn start_worlds(runtime: &mut Runtime, ids: &[u64]) {
 fn world_lifecycle_transitions() {
     let mut runtime = Runtime::new(RuntimeConfig::new(writer_factory())).unwrap();
     let world = WorldId::from_u64(0);
-    runtime.create_world(world, SimulationConfig::new()).unwrap();
+    runtime
+        .create_world(world, SimulationConfig::new())
+        .unwrap();
 
     assert_eq!(
         runtime.world_status(world).unwrap().state,
@@ -159,7 +165,9 @@ fn world_lifecycle_transitions() {
 fn duplicate_and_unknown_worlds() {
     let mut runtime = Runtime::new(RuntimeConfig::new(writer_factory())).unwrap();
     let world = WorldId::from_u64(0);
-    runtime.create_world(world, SimulationConfig::new()).unwrap();
+    runtime
+        .create_world(world, SimulationConfig::new())
+        .unwrap();
     assert!(matches!(
         runtime.create_world(world, SimulationConfig::new()),
         Err(RuntimeError::DuplicateWorld(_))
@@ -184,12 +192,17 @@ fn duplicate_and_unknown_worlds() {
 fn stopping_a_created_world_is_allowed_but_starting_a_failed_one_is_not() {
     let mut runtime = Runtime::new(RuntimeConfig::new(failing_factory())).unwrap();
     let world = WorldId::from_u64(1);
-    runtime.create_world(world, SimulationConfig::new()).unwrap();
+    runtime
+        .create_world(world, SimulationConfig::new())
+        .unwrap();
     runtime.stop_world(world).unwrap(); // Created -> Stopped
 
     runtime.start_world(world).unwrap();
     runtime.step().unwrap(); // world 1 fails
-    assert_eq!(runtime.world_status(world).unwrap().state, WorldLifecycle::Failed);
+    assert_eq!(
+        runtime.world_status(world).unwrap().state,
+        WorldLifecycle::Failed
+    );
     assert!(matches!(
         runtime.start_world(world),
         Err(RuntimeError::InvalidWorldState { .. })
@@ -256,7 +269,10 @@ fn tick_once_ticks_a_single_world() {
     assert_eq!(result.changes().len(), 1);
     // World 1 was not ticked.
     assert_eq!(
-        runtime.world_status(WorldId::from_u64(1)).unwrap().next_tick,
+        runtime
+            .world_status(WorldId::from_u64(1))
+            .unwrap()
+            .next_tick,
         TickId::from_u64(0)
     );
 }
@@ -270,15 +286,31 @@ fn worlds_are_assigned_round_robin_and_reassignable() {
     start_worlds(&mut runtime, &[0, 1, 2, 3, 4]);
 
     let assigned: Vec<u64> = (0..5)
-        .map(|w| runtime.assigned_worker(WorldId::from_u64(w)).unwrap().as_u64())
+        .map(|w| {
+            runtime
+                .assigned_worker(WorldId::from_u64(w))
+                .unwrap()
+                .as_u64()
+        })
         .collect();
     assert_eq!(assigned, vec![0, 1, 2, 0, 1]);
 
     // Reassign world 0 from worker 0 to worker 2.
-    runtime.reassign_world(WorldId::from_u64(0), worker_id2()).unwrap();
-    assert_eq!(runtime.assigned_worker(WorldId::from_u64(0)).unwrap().as_u64(), 2);
+    runtime
+        .reassign_world(WorldId::from_u64(0), worker_id2())
+        .unwrap();
+    assert_eq!(
+        runtime
+            .assigned_worker(WorldId::from_u64(0))
+            .unwrap()
+            .as_u64(),
+        2
+    );
     let worker2 = runtime.worker_status(worker_id2()).unwrap();
-    assert_eq!(worker2.worlds, vec![WorldId::from_u64(0), WorldId::from_u64(2)]);
+    assert_eq!(
+        worker2.worlds,
+        vec![WorldId::from_u64(0), WorldId::from_u64(2)]
+    );
     let worker0 = runtime.worker_status(worker_id0()).unwrap();
     assert_eq!(worker0.worlds, vec![WorldId::from_u64(3)]);
 
@@ -308,9 +340,14 @@ fn new_worlds_skip_failed_workers() {
         .unwrap();
 
     // A new world must not be assigned to the failed worker.
-    runtime.create_world(WorldId::from_u64(2), SimulationConfig::new()).unwrap();
+    runtime
+        .create_world(WorldId::from_u64(2), SimulationConfig::new())
+        .unwrap();
     assert_eq!(
-        runtime.assigned_worker(WorldId::from_u64(2)).unwrap().as_u64(),
+        runtime
+            .assigned_worker(WorldId::from_u64(2))
+            .unwrap()
+            .as_u64(),
         1
     );
 
@@ -335,7 +372,9 @@ fn create_world_over_an_existing_wal_is_rejected() {
     .unwrap();
 
     // First world commits one durable transaction, then is destroyed.
-    runtime.create_world(world, SimulationConfig::new()).unwrap();
+    runtime
+        .create_world(world, SimulationConfig::new())
+        .unwrap();
     runtime.start_world(world).unwrap();
     runtime.step().unwrap();
     // destroy_world leaves the durable WAL intact...
@@ -362,12 +401,24 @@ fn fail_worker_isolates_its_worlds() {
     start_worlds(&mut runtime, &[0, 1, 2]); // workers: 0,1,0
 
     runtime.fail_worker(worker_id0()).unwrap();
-    assert_eq!(runtime.worker_status(worker_id0()).unwrap().state, WorkerState::Failed);
+    assert_eq!(
+        runtime.worker_status(worker_id0()).unwrap().state,
+        WorkerState::Failed
+    );
     // Worker 0's worlds are failed and recoverable...
-    assert_eq!(runtime.world_status(WorldId::from_u64(0)).unwrap().state, WorldLifecycle::Failed);
-    assert_eq!(runtime.world_status(WorldId::from_u64(2)).unwrap().state, WorldLifecycle::Failed);
+    assert_eq!(
+        runtime.world_status(WorldId::from_u64(0)).unwrap().state,
+        WorldLifecycle::Failed
+    );
+    assert_eq!(
+        runtime.world_status(WorldId::from_u64(2)).unwrap().state,
+        WorldLifecycle::Failed
+    );
     // ...while worker 1's world is untouched.
-    assert_eq!(runtime.world_status(WorldId::from_u64(1)).unwrap().state, WorldLifecycle::Running);
+    assert_eq!(
+        runtime.world_status(WorldId::from_u64(1)).unwrap().state,
+        WorldLifecycle::Running
+    );
 
     // A step only ticks worker 1's world.
     let report = runtime.step().unwrap();
@@ -381,7 +432,9 @@ fn fail_worker_isolates_its_worlds() {
 fn inputs_are_routed_and_consumed_in_order() {
     let mut runtime = Runtime::new(RuntimeConfig::new(input_factory())).unwrap();
     let world = WorldId::from_u64(0);
-    runtime.create_world(world, SimulationConfig::new()).unwrap();
+    runtime
+        .create_world(world, SimulationConfig::new())
+        .unwrap();
     runtime.start_world(world).unwrap();
 
     let mut frame = InputFrame::new(TickId::from_u64(0));
@@ -402,21 +455,31 @@ fn late_and_over_limit_inputs_are_rejected() {
     let config = RuntimeConfig::new(input_factory()).with_max_queued_inputs(1);
     let mut runtime = Runtime::new(config).unwrap();
     let world = WorldId::from_u64(0);
-    runtime.create_world(world, SimulationConfig::new()).unwrap();
+    runtime
+        .create_world(world, SimulationConfig::new())
+        .unwrap();
     runtime.start_world(world).unwrap();
 
     // Queue bound: second frame for the same tick is rejected (capacity).
-    runtime.submit_input(world, InputFrame::new(TickId::from_u64(0))).unwrap();
+    runtime
+        .submit_input(world, InputFrame::new(TickId::from_u64(0)))
+        .unwrap();
     assert!(matches!(
         runtime.submit_input(world, InputFrame::new(TickId::from_u64(0))),
-        Err(RuntimeError::InputRejected { reason: Error::Capacity(_), .. })
+        Err(RuntimeError::InputRejected {
+            reason: Error::Capacity(_),
+            ..
+        })
     ));
 
     // After the tick, a frame for the already-passed tick is late.
     runtime.step().unwrap();
     assert!(matches!(
         runtime.submit_input(world, InputFrame::new(TickId::from_u64(0))),
-        Err(RuntimeError::InputRejected { reason: Error::InvalidArgument(_), .. })
+        Err(RuntimeError::InputRejected {
+            reason: Error::InvalidArgument(_),
+            ..
+        })
     ));
     assert_eq!(runtime.metrics().inputs_rejected, 2);
 }
@@ -425,7 +488,9 @@ fn late_and_over_limit_inputs_are_rejected() {
 fn inputs_to_unknown_or_stopped_worlds_are_rejected() {
     let mut runtime = Runtime::new(RuntimeConfig::new(input_factory())).unwrap();
     let world = WorldId::from_u64(0);
-    runtime.create_world(world, SimulationConfig::new()).unwrap();
+    runtime
+        .create_world(world, SimulationConfig::new())
+        .unwrap();
     runtime.stop_world(world).unwrap();
 
     assert!(matches!(
@@ -440,15 +505,20 @@ fn inputs_to_unknown_or_stopped_worlds_are_rejected() {
 
 #[test]
 fn out_of_order_frames_fail_the_tick_deterministically() {
-    let config = RuntimeConfig::new(writer_factory()).with_tick_failure_policy(TickFailurePolicy::Continue);
+    let config =
+        RuntimeConfig::new(writer_factory()).with_tick_failure_policy(TickFailurePolicy::Continue);
     let mut runtime = Runtime::new(config).unwrap();
     let world = WorldId::from_u64(0);
-    runtime.create_world(world, SimulationConfig::new()).unwrap();
+    runtime
+        .create_world(world, SimulationConfig::new())
+        .unwrap();
     runtime.start_world(world).unwrap();
 
     // A frame for tick 5 is accepted (not yet passed) but the world is at
     // tick 0: the world's own gate rejects it at execution.
-    runtime.submit_input(world, InputFrame::new(TickId::from_u64(5))).unwrap();
+    runtime
+        .submit_input(world, InputFrame::new(TickId::from_u64(5)))
+        .unwrap();
     let report = runtime.step().unwrap();
     assert_eq!(report.failed, 1);
     // Continue policy: the world keeps running. The gate rejects the bad
@@ -456,7 +526,10 @@ fn out_of_order_frames_fail_the_tick_deterministically() {
     // tick 0 succeeds.
     let result = runtime.tick_once(world).unwrap();
     assert_eq!(result.tick(), TickId::from_u64(0));
-    assert_eq!(runtime.world_status(world).unwrap().state, WorldLifecycle::Running);
+    assert_eq!(
+        runtime.world_status(world).unwrap().state,
+        WorldLifecycle::Running
+    );
 }
 
 // ------------------------------------------------------------ persistence
@@ -468,7 +541,9 @@ fn wal_append_and_recovery_restores_world_state() {
         .with_persistence(PersistencePolicy::Flush, dir.clone());
     let mut runtime = Runtime::new(config).unwrap();
     let world = WorldId::from_u64(0);
-    runtime.create_world(world, SimulationConfig::new()).unwrap();
+    runtime
+        .create_world(world, SimulationConfig::new())
+        .unwrap();
     runtime.start_world(world).unwrap();
     for _ in 0..3 {
         runtime.step().unwrap();
@@ -479,16 +554,23 @@ fn wal_append_and_recovery_restores_world_state() {
 
     // Recover into a fresh runtime and verify the state via a subscription
     // (the runtime never exposes the store directly).
-    let mut runtime = Runtime::new(RuntimeConfig::new(writer_factory())
-        .with_persistence(PersistencePolicy::Flush, dir.clone()))
-        .unwrap();
+    let mut runtime = Runtime::new(
+        RuntimeConfig::new(writer_factory())
+            .with_persistence(PersistencePolicy::Flush, dir.clone()),
+    )
+    .unwrap();
     let report = runtime
         .recover_world(world, SimulationConfig::new(), Some(TickId::from_u64(3)))
         .unwrap();
     assert_eq!(report.replayed_txs, 3);
-    assert_eq!(runtime.world_status(world).unwrap().next_tick, TickId::from_u64(3));
+    assert_eq!(
+        runtime.world_status(world).unwrap().next_tick,
+        TickId::from_u64(3)
+    );
 
-    let sub = runtime.subscribe(world, Query::builder("players").build().unwrap()).unwrap();
+    let sub = runtime
+        .subscribe(world, Query::builder("players").build().unwrap())
+        .unwrap();
     let initial = runtime.drain(world, sub).unwrap();
     assert_eq!(initial.len(), 1); // the Initial snapshot
     match &initial[0] {
@@ -500,7 +582,10 @@ fn wal_append_and_recovery_restores_world_state() {
     runtime.start_world(world).unwrap();
     let report = runtime.step().unwrap();
     assert_eq!(report.succeeded, 1);
-    assert_eq!(runtime.world_status(world).unwrap().next_tick, TickId::from_u64(4));
+    assert_eq!(
+        runtime.world_status(world).unwrap().next_tick,
+        TickId::from_u64(4)
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -515,9 +600,11 @@ fn recovery_requires_persistence_and_an_existing_wal() {
     drop(runtime);
 
     // Persistence enabled but no WAL exists for the world yet.
-    let mut runtime = Runtime::new(RuntimeConfig::new(writer_factory())
-        .with_persistence(PersistencePolicy::Flush, dir.clone()))
-        .unwrap();
+    let mut runtime = Runtime::new(
+        RuntimeConfig::new(writer_factory())
+            .with_persistence(PersistencePolicy::Flush, dir.clone()),
+    )
+    .unwrap();
     assert!(matches!(
         runtime.recover_world(WorldId::from_u64(0), SimulationConfig::new(), None),
         Err(RuntimeError::Persistence(Error::NotFound(_)))
@@ -533,7 +620,9 @@ fn periodic_snapshots_are_written_and_used_by_recovery() {
         .with_snapshot_interval(2);
     let mut runtime = Runtime::new(config).unwrap();
     let world = WorldId::from_u64(0);
-    runtime.create_world(world, SimulationConfig::new()).unwrap();
+    runtime
+        .create_world(world, SimulationConfig::new())
+        .unwrap();
     runtime.start_world(world).unwrap();
     for _ in 0..4 {
         runtime.step().unwrap();
@@ -542,9 +631,11 @@ fn periodic_snapshots_are_written_and_used_by_recovery() {
     runtime.shutdown().unwrap();
     drop(runtime);
 
-    let mut runtime = Runtime::new(RuntimeConfig::new(writer_factory())
-        .with_persistence(PersistencePolicy::Flush, dir.clone()))
-        .unwrap();
+    let mut runtime = Runtime::new(
+        RuntimeConfig::new(writer_factory())
+            .with_persistence(PersistencePolicy::Flush, dir.clone()),
+    )
+    .unwrap();
     let report = runtime
         .recover_world(world, SimulationConfig::new(), Some(TickId::from_u64(4)))
         .unwrap();
@@ -562,10 +653,16 @@ fn subscriptions_are_isolated_per_world() {
     start_worlds(&mut runtime, &[0, 1]);
 
     let sub_a = runtime
-        .subscribe(WorldId::from_u64(0), Query::builder("players").build().unwrap())
+        .subscribe(
+            WorldId::from_u64(0),
+            Query::builder("players").build().unwrap(),
+        )
         .unwrap();
     let sub_b = runtime
-        .subscribe(WorldId::from_u64(1), Query::builder("players").build().unwrap())
+        .subscribe(
+            WorldId::from_u64(1),
+            Query::builder("players").build().unwrap(),
+        )
         .unwrap();
     runtime.drain(WorldId::from_u64(0), sub_a).unwrap(); // Initial
     runtime.drain(WorldId::from_u64(1), sub_b).unwrap();
@@ -577,8 +674,12 @@ fn subscriptions_are_isolated_per_world() {
     assert_eq!(updates_a.len(), 1);
     assert_eq!(updates_b.len(), 1);
     // Both worlds' row ids start at zero but are independent partitions.
-    assert!(matches!(&updates_a[0], SubscriptionUpdate::Insert { row, .. } if row.row_id().as_u64() == 0));
-    assert!(matches!(&updates_b[0], SubscriptionUpdate::Insert { row, .. } if row.row_id().as_u64() == 0));
+    assert!(
+        matches!(&updates_a[0], SubscriptionUpdate::Insert { row, .. } if row.row_id().as_u64() == 0)
+    );
+    assert!(
+        matches!(&updates_b[0], SubscriptionUpdate::Insert { row, .. } if row.row_id().as_u64() == 0)
+    );
 }
 
 #[test]
@@ -588,11 +689,17 @@ fn failed_ticks_produce_zero_subscription_updates() {
     // Subscribe to both worlds before the step (the initial snapshot is
     // drained and discarded; only subsequent commits produce updates).
     let sub = runtime
-        .subscribe(WorldId::from_u64(1), Query::builder("players").build().unwrap())
+        .subscribe(
+            WorldId::from_u64(1),
+            Query::builder("players").build().unwrap(),
+        )
         .unwrap();
     runtime.drain(WorldId::from_u64(1), sub).unwrap();
     let sub0 = runtime
-        .subscribe(WorldId::from_u64(0), Query::builder("players").build().unwrap())
+        .subscribe(
+            WorldId::from_u64(0),
+            Query::builder("players").build().unwrap(),
+        )
         .unwrap();
     runtime.drain(WorldId::from_u64(0), sub0).unwrap();
 
@@ -608,20 +715,22 @@ fn failed_ticks_produce_zero_subscription_updates() {
 /// A factory whose writer system commits one row on **every other tick**
 /// (the in-between ticks commit zero changes).
 fn every_other_factory() -> WorldFactory {
-    Box::new(|id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-        ensure_players(&mut store);
-        let mut world = World::new(id, store, sim)?;
-        world.add_system(
-            SystemDefinition::new(SystemId::from_u64(0), "every-other-writer", 0, |ctx, _| {
-                if ctx.tick().as_u64() % 2 == 0 {
-                    ctx.insert("players", row![ctx.tick().as_u64(), 10u64, 100i32])?;
-                }
-                Ok(())
-            })
-            .unwrap(),
-        )?;
-        Ok(world)
-    })
+    Box::new(
+        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
+            ensure_players(&mut store);
+            let mut world = World::new(id, store, sim)?;
+            world.add_system(
+                SystemDefinition::new(SystemId::from_u64(0), "every-other-writer", 0, |ctx, _| {
+                    if ctx.tick().as_u64() % 2 == 0 {
+                        ctx.insert("players", row![ctx.tick().as_u64(), 10u64, 100i32])?;
+                    }
+                    Ok(())
+                })
+                .unwrap(),
+            )?;
+            Ok(world)
+        },
+    )
 }
 
 #[test]
@@ -634,7 +743,10 @@ fn empty_change_ticks_do_not_break_subscription_sequences() {
     let mut runtime = Runtime::new(RuntimeConfig::new(every_other_factory())).unwrap();
     start_worlds(&mut runtime, &[0]);
     let sub = runtime
-        .subscribe(WorldId::from_u64(0), Query::builder("players").build().unwrap())
+        .subscribe(
+            WorldId::from_u64(0),
+            Query::builder("players").build().unwrap(),
+        )
         .unwrap();
     runtime.drain(WorldId::from_u64(0), sub).unwrap(); // Initial
 
@@ -660,41 +772,46 @@ fn empty_change_ticks_do_not_break_subscription_sequences() {
 
 /// The `echo` reducer: returns its `v` argument (used to observe per-call
 /// execution order through `TickResult.reducer_results`).
-fn echo(_ctx: &mut nexum_reducer::ReducerContext, args: &nexum_reducer::ReducerArgs) -> nexum_core::Result<Value> {
+fn echo(
+    _ctx: &mut nexum_reducer::ReducerContext,
+    args: &nexum_reducer::ReducerArgs,
+) -> nexum_core::Result<Value> {
     Ok(args.get("v").cloned().unwrap_or(Value::U64(0)))
 }
 
 /// A factory whose system fails on tick 0 (then succeeds), registering the
 /// `echo` reducer — for failed-tick call-recovery tests.
 fn continue_factory() -> WorldFactory {
-    Box::new(|id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-        ensure_players(&mut store);
-        let mut world = World::new(id, store, sim)?;
-        world
-            .native_mut()
-            .register(
-                nexum_reducer::ReducerDefinition::new(
-                    nexum_core::ReducerId::from_u64(1),
-                    "echo",
-                    echo,
+    Box::new(
+        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
+            ensure_players(&mut store);
+            let mut world = World::new(id, store, sim)?;
+            world
+                .native_mut()
+                .register(
+                    nexum_reducer::ReducerDefinition::new(
+                        nexum_core::ReducerId::from_u64(1),
+                        "echo",
+                        echo,
+                    )
+                    .unwrap(),
                 )
-                .unwrap(),
-            )
-            .unwrap();
-        world
-            .add_system(
-                SystemDefinition::new(SystemId::from_u64(0), "flaky", 0, |ctx, _| {
-                    if ctx.tick().as_u64() == 0 {
-                        return Err(Error::invalid_argument("first tick fails"));
-                    }
-                    ctx.insert("players", row![ctx.tick().as_u64(), 10u64, 100i32])?;
-                    Ok(())
-                })
-                .unwrap(),
-            )
-            .unwrap();
-        Ok(world)
-    })
+                .unwrap();
+            world
+                .add_system(
+                    SystemDefinition::new(SystemId::from_u64(0), "flaky", 0, |ctx, _| {
+                        if ctx.tick().as_u64() == 0 {
+                            return Err(Error::invalid_argument("first tick fails"));
+                        }
+                        ctx.insert("players", row![ctx.tick().as_u64(), 10u64, 100i32])?;
+                        Ok(())
+                    })
+                    .unwrap(),
+                )
+                .unwrap();
+            Ok(world)
+        },
+    )
 }
 
 /// A factory whose worlds register the `echo` reducer and nothing else.
@@ -761,7 +878,12 @@ fn reducer_calls_execute_inside_ticks_respecting_the_per_tick_budget_fifo() {
 
     // Each result is typed: success with the echoed value.
     runtime
-        .submit_reducer_call(world, 99, "echo", nexum_reducer::ReducerArgs::new().insert("v", 7u64))
+        .submit_reducer_call(
+            world,
+            99,
+            "echo",
+            nexum_reducer::ReducerArgs::new().insert("v", 7u64),
+        )
         .unwrap();
     let results = runtime.step_detailed().unwrap();
     let result = &results[0].1.reducer_results()[0];
@@ -796,27 +918,21 @@ fn reducer_calls_beyond_the_per_tick_budget_survive_until_future_ticks() {
         .submit_reducer_call(world, 3, "echo", nexum_reducer::ReducerArgs::new())
         .unwrap();
 
-    let ids: Vec<u64> = runtime
-        .step_detailed()
-        .unwrap()[0]
+    let ids: Vec<u64> = runtime.step_detailed().unwrap()[0]
         .1
         .reducer_results()
         .iter()
         .map(|r| r.request_id())
         .collect();
     assert_eq!(ids, vec![1]);
-    let ids: Vec<u64> = runtime
-        .step_detailed()
-        .unwrap()[0]
+    let ids: Vec<u64> = runtime.step_detailed().unwrap()[0]
         .1
         .reducer_results()
         .iter()
         .map(|r| r.request_id())
         .collect();
     assert_eq!(ids, vec![2]);
-    let ids: Vec<u64> = runtime
-        .step_detailed()
-        .unwrap()[0]
+    let ids: Vec<u64> = runtime.step_detailed().unwrap()[0]
         .1
         .reducer_results()
         .iter()
@@ -844,12 +960,19 @@ fn zero_reducer_call_budget_is_an_invalid_configuration_not_a_hang_or_drop() {
 fn reducer_calls_to_unknown_or_stopped_worlds_are_rejected_explicitly() {
     let mut runtime = Runtime::new(RuntimeConfig::new(reducer_factory())).unwrap();
     let world = WorldId::from_u64(0);
-    runtime.create_world(world, SimulationConfig::new()).unwrap();
+    runtime
+        .create_world(world, SimulationConfig::new())
+        .unwrap();
     runtime.stop_world(world).unwrap();
 
     // Unknown world: explicit error, never queued.
     assert!(matches!(
-        runtime.submit_reducer_call(WorldId::from_u64(9), 1, "echo", nexum_reducer::ReducerArgs::new()),
+        runtime.submit_reducer_call(
+            WorldId::from_u64(9),
+            1,
+            "echo",
+            nexum_reducer::ReducerArgs::new()
+        ),
         Err(RuntimeError::UnknownWorld(_))
     ));
     // Stopped world: explicit error, never queued.
@@ -865,7 +988,9 @@ fn reducer_call_queue_overflow_is_rejected_explicitly_never_silently_dropped() {
     let config = RuntimeConfig::new(reducer_factory()).with_max_queued_reducer_calls(2);
     let mut runtime = Runtime::new(config).unwrap();
     let world = WorldId::from_u64(0);
-    runtime.create_world(world, SimulationConfig::new()).unwrap();
+    runtime
+        .create_world(world, SimulationConfig::new())
+        .unwrap();
     runtime.start_world(world).unwrap();
 
     runtime
@@ -884,9 +1009,7 @@ fn reducer_call_queue_overflow_is_rejected_explicitly_never_silently_dropped() {
     assert_eq!(runtime.metrics().reducer_calls_accepted, 2);
 
     // Both accepted calls still execute.
-    let ids: Vec<u64> = runtime
-        .step_detailed()
-        .unwrap()[0]
+    let ids: Vec<u64> = runtime.step_detailed().unwrap()[0]
         .1
         .reducer_results()
         .iter()
@@ -905,18 +1028,28 @@ fn calls_drained_into_a_failed_tick_are_requeued_not_lost() {
         .with_tick_failure_policy(TickFailurePolicy::Continue);
     let mut runtime = Runtime::new(config).unwrap();
     let world = WorldId::from_u64(0);
-    runtime.create_world(world, SimulationConfig::new()).unwrap();
+    runtime
+        .create_world(world, SimulationConfig::new())
+        .unwrap();
     runtime.start_world(world).unwrap();
 
     runtime
-        .submit_reducer_call(world, 1, "echo", nexum_reducer::ReducerArgs::new().insert("v", 1u64))
+        .submit_reducer_call(
+            world,
+            1,
+            "echo",
+            nexum_reducer::ReducerArgs::new().insert("v", 1u64),
+        )
         .unwrap();
     assert_eq!(runtime.metrics().reducer_calls_accepted, 1);
 
     // Tick 0 fails; under Continue the world keeps running.
     let report = runtime.step().unwrap();
     assert_eq!(report.failed, 1);
-    assert_eq!(runtime.world_status(world).unwrap().state, WorldLifecycle::Running);
+    assert_eq!(
+        runtime.world_status(world).unwrap().state,
+        WorldLifecycle::Running
+    );
 
     // Tick 1 executes the requeued call (FIFO) alongside the now-healthy
     // system — exactly one terminal result, not lost.
@@ -931,7 +1064,10 @@ fn calls_drained_into_a_failed_tick_are_requeued_not_lost() {
         .collect();
     assert_eq!(ids, vec![1]);
     assert!(results[0].1.reducer_results()[0].is_ok());
-    assert_eq!(results[0].1.reducer_results()[0].value(), Some(&Value::U64(1)));
+    assert_eq!(
+        results[0].1.reducer_results()[0].value(),
+        Some(&Value::U64(1))
+    );
 }
 
 // ---------------------------------------------------------- determinism
@@ -969,21 +1105,38 @@ fn failure_isolation_keeps_other_worlds_correct() {
     let report = runtime.step().unwrap();
     assert_eq!(report.succeeded, 2);
     assert_eq!(report.failed, 1);
-    assert_eq!(runtime.world_status(WorldId::from_u64(1)).unwrap().state, WorldLifecycle::Failed);
+    assert_eq!(
+        runtime.world_status(WorldId::from_u64(1)).unwrap().state,
+        WorldLifecycle::Failed
+    );
 
     // Subsequent steps tick only the healthy worlds.
     let report = runtime.step().unwrap();
     assert_eq!(report.worlds, 2);
     assert_eq!(report.succeeded, 2);
-    assert_eq!(runtime.world_status(WorldId::from_u64(0)).unwrap().next_tick, TickId::from_u64(2));
-    assert_eq!(runtime.world_status(WorldId::from_u64(2)).unwrap().next_tick, TickId::from_u64(2));
+    assert_eq!(
+        runtime
+            .world_status(WorldId::from_u64(0))
+            .unwrap()
+            .next_tick,
+        TickId::from_u64(2)
+    );
+    assert_eq!(
+        runtime
+            .world_status(WorldId::from_u64(2))
+            .unwrap()
+            .next_tick,
+        TickId::from_u64(2)
+    );
 
     // The failed world's partial write never committed (0 rows recovered
     // from its store is unobservable directly, but its failed status is).
     let failed_events = runtime
         .drain_events()
         .into_iter()
-        .filter(|e| matches!(e, crate::RuntimeEvent::WorldFailed { world, .. } if world.as_u64() == 1))
+        .filter(
+            |e| matches!(e, crate::RuntimeEvent::WorldFailed { world, .. } if world.as_u64() == 1),
+        )
         .count();
     assert_eq!(failed_events, 1);
 }
@@ -998,12 +1151,24 @@ fn shutdown_is_deterministic_and_blocks_new_operations() {
 
     runtime.shutdown().unwrap();
     assert_eq!(runtime.state(), RuntimeState::Stopped);
-    assert_eq!(runtime.worker_status(nexum_core::WorkerId::from_u64(0)).unwrap().state, WorkerState::Stopped);
-    assert_eq!(runtime.world_status(WorldId::from_u64(0)).unwrap().state, WorldLifecycle::Stopped);
+    assert_eq!(
+        runtime
+            .worker_status(nexum_core::WorkerId::from_u64(0))
+            .unwrap()
+            .state,
+        WorkerState::Stopped
+    );
+    assert_eq!(
+        runtime.world_status(WorldId::from_u64(0)).unwrap().state,
+        WorldLifecycle::Stopped
+    );
 
     // Everything is rejected after shutdown.
     assert!(matches!(runtime.step(), Err(RuntimeError::Shutdown)));
-    assert!(matches!(runtime.tick_once(WorldId::from_u64(0)), Err(RuntimeError::Shutdown)));
+    assert!(matches!(
+        runtime.tick_once(WorldId::from_u64(0)),
+        Err(RuntimeError::Shutdown)
+    ));
     assert!(matches!(
         runtime.create_world(WorldId::from_u64(9), SimulationConfig::new()),
         Err(RuntimeError::Shutdown)
@@ -1034,10 +1199,8 @@ fn invalid_configurations_are_rejected() {
     ));
     // Persistence without a directory.
     let no_dir = RuntimeConfig {
-        ..RuntimeConfig::new(writer_factory()).with_persistence(
-            PersistencePolicy::Flush,
-            PathBuf::new(),
-        )
+        ..RuntimeConfig::new(writer_factory())
+            .with_persistence(PersistencePolicy::Flush, PathBuf::new())
     };
     let config = RuntimeConfig {
         persistence_dir: None,
@@ -1051,12 +1214,12 @@ fn invalid_configurations_are_rejected() {
 
 #[test]
 fn events_are_bounded_and_metrics_count_work() {
-    let mut runtime = Runtime::new(
-        RuntimeConfig::new(writer_factory()).with_event_log_limit(4),
-    )
-    .unwrap();
+    let mut runtime =
+        Runtime::new(RuntimeConfig::new(writer_factory()).with_event_log_limit(4)).unwrap();
     let world = WorldId::from_u64(0);
-    runtime.create_world(world, SimulationConfig::new()).unwrap();
+    runtime
+        .create_world(world, SimulationConfig::new())
+        .unwrap();
     runtime.start_world(world).unwrap();
     for _ in 0..5 {
         runtime.step().unwrap();
@@ -1081,60 +1244,63 @@ fn events_are_bounded_and_metrics_count_work() {
 /// every tick, so outbound collection, cross-partition delivery, and the
 /// handler commit path are all exercised through `step`/`step_detailed`.
 fn ring_factory() -> WorldFactory {
-    Box::new(move |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-        if store.table("ledger").is_none() {
-            store
-                .create_table(
-                    nexum_core::TableSchema::builder("ledger")
-                        .column("seq", ColumnType::U64)
-                        .column("from", ColumnType::U64)
-                        .column("to", ColumnType::U64)
-                        .primary_key(&["seq", "from"])
-                        .build()
-                        .unwrap(),
+    Box::new(
+        move |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
+            if store.table("ledger").is_none() {
+                store
+                    .create_table(
+                        nexum_core::TableSchema::builder("ledger")
+                            .column("seq", ColumnType::U64)
+                            .column("from", ColumnType::U64)
+                            .column("to", ColumnType::U64)
+                            .primary_key(&["seq", "from"])
+                            .build()
+                            .unwrap(),
+                    )
+                    .unwrap();
+            }
+            let mut world = World::new(id, store, sim)?;
+            world
+                .native_mut()
+                .register(
+                    ReducerDefinition::new(ReducerId::from_u64(0), "ring", |ctx, args| {
+                        let seq = args.require_u64("seq")?;
+                        let from = args.require_u64("from")?;
+                        let to = args.require_u64("to")?;
+                        ctx.insert("ledger", row![seq, from, to])?;
+                        Ok(Value::U64(seq))
+                    })
+                    .unwrap(),
                 )
                 .unwrap();
-        }
-        let mut world = World::new(id, store, sim)?;
-        world
-            .native_mut()
-            .register(
-                ReducerDefinition::new(ReducerId::from_u64(0), "ring", |ctx, args| {
-                    let seq = args.require_u64("seq")?;
-                    let from = args.require_u64("from")?;
-                    let to = args.require_u64("to")?;
-                    ctx.insert("ledger", row![seq, from, to])?;
-                    Ok(Value::U64(seq))
+            world.add_system(
+                SystemDefinition::new(SystemId::from_u64(0), "sender", 0, |ctx, _| {
+                    // Capture-free (systems are fn pointers): the ring target
+                    // derives from the sender partition (0 → 1, 1 → 2, else → 0).
+                    // Destinations with several senders still see deterministic
+                    // `(sent_tick, from, seq)` delivery order (ADR-012 D5).
+                    let from = ctx.partition().as_u64();
+                    let to = match from {
+                        0 => 1,
+                        1 => 2,
+                        _ => 0,
+                    };
+                    let tick = ctx.tick().as_u64();
+                    ctx.send_to(
+                        PartitionId::from_u64(to),
+                        "ring",
+                        ReducerArgs::new()
+                            .insert("seq", tick)
+                            .insert("from", from)
+                            .insert("to", to),
+                    )?;
+                    Ok(())
                 })
                 .unwrap(),
-            )
-            .unwrap();
-        world
-            .add_system(SystemDefinition::new(SystemId::from_u64(0), "sender", 0, |ctx, _| {
-                // Capture-free (systems are fn pointers): the ring target
-                // derives from the sender partition (0 → 1, 1 → 2, else → 0).
-                // Destinations with several senders still see deterministic
-                // `(sent_tick, from, seq)` delivery order (ADR-012 D5).
-                let from = ctx.partition().as_u64();
-                let to = match from {
-                    0 => 1,
-                    1 => 2,
-                    _ => 0,
-                };
-                let tick = ctx.tick().as_u64();
-                ctx.send_to(
-                    PartitionId::from_u64(to),
-                    "ring",
-                    ReducerArgs::new()
-                        .insert("seq", tick)
-                        .insert("from", from)
-                        .insert("to", to),
-                )?;
-                Ok(())
-            })
-            .unwrap())?;
-        Ok(world)
-    })
+            )?;
+            Ok(world)
+        },
+    )
 }
 
 /// The full observable outcome of a ring scenario — per-world committed
@@ -1158,15 +1324,13 @@ struct RingTrace {
 /// Returns the worker-count-independent trace and the drained
 /// `TickCompleted` stream (order is `(worker_id, world_id)` by design,
 /// ADR-010 D2, so it depends on the worker count).
-fn run_ring_scenario(
-    workers: usize,
-    worlds: u64,
-    ticks: u64,
-) -> (RingTrace, Vec<(u64, u64)>) {
+fn run_ring_scenario(workers: usize, worlds: u64, ticks: u64) -> (RingTrace, Vec<(u64, u64)>) {
     let config = RuntimeConfig::new(ring_factory()).with_worker_count(workers);
     let mut runtime = Runtime::new(config).unwrap();
     for world in 0..worlds {
-        runtime.create_world(WorldId::from_u64(world), SimulationConfig::new()).unwrap();
+        runtime
+            .create_world(WorldId::from_u64(world), SimulationConfig::new())
+            .unwrap();
         runtime
             .register_partition(PartitionId::from_u64(world), WorldId::from_u64(world))
             .unwrap();
@@ -1192,7 +1356,13 @@ fn run_ring_scenario(
         })
         .collect();
     let next_ticks = (0..worlds)
-        .map(|world| runtime.world_status(WorldId::from_u64(world)).unwrap().next_tick.as_u64())
+        .map(|world| {
+            runtime
+                .world_status(WorldId::from_u64(world))
+                .unwrap()
+                .next_tick
+                .as_u64()
+        })
         .collect();
     let metrics = runtime.metrics();
     let trace = RingTrace {
@@ -1283,7 +1453,13 @@ fn parallel_step_preserves_failure_isolation() {
         events.sort_unstable();
         let next_ticks = [0u64, 1, 2]
             .iter()
-            .map(|world| runtime.world_status(WorldId::from_u64(*world)).unwrap().next_tick.as_u64())
+            .map(|world| {
+                runtime
+                    .world_status(WorldId::from_u64(*world))
+                    .unwrap()
+                    .next_tick
+                    .as_u64()
+            })
             .collect();
         (reports, events, next_ticks)
     };

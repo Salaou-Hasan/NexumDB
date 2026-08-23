@@ -31,11 +31,7 @@ pub struct ReducerCall {
 
 impl ReducerCall {
     /// Builds a call. `reducer` must not be empty.
-    pub fn new(
-        request_id: u64,
-        reducer: impl Into<String>,
-        args: ReducerArgs,
-    ) -> Result<Self> {
+    pub fn new(request_id: u64, reducer: impl Into<String>, args: ReducerArgs) -> Result<Self> {
         let reducer = reducer.into();
         if reducer.is_empty() {
             return Err(Error::invalid_argument(

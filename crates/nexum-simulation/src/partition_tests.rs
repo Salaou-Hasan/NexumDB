@@ -5,9 +5,7 @@
 
 use nexum_core::row;
 use nexum_core::schema::TableSchema;
-use nexum_core::{
-    ColumnType, Error, PartitionId, Row, RowId, SystemId, TickId, Value, WorldId,
-};
+use nexum_core::{ColumnType, Error, PartitionId, Row, RowId, SystemId, TickId, Value, WorldId};
 use nexum_reducer::{ReducerArgs, ReducerDefinition};
 use nexum_table::TableStore;
 use nexum_wasm::{WasmLimits, WasmModuleRegistry};
@@ -77,11 +75,7 @@ fn send_to_validates_target_kind_and_budget() {
             SystemDefinition::new(SystemId::from_u64(0), "sender", 0, |ctx, _| {
                 // Unknown target (not in topology {1, 7, 9}).
                 let err = ctx
-                    .send_to(
-                        PartitionId::from_u64(42),
-                        "move",
-                        ReducerArgs::new(),
-                    )
+                    .send_to(PartitionId::from_u64(42), "move", ReducerArgs::new())
                     .unwrap_err();
                 assert!(matches!(err, Error::InvalidArgument(_)));
                 // Sending to self is rejected.
@@ -181,10 +175,7 @@ fn outbound_commits_with_the_tick_in_send_order() {
     }
     assert_eq!(outbound[0].to(), PartitionId::from_u64(1));
     assert_eq!(outbound[1].to(), PartitionId::from_u64(9));
-    assert_eq!(
-        outbound[0].payload().require_u64("n").unwrap(),
-        1
-    );
+    assert_eq!(outbound[0].payload().require_u64("n").unwrap(), 1);
 }
 
 #[test]
@@ -239,7 +230,9 @@ fn delivered_messages_run_handlers_in_deterministic_batch_order() {
         msg(1, 7, 0, 1, "record"),
         msg(1, 7, 1, 0, "record"),
     ];
-    let result = world.tick_messages(&frame(0), &delivered).expect("tick committed");
+    let result = world
+        .tick_messages(&frame(0), &delivered)
+        .expect("tick committed");
     // Handlers wrote one ledger row per message; order follows the sort.
     let rows: Vec<(RowId, Row)> = world
         .store()
@@ -262,10 +255,7 @@ fn delivered_messages_run_handlers_in_deterministic_batch_order() {
             )
         })
         .collect();
-    assert_eq!(
-        keys,
-        vec![(1, 1), (1, 2), (1, 3), (2, 1), (1, 0)]
-    );
+    assert_eq!(keys, vec![(1, 1), (1, 2), (1, 3), (2, 1), (1, 0)]);
     assert_eq!(result.outbound().len(), 0);
 }
 
@@ -373,15 +363,19 @@ fn wasm_message_handlers_commit_atomically() {
     world
         .native_mut()
         .register(
-            ReducerDefinition::new(nexum_core::ReducerId::from_u64(9), "unrelated", |_ctx, _| {
-                Err(Error::internal("wrong handler invoked"))
-            })
+            ReducerDefinition::new(
+                nexum_core::ReducerId::from_u64(9),
+                "unrelated",
+                |_ctx, _| Err(Error::internal("wrong handler invoked")),
+            )
             .unwrap(),
         )
         .unwrap();
 
     let delivered = vec![msg(1, 7, 0, 0, "ping")];
-    let result = world.tick_messages(&frame(0), &delivered).expect("tick committed");
+    let result = world
+        .tick_messages(&frame(0), &delivered)
+        .expect("tick committed");
     assert_eq!(result.changes().len(), 1);
     let rows: Vec<Row> = world
         .store()
@@ -427,7 +421,11 @@ fn parallel_mode_produces_identical_outbound_traces() {
                 )
                 .unwrap();
         }
-        world.tick(&frame(0)).expect("tick committed").outbound().to_vec()
+        world
+            .tick(&frame(0))
+            .expect("tick committed")
+            .outbound()
+            .to_vec()
     };
 
     let serial = run(SimulationConfig::new().with_execution(ExecutionMode::Serial));

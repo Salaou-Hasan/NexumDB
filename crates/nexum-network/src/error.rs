@@ -57,7 +57,10 @@ impl fmt::Display for ProtocolError {
                 write!(f, "unsupported protocol version {version}")
             }
             Self::Oversized { len, max } => {
-                write!(f, "frame payload of {len} bytes exceeds the maximum of {max}")
+                write!(
+                    f,
+                    "frame payload of {len} bytes exceeds the maximum of {max}"
+                )
             }
             Self::Truncated => f.write_str("truncated frame"),
             Self::BadChecksum => f.write_str("frame checksum mismatch"),

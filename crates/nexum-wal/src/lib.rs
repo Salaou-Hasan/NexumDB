@@ -68,6 +68,6 @@ pub mod recovery;
 pub mod snapshot;
 pub mod wal;
 
-pub use recovery::{recover, RecoveryReport, RecoveredSnapshot};
-pub use snapshot::{Snapshot, SNAPSHOT_PREFIX, SNAPSHOT_SUFFIX, SNAPSHOT_VERSION};
-pub use wal::{DurabilityPolicy, Lsn, RecoveredTx, Wal, FORMAT_VERSION, HEADER_MAGIC};
+pub use recovery::{RecoveredSnapshot, RecoveryReport, recover};
+pub use snapshot::{SNAPSHOT_PREFIX, SNAPSHOT_SUFFIX, SNAPSHOT_VERSION, Snapshot};
+pub use wal::{DurabilityPolicy, FORMAT_VERSION, HEADER_MAGIC, Lsn, RecoveredTx, Wal};

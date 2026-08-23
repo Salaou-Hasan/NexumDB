@@ -7,7 +7,7 @@
 //! [`SdkError`].
 
 pub use nexum_network::protocol::{
-    ClientMessage, DeltaKind, ServerMessage, HEADER_LEN, PROTOCOL_MAGIC, PROTOCOL_VERSION,
+    ClientMessage, DeltaKind, HEADER_LEN, PROTOCOL_MAGIC, PROTOCOL_VERSION, ServerMessage,
 };
 
 use crate::error::SdkError;

@@ -139,7 +139,11 @@ mod tests {
         let mut reads = ReadSet::new();
         // Insert out of order; iteration must be sorted by (TableId, RowId).
         reads.record(TableId::from_u64(1), RowId::from_u64(5), None);
-        reads.record(TableId::from_u64(0), RowId::from_u64(9), Some(Version::ZERO));
+        reads.record(
+            TableId::from_u64(0),
+            RowId::from_u64(9),
+            Some(Version::ZERO),
+        );
         reads.record(TableId::from_u64(0), RowId::from_u64(3), None);
 
         let order: Vec<(TableId, RowId)> = reads.entries().map(|(t, r, _)| (t, r)).collect();
@@ -159,7 +163,10 @@ mod tests {
         reads.record_table(TableId::from_u64(2), Version::from_u64(7));
         reads.record_table(TableId::from_u64(0), Version::from_u64(3));
 
-        assert_eq!(reads.get_table(TableId::from_u64(0)), Some(Version::from_u64(3)));
+        assert_eq!(
+            reads.get_table(TableId::from_u64(0)),
+            Some(Version::from_u64(3))
+        );
         assert_eq!(reads.get_table(TableId::from_u64(1)), None);
 
         // Table observations iterate in TableId order and count toward len.
@@ -173,7 +180,11 @@ mod tests {
         );
 
         // Mixed with row observations.
-        reads.record(TableId::from_u64(0), RowId::from_u64(1), Some(Version::ZERO));
+        reads.record(
+            TableId::from_u64(0),
+            RowId::from_u64(1),
+            Some(Version::ZERO),
+        );
         assert_eq!(reads.len(), 3);
         assert!(!reads.is_empty());
     }

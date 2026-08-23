@@ -134,7 +134,10 @@ impl<'a> SubscriptionRef<'a> {
     /// present. Test-only introspection proving payload sharing (ADR-019
     /// D4).
     #[cfg(test)]
-    pub(crate) fn window_row(&self, row_id: nexum_core::RowId) -> Option<&std::sync::Arc<nexum_core::Row>> {
+    pub(crate) fn window_row(
+        &self,
+        row_id: nexum_core::RowId,
+    ) -> Option<&std::sync::Arc<nexum_core::Row>> {
         self.view.window_row(row_id)
     }
 }
@@ -297,8 +300,7 @@ impl SubscriptionRegistry {
         let seq = self.next_seq;
         self.next_seq += 1;
 
-        let changed_tables: BTreeSet<TableId> =
-            changes.iter().map(Change::table_id).collect();
+        let changed_tables: BTreeSet<TableId> = changes.iter().map(Change::table_id).collect();
         // Table ids that exist right now, for drop detection.
         let existing: BTreeSet<TableId> = store.tables().map(|(_, table)| table.id()).collect();
 
@@ -340,7 +342,9 @@ impl SubscriptionRegistry {
                 continue;
             }
             // Evaluate the shared view once per distinct query (ADR-020 D1).
-            let view = self.views[view_idx].as_mut().expect("referenced view exists");
+            let view = self.views[view_idx]
+                .as_mut()
+                .expect("referenced view exists");
             let view_table = view.table_id();
             let mut scratch: Vec<SubscriptionUpdate> = Vec::new();
             for change in changes
@@ -377,27 +381,30 @@ impl SubscriptionRegistry {
 
     /// Returns `true` when the subscription has buffered updates waiting.
     pub fn has_pending(&self, id: SubscriptionId) -> Result<bool> {
-        let subscription = self.subscriptions.get(&id).ok_or_else(|| {
-            Error::not_found(format!("subscription {id} does not exist"))
-        })?;
+        let subscription = self
+            .subscriptions
+            .get(&id)
+            .ok_or_else(|| Error::not_found(format!("subscription {id} does not exist")))?;
         Ok(subscription.has_pending())
     }
 
     /// Takes the pending updates of one subscription, leaving its buffer
     /// empty. Returns [`Error::not_found`] for an unknown subscription.
     pub fn drain(&mut self, id: SubscriptionId) -> Result<Vec<SubscriptionUpdate>> {
-        let subscription = self.subscriptions.get_mut(&id).ok_or_else(|| {
-            Error::not_found(format!("subscription {id} does not exist"))
-        })?;
+        let subscription = self
+            .subscriptions
+            .get_mut(&id)
+            .ok_or_else(|| Error::not_found(format!("subscription {id} does not exist")))?;
         Ok(subscription.take_buffer())
     }
 
     /// Ends a subscription and drops its delivery state. The shared view is
     /// freed when the last member leaves (ADR-020 D1).
     pub fn unsubscribe(&mut self, id: SubscriptionId) -> Result<()> {
-        let subscription = self.subscriptions.remove(&id).ok_or_else(|| {
-            Error::not_found(format!("subscription {id} does not exist"))
-        })?;
+        let subscription = self
+            .subscriptions
+            .remove(&id)
+            .ok_or_else(|| Error::not_found(format!("subscription {id} does not exist")))?;
         let view_idx = subscription.view();
         self.view_counts[view_idx] -= 1;
         if self.view_counts[view_idx] == 0 {
@@ -417,9 +424,10 @@ impl SubscriptionRegistry {
     /// Returns `true` if the subscription is stale (fell behind or its table
     /// was dropped).
     pub fn is_stale(&self, id: SubscriptionId) -> Result<bool> {
-        let subscription = self.subscriptions.get(&id).ok_or_else(|| {
-            Error::not_found(format!("subscription {id} does not exist"))
-        })?;
+        let subscription = self
+            .subscriptions
+            .get(&id)
+            .ok_or_else(|| Error::not_found(format!("subscription {id} does not exist")))?;
         Ok(subscription.state() == SubscriptionState::Stale)
     }
 
@@ -455,10 +463,7 @@ impl SubscriptionRegistry {
         view.set_compiled(compiled);
         let seq = self.next_seq; // observation point
         let delivered = view.rebuild(rows);
-        let subscription = self
-            .subscriptions
-            .get_mut(&id)
-            .expect("member exists");
+        let subscription = self.subscriptions.get_mut(&id).expect("member exists");
         subscription.receive_resync(seq, delivered);
         Ok(())
     }

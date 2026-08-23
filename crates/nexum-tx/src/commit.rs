@@ -70,7 +70,9 @@ pub(crate) fn commit(store: &mut TableStore, tx: &Transaction) -> Result<Vec<Cha
     // 3. COLLECT — per touched table, in TableId order, the delta only.
     let mut changes = Vec::new();
     for (table_id, base) in &bases {
-        let table = store.table_mut_by_id(*table_id).expect("validated table exists");
+        let table = store
+            .table_mut_by_id(*table_id)
+            .expect("validated table exists");
         let drained = table.drain_changes();
         changes.extend(drained.into_iter().skip(*base));
     }
@@ -84,9 +86,9 @@ fn validate(store: &TableStore, tx: &Transaction) -> Result<()> {
     // 0. Table observations (phantom protection): the observed mutation
     //    epoch must still be the live one. Coarsest checks first.
     for (table_id, observed_epoch) in tx.table_reads() {
-        let table = store.table_by_id(table_id).ok_or_else(|| {
-            Error::not_found(format!("table {table_id} does not exist"))
-        })?;
+        let table = store
+            .table_by_id(table_id)
+            .ok_or_else(|| Error::not_found(format!("table {table_id} does not exist")))?;
         let live = table.epoch();
         if live != observed_epoch {
             return Err(Error::conflict(format!(
@@ -98,9 +100,9 @@ fn validate(store: &TableStore, tx: &Transaction) -> Result<()> {
 
     // 1. Read set: every observation must still hold.
     for (table_id, row_id, observed) in tx.reads() {
-        let table = store.table_by_id(table_id).ok_or_else(|| {
-            Error::not_found(format!("table {table_id} does not exist"))
-        })?;
+        let table = store
+            .table_by_id(table_id)
+            .ok_or_else(|| Error::not_found(format!("table {table_id} does not exist")))?;
         let live = table.version_of(row_id);
         if live != observed {
             return Err(Error::conflict(format!(
@@ -114,9 +116,9 @@ fn validate(store: &TableStore, tx: &Transaction) -> Result<()> {
     let mut released: ReleasedKeys = HashMap::new();
     for (table_id, row_id, entry) in tx.writes() {
         if let WriteEntry::Delete = entry {
-            let table = store.table_by_id(table_id).ok_or_else(|| {
-                Error::not_found(format!("table {table_id} does not exist"))
-            })?;
+            let table = store
+                .table_by_id(table_id)
+                .ok_or_else(|| Error::not_found(format!("table {table_id} does not exist")))?;
             if !table.contains(row_id) {
                 return Err(Error::not_found(format!(
                     "cannot delete row {row_id} in table '{}': it does not exist",
@@ -139,9 +141,9 @@ fn validate(store: &TableStore, tx: &Transaction) -> Result<()> {
             WriteEntry::Insert(row) | WriteEntry::Update(row) => row,
             WriteEntry::Delete => continue,
         };
-        let table = store.table_by_id(table_id).ok_or_else(|| {
-            Error::not_found(format!("table {table_id} does not exist"))
-        })?;
+        let table = store
+            .table_by_id(table_id)
+            .ok_or_else(|| Error::not_found(format!("table {table_id} does not exist")))?;
 
         if matches!(entry, WriteEntry::Update(_)) && !table.contains(row_id) {
             return Err(Error::not_found(format!(

@@ -190,7 +190,11 @@ impl SystemRegistry {
                 definition.id
             )));
         }
-        if self.systems.iter().any(|system| system.name == definition.name) {
+        if self
+            .systems
+            .iter()
+            .any(|system| system.name == definition.name)
+        {
             return Err(Error::already_exists(format!(
                 "simulation system '{}' is already registered",
                 definition.name
@@ -258,9 +262,9 @@ impl SystemRegistry {
 
 #[cfg(test)]
 mod tests {
-use super::*;
+    use super::*;
 
-fn system(id: u64, name: &str, priority: u32) -> SystemDefinition {
+    fn system(id: u64, name: &str, priority: u32) -> SystemDefinition {
         SystemDefinition::new(SystemId::from_u64(id), name, priority, |_, _| Ok(())).unwrap()
     }
 
@@ -272,7 +276,11 @@ fn system(id: u64, name: &str, priority: u32) -> SystemDefinition {
         registry.register(system(10, "first", 5)).unwrap();
         registry.register(system(20, "mid", 10)).unwrap();
         registry.register(system(40, "tie-low", 10)).unwrap();
-        let names: Vec<&str> = registry.ordered().iter().map(SystemDefinition::name).collect();
+        let names: Vec<&str> = registry
+            .ordered()
+            .iter()
+            .map(SystemDefinition::name)
+            .collect();
         assert_eq!(names, vec!["first", "mid", "tie-low", "late"]);
     }
 
@@ -306,8 +314,7 @@ fn system(id: u64, name: &str, priority: u32) -> SystemDefinition {
     #[test]
     fn execute_is_a_plain_fn_pointer() {
         let definition =
-            SystemDefinition::new(SystemId::from_u64(9), "const", 0, |_, _| Ok(()))
-                .unwrap();
+            SystemDefinition::new(SystemId::from_u64(9), "const", 0, |_, _| Ok(())).unwrap();
         // SystemFn must be Copy and usable without closure captures.
         let _second: SystemFn = definition.execute();
     }

@@ -251,7 +251,9 @@ impl Default for Crc32 {
 impl Crc32 {
     /// Creates a new hasher in the initial state.
     pub fn new() -> Self {
-        Self { crc: 0xFFFF_FFFFu32 }
+        Self {
+            crc: 0xFFFF_FFFFu32,
+        }
     }
 
     /// Feeds a byte slice into the running CRC.
@@ -302,15 +304,21 @@ fn take<'a>(cursor: &mut &'a [u8], len: usize) -> Result<&'a [u8]> {
 }
 
 fn short(cursor: &mut &[u8]) -> Result<[u8; 2]> {
-    take(cursor, 2)?.try_into().map_err(|_| Error::internal("binary: 2 bytes"))
+    take(cursor, 2)?
+        .try_into()
+        .map_err(|_| Error::internal("binary: 2 bytes"))
 }
 
 fn quad(cursor: &mut &[u8]) -> Result<[u8; 4]> {
-    take(cursor, 4)?.try_into().map_err(|_| Error::internal("binary: 4 bytes"))
+    take(cursor, 4)?
+        .try_into()
+        .map_err(|_| Error::internal("binary: 4 bytes"))
 }
 
 fn long(cursor: &mut &[u8]) -> Result<[u8; 8]> {
-    take(cursor, 8)?.try_into().map_err(|_| Error::internal("binary: 8 bytes"))
+    take(cursor, 8)?
+        .try_into()
+        .map_err(|_| Error::internal("binary: 8 bytes"))
 }
 
 /// Maps a [`ColumnType`] to its stable one-byte tag.
@@ -348,7 +356,11 @@ fn column_type_from_tag(tag: u8) -> Result<ColumnType> {
         10 => ColumnType::F64,
         11 => ColumnType::String,
         12 => ColumnType::Bytes,
-        _ => return Err(Error::internal(format!("binary: unknown column type tag {tag}"))),
+        _ => {
+            return Err(Error::internal(format!(
+                "binary: unknown column type tag {tag}"
+            )));
+        }
     })
 }
 
@@ -357,8 +369,11 @@ mod tests {
     use super::*;
     use crate::row;
 
-    fn roundtrip<T>(encode: impl Fn(&mut Vec<u8>, &T), decode: impl Fn(&mut &[u8]) -> Result<T>, value: T)
-    where
+    fn roundtrip<T>(
+        encode: impl Fn(&mut Vec<u8>, &T),
+        decode: impl Fn(&mut &[u8]) -> Result<T>,
+        value: T,
+    ) where
         T: std::fmt::Debug + PartialEq,
     {
         let mut bytes = Vec::new();

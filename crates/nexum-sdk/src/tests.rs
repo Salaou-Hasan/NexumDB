@@ -11,12 +11,12 @@ use nexum_subscription::DeliveredRow;
 use crate::connection::ConnectionState;
 use crate::error::SdkError;
 use crate::event::ServerEvent;
-use crate::protocol::{DeltaKind, ServerMessage, PROTOCOL_VERSION};
+use crate::protocol::{DeltaKind, PROTOCOL_VERSION, ServerMessage};
 use crate::request::PendingCall;
 use crate::session::SessionInfo;
 use crate::subscription::SubscriptionHandle;
-use crate::view::View;
 use crate::transport::ClientTransport;
+use crate::view::View;
 use crate::{Client, SdkConfig};
 
 /// A transport that buffers a fixed inbound queue and accepts outbound
@@ -131,7 +131,10 @@ fn view_applies_snapshot_and_contiguous_deltas() {
         1,
         DeltaKind::Insert,
         RowId::from_u64(3),
-        Some(DeliveredRow::new(RowId::from_u64(3), nexum_core::row![3u64, 30u64, 80i32])),
+        Some(DeliveredRow::new(
+            RowId::from_u64(3),
+            nexum_core::row![3u64, 30u64, 80i32],
+        )),
     )
     .unwrap();
     assert_eq!(view.len(), 3);
@@ -142,7 +145,10 @@ fn view_applies_snapshot_and_contiguous_deltas() {
         2,
         DeltaKind::Update,
         RowId::from_u64(1),
-        Some(DeliveredRow::new(RowId::from_u64(1), nexum_core::row![1u64, 10u64, 1i32])),
+        Some(DeliveredRow::new(
+            RowId::from_u64(1),
+            nexum_core::row![1u64, 10u64, 1i32],
+        )),
     )
     .unwrap();
     assert_eq!(
@@ -151,7 +157,8 @@ fn view_applies_snapshot_and_contiguous_deltas() {
     );
 
     // Delete a row (seq 3).
-    view.apply_delta(3, DeltaKind::Delete, RowId::from_u64(2), None).unwrap();
+    view.apply_delta(3, DeltaKind::Delete, RowId::from_u64(2), None)
+        .unwrap();
     assert_eq!(view.len(), 2);
     assert!(!view.contains(RowId::from_u64(2)));
     assert_eq!(view.seq(), 3);
@@ -168,11 +175,14 @@ fn view_detects_sequence_gaps() {
     assert_eq!(err.expected, 1);
     assert_eq!(err.got, 2);
     // The first commit sits at the observation point (seq == snapshot seq).
-    view.apply_delta(0, DeltaKind::Insert, RowId::from_u64(1), Some(row_a())).unwrap();
+    view.apply_delta(0, DeltaKind::Insert, RowId::from_u64(1), Some(row_a()))
+        .unwrap();
     // Several deltas of the same commit share its sequence.
-    view.apply_delta(0, DeltaKind::Insert, RowId::from_u64(2), Some(row_b())).unwrap();
+    view.apply_delta(0, DeltaKind::Insert, RowId::from_u64(2), Some(row_b()))
+        .unwrap();
     // The next commit advances the cursor by one.
-    view.apply_delta(1, DeltaKind::Insert, RowId::from_u64(3), Some(row_b())).unwrap();
+    view.apply_delta(1, DeltaKind::Insert, RowId::from_u64(3), Some(row_b()))
+        .unwrap();
     assert_eq!(view.seq(), 1);
     // A delta from an older commit after the cursor advanced is a reorder.
     let err = view
@@ -254,7 +264,11 @@ fn api_guards_reject_operations_before_connect() {
         .unwrap_err();
     assert!(matches!(err, SdkError::NotConnected));
     let err = client
-        .subscribe(nexum_subscription::Query::builder("players").build().unwrap())
+        .subscribe(
+            nexum_subscription::Query::builder("players")
+                .build()
+                .unwrap(),
+        )
         .unwrap_err();
     assert!(matches!(err, SdkError::NotConnected));
 }
@@ -457,7 +471,10 @@ fn stale_then_resync_restores_the_view() {
     assert_eq!(client.view(local).unwrap().len(), 2);
     assert!(matches!(
         client.take_events().as_slice(),
-        [ServerEvent::Stale { .. }, ServerEvent::SubscriptionResynced { seq: 10, .. }]
+        [
+            ServerEvent::Stale { .. },
+            ServerEvent::SubscriptionResynced { seq: 10, .. }
+        ]
     ));
 }
 
@@ -486,7 +503,14 @@ fn view_gap_marks_the_handle_stale() {
     assert!(client.subscription(local).unwrap().is_stale());
     assert!(matches!(
         client.take_events().as_slice(),
-        [ServerEvent::SubscriptionResynced { .. }, ServerEvent::ViewGap { expected: 1, got: 3, .. }]
+        [
+            ServerEvent::SubscriptionResynced { .. },
+            ServerEvent::ViewGap {
+                expected: 1,
+                got: 3,
+                ..
+            }
+        ]
     ));
 }
 
@@ -555,7 +579,10 @@ fn events_are_bounded() {
     let events = client.take_events();
     assert_eq!(
         events,
-        vec![ServerEvent::Pong { nonce: 2 }, ServerEvent::Pong { nonce: 3 }]
+        vec![
+            ServerEvent::Pong { nonce: 2 },
+            ServerEvent::Pong { nonce: 3 }
+        ]
     );
 }
 

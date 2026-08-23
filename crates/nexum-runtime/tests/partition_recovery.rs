@@ -7,9 +7,7 @@
 use std::path::PathBuf;
 
 use nexum_core::row;
-use nexum_core::{
-    ColumnType, PartitionId, ReducerId, SystemId, TickId, WorldId,
-};
+use nexum_core::{ColumnType, PartitionId, ReducerId, SystemId, TickId, WorldId};
 use nexum_reducer::{ReducerArgs, ReducerDefinition};
 use nexum_runtime::{PersistencePolicy, Runtime, RuntimeConfig, WorldFactory};
 use nexum_simulation::{SimulationConfig, SystemDefinition, World};
@@ -37,42 +35,45 @@ fn ensure_ledger(store: &mut TableStore) {
 /// world 1 registers the handler. Idempotent across recovery (tables created
 /// only if absent).
 fn one_way_factory() -> WorldFactory {
-    Box::new(|id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-        ensure_ledger(&mut store);
-        let mut world = World::new(id, store, sim)?;
-        world
-            .native_mut()
-            .register(
-                ReducerDefinition::new(ReducerId::from_u64(0), "transfer", |ctx, args| {
-                    let amount = args.require_i64("amount")?;
-                    let to = args.require_u64("to")?;
-                    let from = args.require_u64("from")?;
-                    let seq = args.require_u64("seq")?;
-                    ctx.insert("ledger", row![seq, from, to, amount])?;
-                    Ok(nexum_core::Value::U64(seq))
-                })
-                .unwrap(),
-            )
-            .unwrap();
-        if id.as_u64() == 0 {
+    Box::new(
+        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
+            ensure_ledger(&mut store);
+            let mut world = World::new(id, store, sim)?;
             world
-                .add_system(SystemDefinition::new(SystemId::from_u64(0), "sender", 0, |ctx, _| {
-                    let tick = ctx.tick().as_u64();
-                    ctx.send_to(
-                        PartitionId::from_u64(1),
-                        "transfer",
-                        ReducerArgs::new()
-                            .insert("amount", 10i64)
-                            .insert("to", 1u64)
-                            .insert("from", ctx.partition().as_u64())
-                            .insert("seq", tick),
-                    )?;
-                    Ok(())
-                })
-                .unwrap())?;
-        }
-        Ok(world)
-    })
+                .native_mut()
+                .register(
+                    ReducerDefinition::new(ReducerId::from_u64(0), "transfer", |ctx, args| {
+                        let amount = args.require_i64("amount")?;
+                        let to = args.require_u64("to")?;
+                        let from = args.require_u64("from")?;
+                        let seq = args.require_u64("seq")?;
+                        ctx.insert("ledger", row![seq, from, to, amount])?;
+                        Ok(nexum_core::Value::U64(seq))
+                    })
+                    .unwrap(),
+                )
+                .unwrap();
+            if id.as_u64() == 0 {
+                world.add_system(
+                    SystemDefinition::new(SystemId::from_u64(0), "sender", 0, |ctx, _| {
+                        let tick = ctx.tick().as_u64();
+                        ctx.send_to(
+                            PartitionId::from_u64(1),
+                            "transfer",
+                            ReducerArgs::new()
+                                .insert("amount", 10i64)
+                                .insert("to", 1u64)
+                                .insert("from", ctx.partition().as_u64())
+                                .insert("seq", tick),
+                        )?;
+                        Ok(())
+                    })
+                    .unwrap(),
+                )?;
+            }
+            Ok(world)
+        },
+    )
 }
 
 fn temp_dir(name: &str) -> PathBuf {
@@ -142,7 +143,10 @@ fn recovered_partitions_resume_messaging_without_history_replay() {
     // pre-crash rows, delivered as the subscription's Initial snapshot —
     // never as replayed live updates.
     let sub = runtime
-        .subscribe(WorldId::from_u64(1), Query::builder("ledger").build().unwrap())
+        .subscribe(
+            WorldId::from_u64(1),
+            Query::builder("ledger").build().unwrap(),
+        )
         .unwrap();
     let updates = runtime.drain(WorldId::from_u64(1), sub).unwrap();
     assert_eq!(updates.len(), 1, "exactly one Initial snapshot, no replay");

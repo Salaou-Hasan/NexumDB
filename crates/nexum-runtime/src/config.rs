@@ -64,8 +64,7 @@ pub enum TickFailurePolicy {
 /// A recovered store may already contain the authoritative schema (restored
 /// from a snapshot), so factories must create tables only if absent
 /// (ADR-010 D5).
-pub type WorldFactory =
-    Box<dyn Fn(WorldId, TableStore, SimulationConfig) -> Result<World>>;
+pub type WorldFactory = Box<dyn Fn(WorldId, TableStore, SimulationConfig) -> Result<World>>;
 
 /// The runtime configuration, validated at [`Runtime::new`](crate::Runtime::new).
 pub struct RuntimeConfig {
@@ -155,9 +154,7 @@ impl RuntimeConfig {
     /// Validates the configuration. Called by `Runtime::new`.
     pub fn validate(&self) -> Result<()> {
         if self.worker_count == 0 {
-            return Err(Error::invalid_argument(
-                "worker_count must be at least 1",
-            ));
+            return Err(Error::invalid_argument("worker_count must be at least 1"));
         }
         if self.max_queued_inputs == 0 {
             return Err(Error::invalid_argument(

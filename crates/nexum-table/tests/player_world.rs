@@ -10,7 +10,7 @@
 //! ```
 
 use nexum_core::{ColumnType, Error, TableSchema, Value};
-use nexum_table::{row, TableStore};
+use nexum_table::{TableStore, row};
 
 fn player_schema() -> TableSchema {
     TableSchema::builder("players")
@@ -51,7 +51,10 @@ fn player_world_end_to_end() {
 
     // get() by engine-assigned RowId.
     assert_eq!(
-        table.get(alice).unwrap().get_named(table.schema(), "health"),
+        table
+            .get(alice)
+            .unwrap()
+            .get_named(table.schema(), "health"),
         Some(&Value::I32(100))
     );
 
@@ -86,7 +89,10 @@ fn player_world_end_to_end() {
 
     let table = store.table("players").unwrap();
     assert_eq!(
-        table.get(alice).unwrap().get_named(table.schema(), "health"),
+        table
+            .get(alice)
+            .unwrap()
+            .get_named(table.schema(), "health"),
         Some(&Value::I32(55))
     );
     // Alice is still in zone 10; Bob moved to zone 30.

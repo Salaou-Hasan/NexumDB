@@ -59,8 +59,8 @@ pub use config::{PersistencePolicy, RuntimeConfig, TickFailurePolicy, WorldFacto
 pub use error::RuntimeError;
 pub use event::RuntimeEvent;
 pub use metrics::RuntimeMetrics;
-pub use partition::PartitionStatus;
 pub use nexum_wal::RecoveryReport;
+pub use partition::PartitionStatus;
 pub use runtime::{Runtime, RuntimeState, RuntimeStepReport};
 pub use worker::{Worker, WorkerState, WorkerStatus};
 pub use world::{WorldLifecycle, WorldStatus};

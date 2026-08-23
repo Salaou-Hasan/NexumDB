@@ -7,15 +7,13 @@
 use std::sync::Arc;
 
 use nexum_core::{
-    row, ColumnType, Error, ReducerId, Result, Row, RowId, SystemId, TickId, Value, WorldId,
+    ColumnType, Error, ReducerId, Result, Row, RowId, SystemId, TickId, Value, WorldId, row,
 };
-use nexum_network::{
-    NetworkConfig, NetworkGateway, Principal, TokenAuthenticator,
-};
+use nexum_network::{NetworkConfig, NetworkGateway, Principal, TokenAuthenticator};
 use nexum_reducer::{ReducerArgs, ReducerContext, ReducerDefinition};
 use nexum_runtime::{PersistencePolicy, Runtime, RuntimeConfig, WorldFactory, WorldLifecycle};
 use nexum_sdk::{
-    protocol::PROTOCOL_VERSION, transport::ClientTransport, Client, SdkConfig, ServerEvent,
+    Client, SdkConfig, ServerEvent, protocol::PROTOCOL_VERSION, transport::ClientTransport,
 };
 use nexum_simulation::{InputCommand, InputFrame, SimulationConfig, SystemDefinition, World};
 use nexum_subscription::Query;
@@ -68,85 +66,89 @@ fn bump(ctx: &mut ReducerContext, args: &ReducerArgs) -> Result<Value> {
 /// A world whose system consumes `spawn` commands as player rows, with the
 /// native `bump` reducer registered.
 fn input_factory() -> WorldFactory {
-    Box::new(|id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-        ensure_players(&mut store);
-        let mut world = World::new(id, store, sim)?;
-        world
-            .add_system(
-                SystemDefinition::new(SystemId::from_u64(0), "consumer", 0, |ctx, frame| {
-                    for command in frame.commands() {
-                        if command.kind() == "spawn" {
-                            let id = command.payload().and_then(Value::as_u64).unwrap();
-                            ctx.insert("players", row![id, 10u64, 100i32])?;
-                        }
-                    }
-                    Ok(())
-                })
-                .unwrap(),
-            )
-            .unwrap();
-        world
-            .native_mut()
-            .register(
-                ReducerDefinition::new(ReducerId::from_u64(1), "bump", bump).unwrap(),
-            )
-            .unwrap();
-        Ok(world)
-    })
-}
-
-/// A world that additionally registers a WASM reducer returning 42.
-fn wasm_factory() -> WorldFactory {
-    Box::new(|id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-        ensure_players(&mut store);
-        let mut world = World::new(id, store, sim)?;
-        world
-            .add_system(
-                SystemDefinition::new(SystemId::from_u64(0), "consumer", 0, |ctx, frame| {
-                    for command in frame.commands() {
-                        if command.kind() == "spawn" {
-                            let id = command.payload().and_then(Value::as_u64).unwrap();
-                            ctx.insert("players", row![id, 10u64, 100i32])?;
-                        }
-                    }
-                    Ok(())
-                })
-                .unwrap(),
-            )
-            .unwrap();
-        let mut wasm = WasmModuleRegistry::new(WasmLimits::default()).unwrap();
-        wasm.register("ping_wasm", 1, ping_module()).unwrap();
-        world.set_wasm(wasm);
-        Ok(world)
-    })
-}
-
-/// A factory where world 1 fails on its first tick.
-fn failing_factory() -> WorldFactory {
-    Box::new(|id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-        ensure_players(&mut store);
-        let mut world = World::new(id, store, sim)?;
-        world
-            .add_system(
-                SystemDefinition::new(SystemId::from_u64(0), "writer", 0, |ctx, _| {
-                    ctx.insert("players", row![ctx.tick().as_u64(), 10u64, 100i32])?;
-                    Ok(())
-                })
-                .unwrap(),
-            )
-            .unwrap();
-        if id.as_u64() == 1 {
+    Box::new(
+        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
+            ensure_players(&mut store);
+            let mut world = World::new(id, store, sim)?;
             world
                 .add_system(
-                    SystemDefinition::new(SystemId::from_u64(1), "fails", 10, |_ctx, _| {
-                        Err(Error::invalid_argument("boom"))
+                    SystemDefinition::new(SystemId::from_u64(0), "consumer", 0, |ctx, frame| {
+                        for command in frame.commands() {
+                            if command.kind() == "spawn" {
+                                let id = command.payload().and_then(Value::as_u64).unwrap();
+                                ctx.insert("players", row![id, 10u64, 100i32])?;
+                            }
+                        }
+                        Ok(())
                     })
                     .unwrap(),
                 )
                 .unwrap();
-        }
-        Ok(world)
-    })
+            world
+                .native_mut()
+                .register(ReducerDefinition::new(ReducerId::from_u64(1), "bump", bump).unwrap())
+                .unwrap();
+            Ok(world)
+        },
+    )
+}
+
+/// A world that additionally registers a WASM reducer returning 42.
+fn wasm_factory() -> WorldFactory {
+    Box::new(
+        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
+            ensure_players(&mut store);
+            let mut world = World::new(id, store, sim)?;
+            world
+                .add_system(
+                    SystemDefinition::new(SystemId::from_u64(0), "consumer", 0, |ctx, frame| {
+                        for command in frame.commands() {
+                            if command.kind() == "spawn" {
+                                let id = command.payload().and_then(Value::as_u64).unwrap();
+                                ctx.insert("players", row![id, 10u64, 100i32])?;
+                            }
+                        }
+                        Ok(())
+                    })
+                    .unwrap(),
+                )
+                .unwrap();
+            let mut wasm = WasmModuleRegistry::new(WasmLimits::default()).unwrap();
+            wasm.register("ping_wasm", 1, ping_module()).unwrap();
+            world.set_wasm(wasm);
+            Ok(world)
+        },
+    )
+}
+
+/// A factory where world 1 fails on its first tick.
+fn failing_factory() -> WorldFactory {
+    Box::new(
+        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
+            ensure_players(&mut store);
+            let mut world = World::new(id, store, sim)?;
+            world
+                .add_system(
+                    SystemDefinition::new(SystemId::from_u64(0), "writer", 0, |ctx, _| {
+                        ctx.insert("players", row![ctx.tick().as_u64(), 10u64, 100i32])?;
+                        Ok(())
+                    })
+                    .unwrap(),
+                )
+                .unwrap();
+            if id.as_u64() == 1 {
+                world
+                    .add_system(
+                        SystemDefinition::new(SystemId::from_u64(1), "fails", 10, |_ctx, _| {
+                            Err(Error::invalid_argument("boom"))
+                        })
+                        .unwrap(),
+                    )
+                    .unwrap();
+            }
+            Ok(world)
+        },
+    )
 }
 
 fn test_auth() -> Arc<TokenAuthenticator> {
@@ -231,12 +233,17 @@ fn full_sdk_pipeline_input_tick_subscription_and_reducer_call() {
     )
     .unwrap();
     let world = WorldId::from_u64(0);
-    gateway.control().create_world(world, SimulationConfig::new()).unwrap();
+    gateway
+        .control()
+        .create_world(world, SimulationConfig::new())
+        .unwrap();
     gateway.control().start_world(world).unwrap();
     let mut client = connect(&mut gateway, "alice-token", world);
 
     // Subscribe: the initial snapshot of the empty table.
-    let local = client.subscribe(Query::builder("players").build().unwrap()).unwrap();
+    let local = client
+        .subscribe(Query::builder("players").build().unwrap())
+        .unwrap();
     gateway.process_inbound();
     client.pump().unwrap();
     assert!(client.view(local).unwrap().is_empty());
@@ -257,7 +264,12 @@ fn full_sdk_pipeline_input_tick_subscription_and_reducer_call() {
     let tick = events
         .iter()
         .find_map(|event| match event {
-            ServerEvent::Tick { tick, changes, events, .. } => {
+            ServerEvent::Tick {
+                tick,
+                changes,
+                events,
+                ..
+            } => {
                 assert_eq!(changes.len(), 1);
                 assert_eq!(changes[0].new_row().unwrap().get(0), Some(&Value::U64(42)));
                 assert!(events.is_empty(), "the system emitted no events");
@@ -270,7 +282,10 @@ fn full_sdk_pipeline_input_tick_subscription_and_reducer_call() {
     // The subscription view absorbed the insert.
     let view = client.view(local).unwrap();
     assert_eq!(view.len(), 1);
-    assert_eq!(view.get(RowId::from_u64(0)).unwrap().row().get(0), Some(&Value::U64(42)));
+    assert_eq!(
+        view.get(RowId::from_u64(0)).unwrap().row().get(0),
+        Some(&Value::U64(42))
+    );
     assert_eq!(gateway.runtime().metrics().wal_appends, 1);
 
     // Reducer call: bump(42) executes inside the next tick and returns 110.
@@ -290,7 +305,10 @@ fn full_sdk_pipeline_input_tick_subscription_and_reducer_call() {
     // The update also flowed to the subscription (health 100 → 110) and the
     // reducer's event arrived in the TickUpdate of that tick.
     let view = client.view(local).unwrap();
-    assert_eq!(view.get(RowId::from_u64(0)).unwrap().row().get(2), Some(&Value::I32(110)));
+    assert_eq!(
+        view.get(RowId::from_u64(0)).unwrap().row().get(2),
+        Some(&Value::I32(110))
+    );
     let events = client.take_events();
     assert!(events.iter().any(|event| matches!(
         event,
@@ -312,11 +330,16 @@ fn one_commit_with_many_rows_applies_all_deltas_without_a_false_gap() {
     // legal) — silent-loss detection must not false-positive.
     let mut gateway = gateway_with(input_factory());
     let world = WorldId::from_u64(0);
-    gateway.control().create_world(world, SimulationConfig::new()).unwrap();
+    gateway
+        .control()
+        .create_world(world, SimulationConfig::new())
+        .unwrap();
     gateway.control().start_world(world).unwrap();
     let mut client = connect(&mut gateway, "alice-token", world);
 
-    let local = client.subscribe(Query::builder("players").build().unwrap()).unwrap();
+    let local = client
+        .subscribe(Query::builder("players").build().unwrap())
+        .unwrap();
     gateway.process_inbound();
     client.pump().unwrap();
     assert!(client.view(local).unwrap().is_empty());
@@ -334,7 +357,9 @@ fn one_commit_with_many_rows_applies_all_deltas_without_a_false_gap() {
 
     let events = client.take_events();
     assert!(
-        !events.iter().any(|event| matches!(event, ServerEvent::ViewGap { .. })),
+        !events
+            .iter()
+            .any(|event| matches!(event, ServerEvent::ViewGap { .. })),
         "same-commit deltas must never false-flag a gap: {events:?}"
     );
     let view = client.view(local).unwrap();
@@ -354,11 +379,16 @@ fn one_commit_with_many_rows_applies_all_deltas_without_a_false_gap() {
 fn failed_tick_produces_no_updates_and_correlated_call_failure() {
     let mut gateway = gateway_with(failing_factory());
     let world = WorldId::from_u64(1); // fails on its first tick
-    gateway.control().create_world(world, SimulationConfig::new()).unwrap();
+    gateway
+        .control()
+        .create_world(world, SimulationConfig::new())
+        .unwrap();
     gateway.control().start_world(world).unwrap();
     let mut client = connect(&mut gateway, "alice-token", world);
 
-    let local = client.subscribe(Query::builder("players").build().unwrap()).unwrap();
+    let local = client
+        .subscribe(Query::builder("players").build().unwrap())
+        .unwrap();
     gateway.process_inbound();
     client.pump().unwrap();
 
@@ -381,7 +411,9 @@ fn failed_tick_produces_no_updates_and_correlated_call_failure() {
     // pending call answered with a correlated failure — never a hang.
     let events = client.take_events();
     assert!(
-        !events.iter().any(|event| matches!(event, ServerEvent::Tick { .. })),
+        !events
+            .iter()
+            .any(|event| matches!(event, ServerEvent::Tick { .. })),
         "no TickUpdate for a failed tick"
     );
     assert_eq!(client.view(local).unwrap().len(), 0, "no delta applied");
@@ -401,16 +433,26 @@ fn worlds_are_isolated_across_sessions() {
     let mut gateway = gateway_with(input_factory());
     let world_a = WorldId::from_u64(0);
     let world_b = WorldId::from_u64(1);
-    gateway.control().create_world(world_a, SimulationConfig::new()).unwrap();
-    gateway.control().create_world(world_b, SimulationConfig::new()).unwrap();
+    gateway
+        .control()
+        .create_world(world_a, SimulationConfig::new())
+        .unwrap();
+    gateway
+        .control()
+        .create_world(world_b, SimulationConfig::new())
+        .unwrap();
     gateway.control().start_world(world_a).unwrap();
     gateway.control().start_world(world_b).unwrap();
 
     let mut client_a = connect(&mut gateway, "alice-token", world_a);
     let mut client_b = connect(&mut gateway, "bob-token", world_b);
 
-    let sub_a = client_a.subscribe(Query::builder("players").build().unwrap()).unwrap();
-    let sub_b = client_b.subscribe(Query::builder("players").build().unwrap()).unwrap();
+    let sub_a = client_a
+        .subscribe(Query::builder("players").build().unwrap())
+        .unwrap();
+    let sub_b = client_b
+        .subscribe(Query::builder("players").build().unwrap())
+        .unwrap();
     gateway.process_inbound();
     client_a.pump().unwrap();
     client_b.pump().unwrap();
@@ -434,7 +476,9 @@ fn worlds_are_isolated_across_sessions() {
     assert_eq!(client_a.view(sub_a).unwrap().len(), 1);
     let b_events = client_b.take_events();
     assert!(
-        !b_events.iter().any(|event| matches!(event, ServerEvent::Tick { world: w, .. } if *w == world_a)),
+        !b_events
+            .iter()
+            .any(|event| matches!(event, ServerEvent::Tick { world: w, .. } if *w == world_a)),
         "world B must not observe world A's tick"
     );
     assert_eq!(client_b.view(sub_b).unwrap().len(), 0);
@@ -448,10 +492,20 @@ fn worlds_are_isolated_across_sessions() {
     client_a.pump().unwrap();
     client_b.pump().unwrap();
 
-    assert_eq!(client_a.view(sub_a).unwrap().len(), 1, "still only world A's row");
+    assert_eq!(
+        client_a.view(sub_a).unwrap().len(),
+        1,
+        "still only world A's row"
+    );
     assert_eq!(client_b.view(sub_b).unwrap().len(), 1);
     assert_eq!(
-        client_b.view(sub_b).unwrap().get(RowId::from_u64(0)).unwrap().row().get(0),
+        client_b
+            .view(sub_b)
+            .unwrap()
+            .get(RowId::from_u64(0))
+            .unwrap()
+            .row()
+            .get(0),
         Some(&Value::U64(2))
     );
 }
@@ -462,7 +516,10 @@ fn worlds_are_isolated_across_sessions() {
 fn wasm_reducer_call_round_trips_through_the_network() {
     let mut gateway = gateway_with(wasm_factory());
     let world = WorldId::from_u64(0);
-    gateway.control().create_world(world, SimulationConfig::new()).unwrap();
+    gateway
+        .control()
+        .create_world(world, SimulationConfig::new())
+        .unwrap();
     gateway.control().start_world(world).unwrap();
     let mut client = connect(&mut gateway, "alice-token", world);
 
@@ -505,14 +562,17 @@ fn recovery_restores_state_without_replaying_history_to_the_sdk() {
         )
         .unwrap();
         // These tests assert the full change list on the Tick event.
-    let mut gateway = NetworkGateway::new(
-        runtime,
-        NetworkConfig::new().with_tick_update_changes(true),
-        test_auth(),
-    )
-    .unwrap();
+        let mut gateway = NetworkGateway::new(
+            runtime,
+            NetworkConfig::new().with_tick_update_changes(true),
+            test_auth(),
+        )
+        .unwrap();
         let world = WorldId::from_u64(0);
-        gateway.control().create_world(world, SimulationConfig::new()).unwrap();
+        gateway
+            .control()
+            .create_world(world, SimulationConfig::new())
+            .unwrap();
         gateway.control().start_world(world).unwrap();
         let mut client = connect(&mut gateway, "alice-token", world);
         let mut frame = InputFrame::new(TickId::from_u64(0));
@@ -522,7 +582,11 @@ fn recovery_restores_state_without_replaying_history_to_the_sdk() {
         gateway.step_worlds().unwrap();
         client.pump().unwrap();
         let events = client.take_events();
-        assert!(events.iter().any(|event| matches!(event, ServerEvent::Tick { .. })));
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, ServerEvent::Tick { .. }))
+        );
         gateway.control().shutdown().unwrap();
     }
 
@@ -535,12 +599,12 @@ fn recovery_restores_state_without_replaying_history_to_the_sdk() {
         )
         .unwrap();
         // These tests assert the full change list on the Tick event.
-    let mut gateway = NetworkGateway::new(
-        runtime,
-        NetworkConfig::new().with_tick_update_changes(true),
-        test_auth(),
-    )
-    .unwrap();
+        let mut gateway = NetworkGateway::new(
+            runtime,
+            NetworkConfig::new().with_tick_update_changes(true),
+            test_auth(),
+        )
+        .unwrap();
         let world = WorldId::from_u64(0);
         let report = gateway
             .control()
@@ -550,13 +614,21 @@ fn recovery_restores_state_without_replaying_history_to_the_sdk() {
         gateway.control().start_world(world).unwrap();
 
         let mut client = connect(&mut gateway, "alice-token", world);
-        let local = client.subscribe(Query::builder("players").build().unwrap()).unwrap();
+        let local = client
+            .subscribe(Query::builder("players").build().unwrap())
+            .unwrap();
         gateway.process_inbound();
         client.pump().unwrap();
         // The recovered row is the initial view — not a replayed live delta.
         assert_eq!(client.view(local).unwrap().len(), 1);
         assert_eq!(
-            client.view(local).unwrap().get(RowId::from_u64(0)).unwrap().row().get(0),
+            client
+                .view(local)
+                .unwrap()
+                .get(RowId::from_u64(0))
+                .unwrap()
+                .row()
+                .get(0),
             Some(&Value::U64(1))
         );
         assert!(matches!(
@@ -572,9 +644,11 @@ fn recovery_restores_state_without_replaying_history_to_the_sdk() {
         gateway.step_worlds().unwrap();
         client.pump().unwrap();
         let events = client.take_events();
-        assert!(events
-            .iter()
-            .any(|event| matches!(event, ServerEvent::Tick { tick, .. } if tick.as_u64() == 1)));
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, ServerEvent::Tick { tick, .. } if tick.as_u64() == 1))
+        );
         assert_eq!(client.view(local).unwrap().len(), 2);
 
         gateway.control().shutdown().unwrap();
@@ -588,7 +662,10 @@ fn recovery_restores_state_without_replaying_history_to_the_sdk() {
 fn mismatched_protocol_version_is_rejected_and_closes_cleanly() {
     let mut gateway = gateway_with(input_factory());
     let world = WorldId::from_u64(0);
-    gateway.control().create_world(world, SimulationConfig::new()).unwrap();
+    gateway
+        .control()
+        .create_world(world, SimulationConfig::new())
+        .unwrap();
     gateway.control().start_world(world).unwrap();
 
     let (transport, server) = ClientTransport::memory_pair(16, 16);
@@ -602,13 +679,26 @@ fn mismatched_protocol_version_is_rejected_and_closes_cleanly() {
     // The gateway rejects the version, delivers a correlated error and a
     // Disconnect reason, and drops the connection. The client observes both
     // and transitions to Closed.
-    assert!(client.is_closed(), "the client closed after the server drop");
+    assert!(
+        client.is_closed(),
+        "the client closed after the server drop"
+    );
     let events = client.take_events();
-    assert!(events.iter().any(|event| matches!(event, ServerEvent::Error { code: 2, .. })));
-    assert!(events
-        .iter()
-        .any(|event| matches!(event, ServerEvent::Disconnected { .. })));
-    assert_eq!(gateway.connection_count(), 0, "the server dropped the connection");
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, ServerEvent::Error { code: 2, .. }))
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, ServerEvent::Disconnected { .. }))
+    );
+    assert_eq!(
+        gateway.connection_count(),
+        0,
+        "the server dropped the connection"
+    );
 }
 
 // ------------------------------------------------------ backpressure basics
@@ -621,7 +711,10 @@ fn slow_client_falls_stale_and_resync_restores_the_exact_view() {
     // view. Simulation and other clients are never blocked.
     let mut gateway = gateway_with(input_factory());
     let world = WorldId::from_u64(0);
-    gateway.control().create_world(world, SimulationConfig::new()).unwrap();
+    gateway
+        .control()
+        .create_world(world, SimulationConfig::new())
+        .unwrap();
     gateway.control().start_world(world).unwrap();
 
     let (transport, server) = ClientTransport::memory_pair(256, 1);
@@ -637,7 +730,9 @@ fn slow_client_falls_stale_and_resync_restores_the_exact_view() {
     gateway.process_inbound();
     client.pump().unwrap();
 
-    let local = client.subscribe(Query::builder("players").build().unwrap()).unwrap();
+    let local = client
+        .subscribe(Query::builder("players").build().unwrap())
+        .unwrap();
     gateway.process_inbound();
     client.pump().unwrap();
     assert!(client.view(local).unwrap().is_empty());

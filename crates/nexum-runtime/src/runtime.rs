@@ -215,7 +215,10 @@ impl Runtime {
 
     /// Returns a worker's status.
     pub fn worker_status(&self, worker: WorkerId) -> Result<WorkerStatus, RuntimeError> {
-        let worker = self.workers.get(&worker).ok_or(RuntimeError::UnknownWorker(worker))?;
+        let worker = self
+            .workers
+            .get(&worker)
+            .ok_or(RuntimeError::UnknownWorker(worker))?;
         Ok(WorkerStatus {
             id: worker.id(),
             state: worker.state(),
@@ -234,7 +237,10 @@ impl Runtime {
     pub fn fail_worker(&mut self, worker: WorkerId) -> Result<(), RuntimeError> {
         self.ensure_running()?;
         let failed = {
-            let handle = self.workers.get_mut(&worker).ok_or(RuntimeError::UnknownWorker(worker))?;
+            let handle = self
+                .workers
+                .get_mut(&worker)
+                .ok_or(RuntimeError::UnknownWorker(worker))?;
             if handle.state() == WorkerState::Failed {
                 return Ok(());
             }
@@ -247,7 +253,9 @@ impl Runtime {
             RuntimeEvent::WorkerFailed { worker },
         );
         for world in failed {
-            let entry = self.world_get_mut(world).expect("worker owns registered worlds");
+            let entry = self
+                .world_get_mut(world)
+                .expect("worker owns registered worlds");
             if entry.state != WorldLifecycle::Failed {
                 entry.state = WorldLifecycle::Failed;
                 self.metrics.world_failures += 1;
@@ -269,13 +277,22 @@ impl Runtime {
     pub fn reassign_world(&mut self, world_id: WorldId, to: WorkerId) -> Result<(), RuntimeError> {
         self.ensure_running()?;
         {
-            let target = self.workers.get(&to).ok_or(RuntimeError::UnknownWorker(to))?;
+            let target = self
+                .workers
+                .get(&to)
+                .ok_or(RuntimeError::UnknownWorker(to))?;
             if target.state() != WorkerState::Running {
-                return Err(RuntimeError::worker_state(to, "reassign onto", target.state()));
+                return Err(RuntimeError::worker_state(
+                    to,
+                    "reassign onto",
+                    target.state(),
+                ));
             }
         }
         let from = {
-            let entry = self.world_get_mut(world_id).ok_or(RuntimeError::UnknownWorld(world_id))?;
+            let entry = self
+                .world_get_mut(world_id)
+                .ok_or(RuntimeError::UnknownWorld(world_id))?;
             entry.worker
         };
         if from == to {
@@ -383,7 +400,10 @@ impl Runtime {
         Self::push_event(
             &mut self.events,
             self.config.event_log_limit(),
-            RuntimeEvent::WorldCreated { world: world_id, worker },
+            RuntimeEvent::WorldCreated {
+                world: world_id,
+                worker,
+            },
         );
         Ok(())
     }
@@ -406,15 +426,11 @@ impl Runtime {
         if self.world_contains(world_id) {
             return Err(RuntimeError::DuplicateWorld(world_id));
         }
-        let durability = self
-            .config
-            .persistence()
-            .durability()
-            .ok_or_else(|| {
-                RuntimeError::Persistence(Error::unsupported(
-                    "cannot recover a world when persistence is disabled",
-                ))
-            })?;
+        let durability = self.config.persistence().durability().ok_or_else(|| {
+            RuntimeError::Persistence(Error::unsupported(
+                "cannot recover a world when persistence is disabled",
+            ))
+        })?;
         let dir = self.world_dir(world_id);
         let wal_path = dir.join("log.wal");
         if !wal_path.exists() {
@@ -425,8 +441,9 @@ impl Runtime {
         }
         let snapshot_dir = self.snapshot_dir(world_id);
         let mut wal = Wal::open(&wal_path, durability).map_err(RuntimeError::Persistence)?;
-        let has_snapshot =
-            Snapshot::find_latest(&snapshot_dir).map_err(RuntimeError::Persistence)?.is_some();
+        let has_snapshot = Snapshot::find_latest(&snapshot_dir)
+            .map_err(RuntimeError::Persistence)?
+            .is_some();
         let mut store = TableStore::new();
 
         // Two recovery modes (Phase 5 semantics, ADR-010 D5):
@@ -439,12 +456,11 @@ impl Runtime {
         let (mut world, report) = if has_snapshot {
             let report =
                 recover(&mut store, &mut wal, &snapshot_dir).map_err(RuntimeError::Persistence)?;
-            let world =
-                (self.config.factory())(world_id, store, sim_config).map_err(|error| {
-                    RuntimeError::Internal(format!(
-                        "world factory failed for recovered world {world_id}: {error}"
-                    ))
-                })?;
+            let world = (self.config.factory())(world_id, store, sim_config).map_err(|error| {
+                RuntimeError::Internal(format!(
+                    "world factory failed for recovered world {world_id}: {error}"
+                ))
+            })?;
             (world, report)
         } else {
             let mut world =
@@ -466,7 +482,10 @@ impl Runtime {
             .get_mut(&worker)
             .expect("assigned worker exists")
             .add_world(world_id);
-        self.world_insert(world_id, WorldEntry::new(world, worker, Some(wal), Some(snapshot_dir)));
+        self.world_insert(
+            world_id,
+            WorldEntry::new(world, worker, Some(wal), Some(snapshot_dir)),
+        );
         self.metrics.recoveries += 1;
         self.metrics.world_creations += 1;
         Self::push_event(
@@ -484,7 +503,11 @@ impl Runtime {
     /// running). A `Failed` world must be destroyed and recreated/recovered.
     pub fn start_world(&mut self, world_id: WorldId) -> Result<(), RuntimeError> {
         self.ensure_running()?;
-        let entry = self.worlds.get_mut(world_id.as_u64() as usize).and_then(|o| o.as_mut()).ok_or(RuntimeError::UnknownWorld(world_id))?;
+        let entry = self
+            .worlds
+            .get_mut(world_id.as_u64() as usize)
+            .and_then(|o| o.as_mut())
+            .ok_or(RuntimeError::UnknownWorld(world_id))?;
         if entry.state == WorldLifecycle::Running {
             return Ok(());
         }
@@ -505,7 +528,11 @@ impl Runtime {
     /// the logical tick counter continues on restart.
     pub fn stop_world(&mut self, world_id: WorldId) -> Result<(), RuntimeError> {
         self.ensure_running()?;
-        let entry = self.worlds.get_mut(world_id.as_u64() as usize).and_then(|o| o.as_mut()).ok_or(RuntimeError::UnknownWorld(world_id))?;
+        let entry = self
+            .worlds
+            .get_mut(world_id.as_u64() as usize)
+            .and_then(|o| o.as_mut())
+            .ok_or(RuntimeError::UnknownWorld(world_id))?;
         if entry.state == WorldLifecycle::Stopped {
             return Ok(());
         }
@@ -531,7 +558,9 @@ impl Runtime {
         if let Some(partition) = self.partition_for_world(world_id) {
             self.unregister_partition(partition)?;
         }
-        let entry = self.world_remove(world_id).ok_or(RuntimeError::UnknownWorld(world_id))?;
+        let entry = self
+            .world_remove(world_id)
+            .ok_or(RuntimeError::UnknownWorld(world_id))?;
         self.workers
             .get_mut(&entry.worker)
             .expect("entry worker exists")
@@ -553,7 +582,14 @@ impl Runtime {
 
     /// Returns every world's status in deterministic (world id) order.
     pub fn list_worlds(&self) -> Vec<(WorldId, WorldStatus)> {
-        self.worlds.iter().enumerate().filter_map(|(i, opt)| opt.as_ref().map(|e| (WorldId::from_u64(i as u64), e.status()))).collect()
+        self.worlds
+            .iter()
+            .enumerate()
+            .filter_map(|(i, opt)| {
+                opt.as_ref()
+                    .map(|e| (WorldId::from_u64(i as u64), e.status()))
+            })
+            .collect()
     }
 
     /// Aggregates the per-reducer execution profile across all worlds
@@ -578,7 +614,9 @@ impl Runtime {
     pub fn snapshot_world(&mut self, world_id: WorldId) -> Result<(), RuntimeError> {
         self.ensure_running()?;
         let (snapshot_dir, lsn) = {
-            let entry = self.world_get_mut(world_id).ok_or(RuntimeError::UnknownWorld(world_id))?;
+            let entry = self
+                .world_get_mut(world_id)
+                .ok_or(RuntimeError::UnknownWorld(world_id))?;
             let snapshot_dir = entry.snapshot_dir.clone().ok_or_else(|| {
                 RuntimeError::Persistence(Error::unsupported(
                     "snapshots require persistence to be enabled",
@@ -592,11 +630,13 @@ impl Runtime {
             (snapshot_dir, wal.lsn().as_u64())
         };
         let entry = self.world_get_mut(world_id).expect("world exists");
-        Snapshot::capture(entry.world.store(), lsn).write(&snapshot_dir).map_err(|error| {
-            RuntimeError::Persistence(Error::internal(format!(
-                "snapshot failed for world {world_id}: {error}"
-            )))
-        })?;
+        Snapshot::capture(entry.world.store(), lsn)
+            .write(&snapshot_dir)
+            .map_err(|error| {
+                RuntimeError::Persistence(Error::internal(format!(
+                    "snapshot failed for world {world_id}: {error}"
+                )))
+            })?;
         self.metrics.snapshots += 1;
         Ok(())
     }
@@ -619,13 +659,18 @@ impl Runtime {
             return Err(RuntimeError::DuplicatePartition(partition));
         }
         let worker = {
-            let entry = self.worlds.get_mut(world_id.as_u64() as usize).and_then(|o| o.as_mut()).ok_or(RuntimeError::UnknownWorld(world_id))?;
+            let entry = self
+                .worlds
+                .get_mut(world_id.as_u64() as usize)
+                .and_then(|o| o.as_mut())
+                .ok_or(RuntimeError::UnknownWorld(world_id))?;
             entry.world.set_partition(partition);
             entry.worker
         };
         self.topology.insert(partition);
         self.propagate_topology();
-        self.partitions.insert(partition, PartitionEntry::new(world_id, worker));
+        self.partitions
+            .insert(partition, PartitionEntry::new(world_id, worker));
         self.metrics.partitions = self.partitions.len();
         Self::push_event(
             &mut self.events,
@@ -718,15 +763,8 @@ impl Runtime {
             .get(&to)
             .ok_or(RuntimeError::UnknownPartition(to))?;
         let seq = self.sent_seq.entry(from).or_insert(0);
-        let message = PartitionMessage::new(
-            from,
-            to,
-            sent_tick,
-            *seq,
-            kind.to_string(),
-            payload,
-        )
-        .map_err(RuntimeError::Core)?;
+        let message = PartitionMessage::new(from, to, sent_tick, *seq, kind.to_string(), payload)
+            .map_err(RuntimeError::Core)?;
         *seq += 1;
         Self::enqueue_message(
             &self.config,
@@ -759,9 +797,17 @@ impl Runtime {
         let call = ReducerCall::new(request_id, reducer, args).map_err(RuntimeError::Core)?;
         let max_queued = self.config.max_queued_reducer_calls();
         {
-            let entry = self.worlds.get_mut(world_id.as_u64() as usize).and_then(|o| o.as_mut()).ok_or(RuntimeError::UnknownWorld(world_id))?;
+            let entry = self
+                .worlds
+                .get_mut(world_id.as_u64() as usize)
+                .and_then(|o| o.as_mut())
+                .ok_or(RuntimeError::UnknownWorld(world_id))?;
             if entry.state != WorldLifecycle::Running {
-                return Err(RuntimeError::world_state(world_id, "submit reducer call to", entry.state));
+                return Err(RuntimeError::world_state(
+                    world_id,
+                    "submit reducer call to",
+                    entry.state,
+                ));
             }
             if entry.calls.len() >= max_queued {
                 self.metrics.reducer_calls_rejected += 1;
@@ -797,9 +843,17 @@ impl Runtime {
         frame: nexum_simulation::InputFrame,
     ) -> Result<(), RuntimeError> {
         self.ensure_running()?;
-        let entry = self.worlds.get_mut(world_id.as_u64() as usize).and_then(|o| o.as_mut()).ok_or(RuntimeError::UnknownWorld(world_id))?;
+        let entry = self
+            .worlds
+            .get_mut(world_id.as_u64() as usize)
+            .and_then(|o| o.as_mut())
+            .ok_or(RuntimeError::UnknownWorld(world_id))?;
         if entry.state != WorldLifecycle::Running {
-            return Err(RuntimeError::world_state(world_id, "submit input to", entry.state));
+            return Err(RuntimeError::world_state(
+                world_id,
+                "submit input to",
+                entry.state,
+            ));
         }
         if frame.tick() < entry.world.tick_number() {
             self.metrics.inputs_rejected += 1;
@@ -847,7 +901,9 @@ impl Runtime {
     ) -> Result<nexum_simulation::TickResult, RuntimeError> {
         self.ensure_running()?;
         let tick_number = {
-            let entry = self.world_get(world_id).ok_or(RuntimeError::UnknownWorld(world_id))?;
+            let entry = self
+                .world_get(world_id)
+                .ok_or(RuntimeError::UnknownWorld(world_id))?;
             if entry.state != WorldLifecycle::Running {
                 return Err(RuntimeError::world_state(world_id, "tick", entry.state));
             }
@@ -918,7 +974,10 @@ impl Runtime {
         for &world_id in &order {
             let (running, tick_number) = {
                 let entry = self.world_expect(world_id);
-                (entry.state == WorldLifecycle::Running, entry.world.tick_number())
+                (
+                    entry.state == WorldLifecycle::Running,
+                    entry.world.tick_number(),
+                )
             };
             if !running {
                 continue;
@@ -985,7 +1044,10 @@ impl Runtime {
         for &world_id in &order {
             let (running, tick_number) = {
                 let entry = self.world_expect(world_id);
-                (entry.state == WorldLifecycle::Running, entry.world.tick_number())
+                (
+                    entry.state == WorldLifecycle::Running,
+                    entry.world.tick_number(),
+                )
             };
             if !running {
                 continue;
@@ -1158,8 +1220,16 @@ impl Runtime {
                 if entry.ticks_since_snapshot >= interval
                     && let Some(dir) = entry.snapshot_dir.clone()
                 {
-                    let lsn = entry.wal.as_ref().expect("persistence enabled").lsn().as_u64();
-                    if Snapshot::capture(entry.world.store(), lsn).write(&dir).is_ok() {
+                    let lsn = entry
+                        .wal
+                        .as_ref()
+                        .expect("persistence enabled")
+                        .lsn()
+                        .as_u64();
+                    if Snapshot::capture(entry.world.store(), lsn)
+                        .write(&dir)
+                        .is_ok()
+                    {
                         snapshots += 1;
                         entry.ticks_since_snapshot = 0;
                     }
@@ -1401,7 +1471,9 @@ impl Runtime {
         query: Query,
     ) -> Result<SubscriptionId, RuntimeError> {
         self.ensure_running()?;
-        let entry = self.world_get_mut(world_id).ok_or(RuntimeError::UnknownWorld(world_id))?;
+        let entry = self
+            .world_get_mut(world_id)
+            .ok_or(RuntimeError::UnknownWorld(world_id))?;
         entry
             .subscriptions
             .subscribe(entry.world.store(), query)
@@ -1415,7 +1487,9 @@ impl Runtime {
         subscription: SubscriptionId,
     ) -> Result<Vec<SubscriptionUpdate>, RuntimeError> {
         self.ensure_running()?;
-        let entry = self.world_get_mut(world_id).ok_or(RuntimeError::UnknownWorld(world_id))?;
+        let entry = self
+            .world_get_mut(world_id)
+            .ok_or(RuntimeError::UnknownWorld(world_id))?;
         entry
             .subscriptions
             .drain(subscription)
@@ -1429,7 +1503,9 @@ impl Runtime {
         subscription: SubscriptionId,
     ) -> Result<bool, RuntimeError> {
         self.ensure_running()?;
-        let entry = self.world_get(world_id).ok_or(RuntimeError::UnknownWorld(world_id))?;
+        let entry = self
+            .world_get(world_id)
+            .ok_or(RuntimeError::UnknownWorld(world_id))?;
         entry
             .subscriptions
             .has_pending(subscription)
@@ -1443,7 +1519,9 @@ impl Runtime {
         subscription: SubscriptionId,
     ) -> Result<(), RuntimeError> {
         self.ensure_running()?;
-        let entry = self.world_get_mut(world_id).ok_or(RuntimeError::UnknownWorld(world_id))?;
+        let entry = self
+            .world_get_mut(world_id)
+            .ok_or(RuntimeError::UnknownWorld(world_id))?;
         entry
             .subscriptions
             .unsubscribe(subscription)
@@ -1457,7 +1535,9 @@ impl Runtime {
         subscription: SubscriptionId,
     ) -> Result<(), RuntimeError> {
         self.ensure_running()?;
-        let entry = self.world_get_mut(world_id).ok_or(RuntimeError::UnknownWorld(world_id))?;
+        let entry = self
+            .world_get_mut(world_id)
+            .ok_or(RuntimeError::UnknownWorld(world_id))?;
         entry
             .subscriptions
             .resync(entry.world.store(), subscription)
@@ -1470,7 +1550,9 @@ impl Runtime {
         world_id: WorldId,
         subscription: SubscriptionId,
     ) -> Result<bool, RuntimeError> {
-        let entry = self.world_get(world_id).ok_or(RuntimeError::UnknownWorld(world_id))?;
+        let entry = self
+            .world_get(world_id)
+            .ok_or(RuntimeError::UnknownWorld(world_id))?;
         entry
             .subscriptions
             .is_stale(subscription)
@@ -1538,7 +1620,9 @@ impl Runtime {
         // Durability contract: flush committed-but-unflushed state.
         let mut flush_error = None;
         for (idx, slot) in self.worlds.iter_mut().enumerate() {
-            let Some(entry) = slot.as_mut() else { continue; };
+            let Some(entry) = slot.as_mut() else {
+                continue;
+            };
             let world = WorldId::from_u64(idx as u64);
             if let Some(wal) = entry.wal.as_mut()
                 && let Err(error) = wal.flush()

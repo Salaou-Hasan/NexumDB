@@ -15,16 +15,16 @@
 //! - Memory growth is arbitrated by [`MemoryLimiter`] against the configured
 //!   ceiling; fuel and the host-call budget bound execution.
 
-use nexum_core::{binary::put_value, Error, RowId};
+use nexum_core::{Error, RowId, binary::put_value};
 use nexum_reducer::ReducerContext;
 use wasmi::errors::{MemoryError, TableError};
 use wasmi::{Caller, Error as WasmError, Linker, Memory, ResourceLimiter};
 
 use crate::abi::{
-    decode_emit, decode_insert, decode_lookup, decode_table, decode_table_row, decode_update,
-    encode_get_result, encode_insert_result, encode_lookup_result, encode_scan_result,
-    envelope_err, envelope_ok, opcode, OP_CONTAINS, OP_DELETE, OP_EMIT, OP_GET, OP_INSERT,
-    OP_LOOKUP_INDEX, OP_LOOKUP_UNIQUE, OP_SCAN, OP_UPDATE,
+    OP_CONTAINS, OP_DELETE, OP_EMIT, OP_GET, OP_INSERT, OP_LOOKUP_INDEX, OP_LOOKUP_UNIQUE, OP_SCAN,
+    OP_UPDATE, decode_emit, decode_insert, decode_lookup, decode_table, decode_table_row,
+    decode_update, encode_get_result, encode_insert_result, encode_lookup_result,
+    encode_scan_result, envelope_err, envelope_ok, opcode,
 };
 use crate::limits::WasmLimits;
 

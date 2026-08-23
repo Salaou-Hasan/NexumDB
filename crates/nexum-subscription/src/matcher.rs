@@ -14,9 +14,9 @@
 
 use std::cmp::Ordering;
 
+use nexum_core::Row;
 use nexum_core::schema::TableSchema;
 use nexum_core::{Error, Result, RowId, TableId, Value};
-use nexum_core::Row;
 use nexum_table::{Table, TableStore};
 
 use crate::config::SubscriptionConfig;
@@ -112,7 +112,9 @@ impl CompiledQuery {
 
     /// Returns `true` if the row satisfies every predicate (AND semantics).
     pub fn matches(&self, row: &Row) -> bool {
-        self.predicates.iter().all(|predicate| predicate.matches(row))
+        self.predicates
+            .iter()
+            .all(|predicate| predicate.matches(row))
     }
 
     /// Returns the row's sort value, if the query has an `order_by` clause.
@@ -157,10 +159,14 @@ impl CompiledQuery {
 /// schema.
 ///
 /// Returns [`Error::not_found`] if the table does not exist.
-pub fn compile(store: &TableStore, query: &Query, config: &SubscriptionConfig) -> Result<CompiledQuery> {
-    let table = store.table(query.table()).ok_or_else(|| {
-        Error::not_found(format!("table '{}' does not exist", query.table()))
-    })?;
+pub fn compile(
+    store: &TableStore,
+    query: &Query,
+    config: &SubscriptionConfig,
+) -> Result<CompiledQuery> {
+    let table = store
+        .table(query.table())
+        .ok_or_else(|| Error::not_found(format!("table '{}' does not exist", query.table())))?;
     compile_for(table.id(), table.schema(), query, config)
 }
 
@@ -305,7 +311,10 @@ mod tests {
         use nexum_core::row;
         // Same-type comparisons use inner ordering.
         assert_eq!(value_cmp(&Value::U64(1), &Value::U64(2)), Ordering::Less);
-        assert_eq!(value_cmp(&Value::I32(5), &Value::I32(-5)), Ordering::Greater);
+        assert_eq!(
+            value_cmp(&Value::I32(5), &Value::I32(-5)),
+            Ordering::Greater
+        );
         assert_eq!(
             value_cmp(&Value::String("a".into()), &Value::String("b".into())),
             Ordering::Less
@@ -315,10 +324,16 @@ mod tests {
         assert_eq!(value_cmp(&nan, &nan), Ordering::Equal);
         assert_eq!(value_cmp(&Value::F64(1.0), &nan), Ordering::Less);
         // Cross-variant comparison is by declaration order, not by value.
-        assert_eq!(value_cmp(&Value::Bool(true), &Value::I32(0)), Ordering::Less);
+        assert_eq!(
+            value_cmp(&Value::Bool(true), &Value::I32(0)),
+            Ordering::Less
+        );
         // Repeatability across "runs".
         for _ in 0..2 {
-            assert_eq!(value_cmp(&Value::F64(2.5), &Value::F64(2.0)), Ordering::Greater);
+            assert_eq!(
+                value_cmp(&Value::F64(2.5), &Value::F64(2.0)),
+                Ordering::Greater
+            );
         }
         let _ = row![1u64];
     }
@@ -361,7 +376,10 @@ mod tests {
         store.create_table(schema()).unwrap();
         let err = compile_err(
             &store,
-            Query::builder("players").predicate_eq("nope", 1u64).build().unwrap(),
+            Query::builder("players")
+                .predicate_eq("nope", 1u64)
+                .build()
+                .unwrap(),
         );
         assert!(matches!(err, Error::InvalidArgument(_)));
     }
@@ -373,7 +391,10 @@ mod tests {
         // zone_id is U64; a string literal is rejected.
         let err = compile_err(
             &store,
-            Query::builder("players").predicate_eq("zone_id", "ten").build().unwrap(),
+            Query::builder("players")
+                .predicate_eq("zone_id", "ten")
+                .build()
+                .unwrap(),
         );
         assert!(matches!(err, Error::InvalidArgument(_)));
     }
@@ -404,7 +425,10 @@ mod tests {
         };
         let err = compile(
             &store,
-            &Query::builder("players").project(&["id", "zone_id"]).build().unwrap(),
+            &Query::builder("players")
+                .project(&["id", "zone_id"])
+                .build()
+                .unwrap(),
             &config,
         )
         .unwrap_err();
@@ -438,10 +462,22 @@ mod tests {
         let mut store = TableStore::new();
         store.create_table(schema()).unwrap();
         let table = store.table_mut("players").unwrap();
-        table.insert(nexum_core::row![1u64, 10u64, 100i32, "a".to_string()]).unwrap();
-        table.insert(nexum_core::row![2u64, 20u64, 90i32, "b".to_string()]).unwrap();
-        table.insert(nexum_core::row![3u64, 10u64, 80i32, "c".to_string()]).unwrap();
-        let compiled = compiled(&store, Query::builder("players").predicate_eq("zone_id", 10u64).build().unwrap());
+        table
+            .insert(nexum_core::row![1u64, 10u64, 100i32, "a".to_string()])
+            .unwrap();
+        table
+            .insert(nexum_core::row![2u64, 20u64, 90i32, "b".to_string()])
+            .unwrap();
+        table
+            .insert(nexum_core::row![3u64, 10u64, 80i32, "c".to_string()])
+            .unwrap();
+        let compiled = compiled(
+            &store,
+            Query::builder("players")
+                .predicate_eq("zone_id", 10u64)
+                .build()
+                .unwrap(),
+        );
         let table = store.table("players").unwrap();
         let rows = matching_rows(table, &compiled);
         assert_eq!(rows.len(), 2);
@@ -455,11 +491,17 @@ mod tests {
         store.create_table(schema()).unwrap();
         let projected_query = compiled(
             &store,
-            Query::builder("players").project(&["name", "id"]).build().unwrap(),
+            Query::builder("players")
+                .project(&["name", "id"])
+                .build()
+                .unwrap(),
         );
         let row = nexum_core::row![1u64, 10u64, 50i32, "alice".to_string()];
         let projected = projected_query.project(&row);
-        assert_eq!(projected.values(), &[Value::String("alice".into()), Value::U64(1)]);
+        assert_eq!(
+            projected.values(),
+            &[Value::String("alice".into()), Value::U64(1)]
+        );
         // No projection: full row clone.
         let full_query = compiled(&store, Query::builder("players").build().unwrap());
         assert_eq!(full_query.project(&row), row);

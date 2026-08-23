@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 use nexum_core::{ColumnType, Error, ReducerId, RowId, TableSchema, Value};
 use nexum_reducer::{ReducerArgs, ReducerDefinition, ReducerRegistry, ReducerResult};
-use nexum_table::{row, TableStore};
+use nexum_table::{TableStore, row};
 use nexum_wal::{DurabilityPolicy, Wal, recover};
 
 fn player_schema() -> TableSchema {
@@ -73,7 +73,12 @@ fn registry() -> ReducerRegistry {
                 let mut row = ctx.get("players", row_id)?.expect("lookup implies present");
                 let health = row.values()[2].as_i32().unwrap();
                 let new_health = (health - amount).max(0);
-                row = row![id, row.values()[1].as_u64().unwrap(), new_health, row.values()[3].as_u32().unwrap()];
+                row = row![
+                    id,
+                    row.values()[1].as_u64().unwrap(),
+                    new_health,
+                    row.values()[3].as_u32().unwrap()
+                ];
                 ctx.update("players", row_id, row)?;
                 ctx.emit("player_damaged", id)?;
                 Ok(Value::I32(new_health))
@@ -128,7 +133,11 @@ fn a_reducer_world_commits_and_recovers_exactly() {
     let registry = registry();
     // Seed the economy row directly (schemas and seeds are deployment
     // concerns; reducers act on existing state).
-    store.table_mut("economy").unwrap().insert(row![1u64, 100i64]).unwrap();
+    store
+        .table_mut("economy")
+        .unwrap()
+        .insert(row![1u64, 100i64])
+        .unwrap();
     store.drain_changes();
 
     // 1. Create two players.
@@ -137,7 +146,9 @@ fn a_reducer_world_commits_and_recovers_exactly() {
         &registry,
         &mut wal,
         "create_player",
-        ReducerArgs::new().insert("player_id", 1u64).insert("level", 5u32),
+        ReducerArgs::new()
+            .insert("player_id", 1u64)
+            .insert("level", 5u32),
     )
     .unwrap();
     assert_eq!(a.changes().len(), 1);
@@ -147,7 +158,9 @@ fn a_reducer_world_commits_and_recovers_exactly() {
         &registry,
         &mut wal,
         "create_player",
-        ReducerArgs::new().insert("player_id", 2u64).insert("level", 6u32),
+        ReducerArgs::new()
+            .insert("player_id", 2u64)
+            .insert("level", 6u32),
     )
     .unwrap();
 
@@ -157,7 +170,9 @@ fn a_reducer_world_commits_and_recovers_exactly() {
         &registry,
         &mut wal,
         "damage_player",
-        ReducerArgs::new().insert("player_id", 1u64).insert("amount", 30i32),
+        ReducerArgs::new()
+            .insert("player_id", 1u64)
+            .insert("amount", 30i32),
     )
     .unwrap();
     assert_eq!(damaged.return_value(), &Value::I32(70));
@@ -168,7 +183,9 @@ fn a_reducer_world_commits_and_recovers_exactly() {
         &registry,
         &mut wal,
         "damage_player",
-        ReducerArgs::new().insert("player_id", 99u64).insert("amount", 10i32),
+        ReducerArgs::new()
+            .insert("player_id", 99u64)
+            .insert("amount", 10i32),
     )
     .unwrap_err();
     assert!(matches!(err, Error::NotFound(_)));
@@ -180,7 +197,9 @@ fn a_reducer_world_commits_and_recovers_exactly() {
         &registry,
         &mut wal,
         "give_coins",
-        ReducerArgs::new().insert("owner", 1u64).insert("amount", 30i64),
+        ReducerArgs::new()
+            .insert("owner", 1u64)
+            .insert("amount", 30i64),
     )
     .unwrap();
 
@@ -214,9 +233,17 @@ fn a_reducer_world_commits_and_recovers_exactly() {
     assert_eq!(recovered_alice.values()[2], alice_health);
     assert_eq!(players.epoch(), expected_epoch);
     let economy = fresh.table("economy").unwrap();
-    assert_eq!(economy.get(RowId::from_u64(0)).unwrap().values()[1], Value::I64(130));
+    assert_eq!(
+        economy.get(RowId::from_u64(0)).unwrap().values()[1],
+        Value::I64(130)
+    );
     // The failed damage (reducer error) left no WAL record to replay.
-    assert!(players.get_by_primary_key(&[Value::U64(99)]).unwrap().is_none());
+    assert!(
+        players
+            .get_by_primary_key(&[Value::U64(99)])
+            .unwrap()
+            .is_none()
+    );
     // wal_lsn sanity: recovery used a non-zero snapshot boundary.
     assert!(wal_lsn > 0);
 }

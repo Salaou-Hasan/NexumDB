@@ -105,7 +105,8 @@ impl Client {
         })?;
         self.subscriptions.remove(&local);
         self.views.remove(&local);
-        self.pending_subscribes.retain(|_, pending| *pending != local);
+        self.pending_subscribes
+            .retain(|_, pending| *pending != local);
         Ok(())
     }
 
@@ -121,7 +122,9 @@ impl Client {
         let Some(server) = handle.server() else {
             return Err(SdkError::InFlightSubscription(local));
         };
-        self.send_message(&ClientMessage::Resync { subscription: server })
+        self.send_message(&ClientMessage::Resync {
+            subscription: server,
+        })
     }
 
     /// Returns the derived view of a subscription, if it exists.

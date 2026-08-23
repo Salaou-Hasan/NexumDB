@@ -12,8 +12,8 @@
 //! every world's WAL via `GameServer::shutdown()` (idempotent), then exit.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 /// The shared shutdown flag.
@@ -104,7 +104,10 @@ mod tests {
         assert!(!handle.is_requested());
         handle.poll();
         assert!(handle.is_requested());
-        assert!(!stop_file.exists(), "stop-file is consumed after triggering");
+        assert!(
+            !stop_file.exists(),
+            "stop-file is consumed after triggering"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 

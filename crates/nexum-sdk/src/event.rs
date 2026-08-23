@@ -19,30 +19,17 @@ use nexum_storage::Change;
 #[allow(missing_docs)]
 pub enum ServerEvent {
     /// The handshake completed; the connection is live.
-    Connected {
-        version: u16,
-        server_name: String,
-    },
+    Connected { version: u16, server_name: String },
     /// The connection ended (locally, by the server, or by the transport).
-    Disconnected {
-        reason: String,
-    },
+    Disconnected { reason: String },
     /// Authentication succeeded.
-    Authenticated {
-        principal: Principal,
-    },
+    Authenticated { principal: Principal },
     /// Authentication was rejected.
-    AuthFailed {
-        message: String,
-    },
+    AuthFailed { message: String },
     /// The session attached to a world.
-    Attached {
-        world: WorldId,
-    },
+    Attached { world: WorldId },
     /// The world attachment was rejected.
-    AttachFailed {
-        message: String,
-    },
+    AttachFailed { message: String },
     /// The session detached from its world.
     Detached,
     /// One committed world tick: its authoritative changes and the events
@@ -55,10 +42,7 @@ pub enum ServerEvent {
         events: Vec<ReducerEvent>,
     },
     /// A generic server error with a stable code.
-    Error {
-        code: u16,
-        message: String,
-    },
+    Error { code: u16, message: String },
     /// A subscription was established and its initial snapshot applied.
     SubscriptionBound {
         local: u64,
@@ -66,15 +50,9 @@ pub enum ServerEvent {
         seq: u64,
     },
     /// A subscription request was rejected by the server.
-    SubscriptionRejected {
-        local: u64,
-        message: String,
-    },
+    SubscriptionRejected { local: u64, message: String },
     /// A resync replaced a subscription's view.
-    SubscriptionResynced {
-        local: u64,
-        seq: u64,
-    },
+    SubscriptionResynced { local: u64, seq: u64 },
     /// The server marked a subscription stale; its view is invalid until
     /// resync.
     Stale {
@@ -83,15 +61,9 @@ pub enum ServerEvent {
     },
     /// A delta-sequence gap was detected in a subscription's stream; the
     /// handle is stale until resync (silent-loss detection).
-    ViewGap {
-        local: u64,
-        expected: u64,
-        got: u64,
-    },
+    ViewGap { local: u64, expected: u64, got: u64 },
     /// A `Ping` was answered.
-    Pong {
-        nonce: u64,
-    },
+    Pong { nonce: u64 },
 }
 
 /// The row-level change kind of a subscription delta (re-exported).

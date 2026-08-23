@@ -23,7 +23,7 @@ use std::hint::black_box;
 use std::time::Instant;
 
 use nexum_core::{ColumnType, Error, TableSchema};
-use nexum_table::{row, TableStore};
+use nexum_table::{TableStore, row};
 use nexum_tx::Transaction;
 
 fn player_schema(name: &str) -> TableSchema {
@@ -88,7 +88,11 @@ fn main() {
             counter += 1;
             let mut tx = Transaction::begin(&mut store);
             let handle = tx
-                .insert(&store, "players", row![counter, 10u64, 100i32, (counter as u32) % 1_000_000])
+                .insert(
+                    &store,
+                    "players",
+                    row![counter, 10u64, 100i32, (counter as u32) % 1_000_000],
+                )
                 .unwrap();
             black_box(handle);
             let changes = tx.commit(&mut store).unwrap();
@@ -108,7 +112,11 @@ fn main() {
             for offset in 1..=10u64 {
                 let id = counter + offset;
                 let handle = tx
-                    .insert(&store, "players", row![id, 10u64, 100i32, (id as u32) % 1_000_000])
+                    .insert(
+                        &store,
+                        "players",
+                        row![id, 10u64, 100i32, (id as u32) % 1_000_000],
+                    )
                     .unwrap();
                 black_box(handle);
             }
@@ -137,12 +145,22 @@ fn main() {
             counter += 1;
             let mut tx = Transaction::begin(&mut store);
             let handle = tx
-                .insert(&store, "players", row![counter, 10u64, 100i32, (counter as u32) % 1_000_000])
+                .insert(
+                    &store,
+                    "players",
+                    row![counter, 10u64, 100i32, (counter as u32) % 1_000_000],
+                )
                 .unwrap();
-            tx.update(&store, "players", handle, row![counter, 10u64, 90i32, (counter as u32) % 1_000_000])
-                .unwrap();
+            tx.update(
+                &store,
+                "players",
+                handle,
+                row![counter, 10u64, 90i32, (counter as u32) % 1_000_000],
+            )
+            .unwrap();
             let coins = tx.insert(&store, "economy", row![counter, 100i64]).unwrap();
-            tx.update(&store, "economy", coins, row![counter, 50i64]).unwrap();
+            tx.update(&store, "economy", coins, row![counter, 50i64])
+                .unwrap();
             let changes = tx.commit(&mut store).unwrap();
             black_box(changes);
             store.drain_changes();

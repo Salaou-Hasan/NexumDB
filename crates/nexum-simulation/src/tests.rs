@@ -45,7 +45,10 @@ fn frame(tick: u64) -> InputFrame {
 }
 
 /// Runs a tick, unwrapping the committed result.
-fn run(world: &mut World, inputs: &InputFrame) -> (Vec<nexum_storage::Change>, Vec<nexum_reducer::ReducerEvent>) {
+fn run(
+    world: &mut World,
+    inputs: &InputFrame,
+) -> (Vec<nexum_storage::Change>, Vec<nexum_reducer::ReducerEvent>) {
     let result = world.tick(inputs).unwrap();
     (result.changes().to_vec(), result.events().to_vec())
 }
@@ -398,8 +401,7 @@ fn native_reducer_invoked_from_system() {
     world
         .add_system(
             SystemDefinition::new(SystemId::from_u64(0), "invoker", 0, |ctx, _| {
-                let value =
-                    ctx.invoke_reducer("spawn", &ReducerArgs::new().insert("id", 7u64))?;
+                let value = ctx.invoke_reducer("spawn", &ReducerArgs::new().insert("id", 7u64))?;
                 if value != Value::U64(7) {
                     return Err(Error::internal("reducer return value mismatch"));
                 }
@@ -549,7 +551,12 @@ fn wasm_reducer_invoked_from_system() {
     assert_eq!(changes.len(), 1);
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].name(), "spawned");
-    let row = world.store().table("players").unwrap().get(RowId::from_u64(0)).unwrap();
+    let row = world
+        .store()
+        .table("players")
+        .unwrap()
+        .get(RowId::from_u64(0))
+        .unwrap();
     assert_eq!(row, &row![42u64, 10u64, 55i32]);
 }
 
@@ -573,7 +580,8 @@ fn wasm_without_registry_fails_the_tick() {
 fn trapped_wasm_aborts_the_tick() {
     let mut world = fixture(SimulationConfig::new());
     let mut wasm = WasmModuleRegistry::new(WasmLimits::default()).unwrap();
-    wasm.register("explode", 1, wasm_module("    (unreachable)")).unwrap();
+    wasm.register("explode", 1, wasm_module("    (unreachable)"))
+        .unwrap();
     world.set_wasm(wasm);
     world
         .add_system(
@@ -609,10 +617,18 @@ fn scheduled_events_run_at_their_target_tick() {
         )
         .unwrap();
     world
-        .schedule(TickId::from_u64(3), "log_mark", ReducerArgs::new().insert("mark", 3u64))
+        .schedule(
+            TickId::from_u64(3),
+            "log_mark",
+            ReducerArgs::new().insert("mark", 3u64),
+        )
         .unwrap();
     world
-        .schedule(TickId::from_u64(1), "log_mark", ReducerArgs::new().insert("mark", 1u64))
+        .schedule(
+            TickId::from_u64(1),
+            "log_mark",
+            ReducerArgs::new().insert("mark", 1u64),
+        )
         .unwrap();
 
     // Ticks 0 and 1: only the tick-1 event fires.
@@ -654,7 +670,11 @@ fn cancelled_scheduled_events_never_run() {
         )
         .unwrap();
     let id = world
-        .schedule(TickId::from_u64(1), "log_mark", ReducerArgs::new().insert("mark", 9u64))
+        .schedule(
+            TickId::from_u64(1),
+            "log_mark",
+            ReducerArgs::new().insert("mark", 9u64),
+        )
         .unwrap();
     world.cancel_scheduled(id).unwrap();
 
@@ -717,15 +737,20 @@ fn systems_receive_input_commands_in_order() {
     let mut world = fixture(SimulationConfig::new());
     world
         .add_system(
-            SystemDefinition::new(SystemId::from_u64(0), "spawn_from_commands", 0, |ctx, frame| {
-                for command in frame.commands() {
-                    if command.kind() == "spawn" {
-                        let id = command.payload().and_then(Value::as_u64).unwrap();
-                        ctx.insert("players", row![id, 10u64, 100i32])?;
+            SystemDefinition::new(
+                SystemId::from_u64(0),
+                "spawn_from_commands",
+                0,
+                |ctx, frame| {
+                    for command in frame.commands() {
+                        if command.kind() == "spawn" {
+                            let id = command.payload().and_then(Value::as_u64).unwrap();
+                            ctx.insert("players", row![id, 10u64, 100i32])?;
+                        }
                     }
-                }
-                Ok(())
-            })
+                    Ok(())
+                },
+            )
             .unwrap(),
         )
         .unwrap();
@@ -808,7 +833,11 @@ fn determinism_trace(seed: u64) -> SimulationTrace {
         )
         .unwrap();
     world
-        .schedule(TickId::from_u64(3), "spawn", ReducerArgs::new().insert("id", 999u64))
+        .schedule(
+            TickId::from_u64(3),
+            "spawn",
+            ReducerArgs::new().insert("id", 999u64),
+        )
         .unwrap();
 
     let mut trace = Vec::new();
@@ -836,7 +865,10 @@ fn same_inputs_same_seed_produce_identical_simulation() {
     let (trace_a, _): SimulationTrace = determinism_trace(1234);
     assert_eq!(trace_a.len(), 8);
     let total_changes: usize = trace_a.iter().map(|(c, _)| c.len()).sum();
-    assert!(total_changes > 10, "expected substantial work, got {total_changes} changes");
+    assert!(
+        total_changes > 10,
+        "expected substantial work, got {total_changes} changes"
+    );
 }
 
 #[test]
@@ -869,18 +901,24 @@ fn rng_values_are_deterministic_across_runs() {
 
 #[test]
 fn config_rejects_zero_bounds() {
-    assert!(SimulationConfig::new()
-        .with_max_commands_per_frame(0)
-        .validate()
-        .is_err());
-    assert!(SimulationConfig::new()
-        .with_max_events_per_tick(0)
-        .validate()
-        .is_err());
-    assert!(SimulationConfig::new()
-        .with_max_scheduled_events(0)
-        .validate()
-        .is_err());
+    assert!(
+        SimulationConfig::new()
+            .with_max_commands_per_frame(0)
+            .validate()
+            .is_err()
+    );
+    assert!(
+        SimulationConfig::new()
+            .with_max_events_per_tick(0)
+            .validate()
+            .is_err()
+    );
+    assert!(
+        SimulationConfig::new()
+            .with_max_scheduled_events(0)
+            .validate()
+            .is_err()
+    );
     assert!(SimulationConfig::new().validate().is_ok());
 }
 

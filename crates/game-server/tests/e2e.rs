@@ -13,17 +13,15 @@
 use std::sync::Arc;
 
 use game_server::{
-    game_factory, move_args, CLIENT_REDUCERS, COL_ALIVE, COL_AMMO, COL_COOLDOWN, COL_HP, COL_X,
-    COL_Y,
+    CLIENT_REDUCERS, COL_ALIVE, COL_AMMO, COL_COOLDOWN, COL_HP, COL_X, COL_Y, game_factory,
+    move_args,
 };
 use nexum_core::{PlayerId, WorldId};
-use nexum_game_server::{
-    GameInstanceConfig, GameServer, GameServerConfig, JoinOutcome,
-};
+use nexum_game_server::{GameInstanceConfig, GameServer, GameServerConfig, JoinOutcome};
 use nexum_network::{NetworkConfig, Principal, TokenAuthenticator};
 use nexum_reducer::ReducerArgs;
 use nexum_runtime::{Runtime, RuntimeConfig};
-use nexum_sdk::{transport::ClientTransport, Client, SdkConfig};
+use nexum_sdk::{Client, SdkConfig, transport::ClientTransport};
 use nexum_subscription::Query;
 
 // ---------------------------------------------------------------- harness
@@ -38,7 +36,13 @@ fn auth() -> Arc<TokenAuthenticator> {
 
 fn server() -> GameServer {
     let runtime = Runtime::new(RuntimeConfig::new(game_factory())).unwrap();
-    GameServer::new(runtime, NetworkConfig::new(), auth(), GameServerConfig::new()).unwrap()
+    GameServer::new(
+        runtime,
+        NetworkConfig::new(),
+        auth(),
+        GameServerConfig::new(),
+    )
+    .unwrap()
 }
 
 fn running_arena(server: &mut GameServer) -> nexum_core::GameInstanceId {
@@ -164,7 +168,12 @@ fn ammo(view: &nexum_sdk::View, player: u64) -> i64 {
                 .map(|value| value.as_u64() == Some(player))
                 .unwrap_or(false)
         })
-        .map(|row| row.row().get(COL_AMMO).and_then(|v| v.as_i64()).unwrap_or(-1))
+        .map(|row| {
+            row.row()
+                .get(COL_AMMO)
+                .and_then(|v| v.as_i64())
+                .unwrap_or(-1)
+        })
         .unwrap_or(-1)
 }
 
@@ -177,8 +186,7 @@ fn two_clients_join_move_fight_die_respawn_and_reconnect() {
 
     let (mut alice, alice_player, alice_world, alice_local) =
         connect_join_attach(&mut server, "alice", game);
-    let (mut bob, bob_player, bob_world, bob_local) =
-        connect_join_attach(&mut server, "bob", game);
+    let (mut bob, bob_player, bob_world, bob_local) = connect_join_attach(&mut server, "bob", game);
     assert_eq!(alice_world, bob_world, "one partition → one shared world");
 
     // The join reducers commit on the next tick (authoritative initialization
@@ -231,7 +239,11 @@ fn two_clients_join_move_fight_die_respawn_and_reconnect() {
         )
         .unwrap();
     step_and_pump(&mut server, &mut [&mut alice, &mut bob]);
-    assert_eq!(xy(bob.view(bob_local).unwrap(), 2), (ax + 1, ay), "bob repositioned");
+    assert_eq!(
+        xy(bob.view(bob_local).unwrap(), 2),
+        (ax + 1, ay),
+        "bob repositioned"
+    );
 
     // Ensure Alice faces east toward Bob, then fire.
     server
@@ -246,16 +258,27 @@ fn two_clients_join_move_fight_die_respawn_and_reconnect() {
         )
         .unwrap();
     step_and_pump(&mut server, &mut [&mut alice, &mut bob]);
-    assert_eq!(xy(bob.view(bob_local).unwrap(), 1), (ax, ay), "alice repositioned");
+    assert_eq!(
+        xy(bob.view(bob_local).unwrap(), 1),
+        (ax, ay),
+        "alice repositioned"
+    );
 
-    let shot = alice.call_reducer("fire_weapon", ReducerArgs::new()).unwrap();
+    let shot = alice
+        .call_reducer("fire_weapon", ReducerArgs::new())
+        .unwrap();
     step_and_pump(&mut server, &mut [&mut alice, &mut bob]);
 
     let results = alice.take_reducer_results();
     assert_eq!(results.len(), 1, "exactly one correlated result");
     assert_eq!(results[0].request_id(), shot);
     assert!(results[0].is_ok(), "shot fired: {:?}", results[0].error());
-    assert_eq!(results[0].value(), Some(&nexum_core::Value::I64(25)), "25 damage");    let alice_view = alice.view(alice_local).unwrap();
+    assert_eq!(
+        results[0].value(),
+        Some(&nexum_core::Value::I64(25)),
+        "25 damage"
+    );
+    let alice_view = alice.view(alice_local).unwrap();
     let bob_view = bob.view(bob_local).unwrap();
     assert_eq!(hp(alice_view, 2), 75, "Alice sees Bob's health drop");
     assert_eq!(hp(bob_view, 2), 75, "Bob sees his own health drop");
@@ -287,7 +310,9 @@ fn two_clients_join_move_fight_die_respawn_and_reconnect() {
         for _ in 0..6 {
             step_and_pump(&mut server, &mut [&mut alice, &mut bob]);
         }
-        let request = alice.call_reducer("fire_weapon", ReducerArgs::new()).unwrap();
+        let request = alice
+            .call_reducer("fire_weapon", ReducerArgs::new())
+            .unwrap();
         step_and_pump(&mut server, &mut [&mut alice, &mut bob]);
         let results = alice.take_reducer_results();
         let result = results
@@ -295,7 +320,10 @@ fn two_clients_join_move_fight_die_respawn_and_reconnect() {
             .find(|result| result.request_id() == request)
             .expect("correlated result");
         assert!(result.is_ok(), "shot {shot_number}: {:?}", result.error());
-        assert_eq!(hp(bob.view(bob_local).unwrap(), 2), 50 - 25 * shot_number as i64);
+        assert_eq!(
+            hp(bob.view(bob_local).unwrap(), 2),
+            50 - 25 * shot_number as i64
+        );
     }
     let bob_view = bob.view(bob_local).unwrap();
     assert!(!alive(bob_view, 2), "Bob died");
@@ -304,11 +332,15 @@ fn two_clients_join_move_fight_die_respawn_and_reconnect() {
     // ---- 4. Respawn: Bob's client calls the exposed `respawn_player`; the
     // gateway stamps his principal as the caller, and the authoritative
     // respawn runs inside the simulation (never a host-side write).
-    let respawn = bob.call_reducer("respawn_player", ReducerArgs::new()).unwrap();
+    let respawn = bob
+        .call_reducer("respawn_player", ReducerArgs::new())
+        .unwrap();
     step_and_pump(&mut server, &mut [&mut alice, &mut bob]);
     let results = bob.take_reducer_results();
     assert!(
-        results.iter().any(|r| r.request_id() == respawn && r.is_ok()),
+        results
+            .iter()
+            .any(|r| r.request_id() == respawn && r.is_ok()),
         "respawn committed"
     );
     let bob_view = bob.view(bob_local).unwrap();
@@ -351,7 +383,9 @@ fn two_clients_join_move_fight_die_respawn_and_reconnect() {
     bob2.attach(bob_world).unwrap();
     server.gateway_mut().process_inbound();
     bob2.pump().unwrap();
-    let local = bob2.subscribe(Query::builder("players").build().unwrap()).unwrap();
+    let local = bob2
+        .subscribe(Query::builder("players").build().unwrap())
+        .unwrap();
     server.gateway_mut().process_inbound();
     bob2.pump().unwrap();
 
@@ -361,12 +395,14 @@ fn two_clients_join_move_fight_die_respawn_and_reconnect() {
     assert!(alive(view, 2), "Bob is alive in the authoritative world");
 
     // A subsequent tick keeps working normally for the reconnected client.
-    alice
-        .call_reducer("move_player", move_args(0, 1))
-        .unwrap();
+    alice.call_reducer("move_player", move_args(0, 1)).unwrap();
     step_and_pump(&mut server, &mut [&mut alice, &mut bob2]);
     let view = bob2.view(local).unwrap();
-    assert_eq!(xy(view, 1).1, ay + 1, "Alice's move reaches reconnected Bob");
+    assert_eq!(
+        xy(view, 1).1,
+        ay + 1,
+        "Alice's move reaches reconnected Bob"
+    );
 
     // Cleanup: the SDK disconnect path closes the session cleanly.
     bob2.disconnect();
@@ -413,7 +449,9 @@ fn client_cannot_forge_position_health_or_identity() {
     step_and_pump(&mut server, &mut [&mut alice, &mut bob]);
     let results = alice.take_reducer_results();
     assert!(
-        results.iter().any(|r| r.request_id() == request && r.is_ok()),
+        results
+            .iter()
+            .any(|r| r.request_id() == request && r.is_ok()),
         "Alice's move succeeded: {:?}",
         results
             .iter()
@@ -421,7 +459,11 @@ fn client_cannot_forge_position_health_or_identity() {
             .collect::<Vec<_>>()
     );
     // Bob must NOT have moved — the caller is Alice (id 1).
-    assert_eq!(xy(bob.view(bob_local).unwrap(), 2), (bx0, by0), "Bob unaffected");
+    assert_eq!(
+        xy(bob.view(bob_local).unwrap(), 2),
+        (bx0, by0),
+        "Bob unaffected"
+    );
     let (ax, ay) = xy(bob.view(bob_local).unwrap(), 1);
     assert_eq!((ax, ay), (ax0, ay0 + 1), "Alice moved herself, not Bob");
 

@@ -34,14 +34,14 @@ pub mod server;
 mod shutdown;
 mod wasm;
 
-pub use client::{run_client, ClientArgs, ClientOutcome};
+pub use client::{ClientArgs, ClientOutcome, run_client};
 pub use config::{LogLevel, ServerConfig};
-pub use observability::{Logger, ServerMetricsSnapshot};
-pub use shutdown::ShutdownHandle;
 pub use game::{
-    game_factory, move_args, spawn, CLIENT_REDUCERS, COL_ALIVE, COL_AMMO, COL_COOLDOWN,
-    COL_CONNECTED, COL_FACING, COL_HP, COL_ID, COL_MAX_HP, COL_SCORE, COL_X, COL_Y, TABLE,
-    ARENA_HEIGHT, ARENA_WIDTH, FIRE_COOLDOWN, FIRE_DAMAGE, POS_INDEX, START_AMMO, START_HP,
+    ARENA_HEIGHT, ARENA_WIDTH, CLIENT_REDUCERS, COL_ALIVE, COL_AMMO, COL_CONNECTED, COL_COOLDOWN,
+    COL_FACING, COL_HP, COL_ID, COL_MAX_HP, COL_SCORE, COL_X, COL_Y, FIRE_COOLDOWN, FIRE_DAMAGE,
+    POS_INDEX, START_AMMO, START_HP, TABLE, game_factory, move_args, spawn,
 };
+pub use observability::{Logger, ServerMetricsSnapshot};
+pub use server::{ServerArgs, run_server};
+pub use shutdown::ShutdownHandle;
 pub use wasm::fire_weapon_module;
-pub use server::{run_server, ServerArgs};

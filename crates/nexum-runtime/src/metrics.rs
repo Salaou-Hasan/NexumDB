@@ -108,6 +108,8 @@ impl RuntimeMetrics {
 
     /// Average tick duration in nanoseconds, or 0 when no ticks have run.
     pub fn avg_tick_ns(&self) -> u64 {
-        self.tick_ns_total.checked_div(self.ticks_total).unwrap_or(0)
+        self.tick_ns_total
+            .checked_div(self.ticks_total)
+            .unwrap_or(0)
     }
 }

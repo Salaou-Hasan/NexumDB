@@ -53,13 +53,15 @@ pub mod transport;
 
 pub use auth::{Authenticator, Principal, TokenAuthenticator};
 pub use config::{NetworkConfig, NetworkEvent, OutboundOverflowPolicy};
-pub use rate::RateLimitConfig;
 pub use control::{ControlPlane, HealthReport};
 pub use error::{AuthError, NetworkError, ProtocolError};
-pub use gateway::{NetworkGateway, ProcessReport, StepReport, CALLER_SOURCE_ARG, SERVER_REQUEST_MSB};
-pub use policy::{AllowAllPolicy, GamePolicy};
+pub use gateway::{
+    CALLER_SOURCE_ARG, NetworkGateway, ProcessReport, SERVER_REQUEST_MSB, StepReport,
+};
 pub use metrics::NetworkMetrics;
+pub use policy::{AllowAllPolicy, GamePolicy};
 pub use protocol::{DeltaKind, PROTOCOL_VERSION};
+pub use rate::RateLimitConfig;
 pub use session::Session;
 pub use transport::{Connection, MemoryConnection, MemoryTransport, TcpConnection, TcpTransport};
 

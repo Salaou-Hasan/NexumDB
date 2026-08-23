@@ -25,9 +25,15 @@ pub enum GameServerEvent {
     /// A game instance was destroyed (records and worlds removed).
     GameDestroyed { game: GameInstanceId },
     /// Every partition of a game failed; the game cannot run.
-    GameFailed { game: GameInstanceId, reason: String },
+    GameFailed {
+        game: GameInstanceId,
+        reason: String,
+    },
     /// A game instance was reconstructed from persisted state.
-    GameRecovered { game: GameInstanceId, replayed_txs: usize },
+    GameRecovered {
+        game: GameInstanceId,
+        replayed_txs: usize,
+    },
     /// A player joined (or reconnected) a game.
     PlayerJoined {
         game: GameInstanceId,
@@ -36,11 +42,21 @@ pub enum GameServerEvent {
         reconnected: bool,
     },
     /// A player's connection dropped; membership retained.
-    PlayerDisconnected { game: GameInstanceId, player: PlayerId },
+    PlayerDisconnected {
+        game: GameInstanceId,
+        player: PlayerId,
+    },
     /// A player left a game.
-    PlayerLeft { game: GameInstanceId, player: PlayerId },
+    PlayerLeft {
+        game: GameInstanceId,
+        player: PlayerId,
+    },
     /// A partition was bound to a game.
-    PartitionAssigned { game: GameInstanceId, partition: PartitionId, world: WorldId },
+    PartitionAssigned {
+        game: GameInstanceId,
+        partition: PartitionId,
+        world: WorldId,
+    },
     /// A partition's world failed.
     PartitionFailed {
         game: GameInstanceId,
@@ -49,11 +65,19 @@ pub enum GameServerEvent {
         reason: String,
     },
     /// A partition's world was recovered.
-    PartitionRecovered { game: GameInstanceId, partition: PartitionId, world: WorldId },
+    PartitionRecovered {
+        game: GameInstanceId,
+        partition: PartitionId,
+        world: WorldId,
+    },
     /// A server-side command was rejected.
     CommandRejected { player: PlayerId, reason: String },
     /// A reducer call was rejected.
-    ReducerRejected { player: PlayerId, reducer: String, reason: String },
+    ReducerRejected {
+        player: PlayerId,
+        reducer: String,
+        reason: String,
+    },
     /// A world tick failed (zero authoritative mutation).
     TickFailed { world: WorldId },
     /// A reducer became client-callable.

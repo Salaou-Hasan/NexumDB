@@ -10,7 +10,7 @@
 
 use nexum_core::{ColumnType, Error, RowId, TableSchema, TransactionId, Value};
 use nexum_reducer::{ReducerArgs, ReducerContext};
-use nexum_table::{row, TableStore};
+use nexum_table::{TableStore, row};
 use nexum_tx::Transaction;
 
 use crate::{WasmLimits, WasmModuleRegistry};
@@ -220,13 +220,11 @@ fn insert_body(id: u64, zone: u64, health: i32, level: u32) -> String {
 fn invoke_runs_a_module_and_returns_its_encoded_value() {
     let mut store = world();
     let mut registry = registry();
-    register(
-        &mut registry,
-        "ping",
-        "    (call $ret_u64 (i64.const 42))",
-    );
+    register(&mut registry, "ping", "    (call $ret_u64 (i64.const 42))");
 
-    let result = registry.invoke(&mut store, "ping", &ReducerArgs::new()).unwrap();
+    let result = registry
+        .invoke(&mut store, "ping", &ReducerArgs::new())
+        .unwrap();
     assert_eq!(result.return_value(), &Value::U64(42));
     assert!(result.changes().is_empty());
     assert!(result.events().is_empty());
@@ -263,7 +261,10 @@ fn registry_lists_deterministically_by_name() {
 
     let names: Vec<&str> = registry.list().map(|m| m.name()).collect();
     assert_eq!(names, vec!["alpha", "mid", "zeta"]);
-    assert_eq!(registry.list().map(|m| m.version()).collect::<Vec<_>>(), vec![1, 1, 1]);
+    assert_eq!(
+        registry.list().map(|m| m.version()).collect::<Vec<_>>(),
+        vec![1, 1, 1]
+    );
     assert!(registry.contains("mid"));
 }
 
@@ -427,7 +428,9 @@ fn memory_growth_beyond_the_ceiling_is_blocked() {
     // 64 pages is exactly the 4 MiB ceiling; growing one more page must fail.
     let bytes = module_with_memory(64, "    (call $ret_i32 (memory.grow (i32.const 1)))");
     registry_with.register("grow", 1, bytes).unwrap();
-    let result = registry_with.invoke(&mut store, "grow", &ReducerArgs::new()).unwrap();
+    let result = registry_with
+        .invoke(&mut store, "grow", &ReducerArgs::new())
+        .unwrap();
     // memory.grow failed → -1 (the limiter blocked it, deterministically).
     assert_eq!(result.return_value(), &Value::I32(-1));
 }
@@ -529,9 +532,7 @@ fn oversized_arguments_abort_before_execution() {
         .unwrap();
 
     let args = ReducerArgs::new().insert("player_id", 7u64);
-    let err = registry
-        .invoke(&mut store, "small", &args)
-        .unwrap_err();
+    let err = registry.invoke(&mut store, "small", &args).unwrap_err();
     assert!(matches!(err, Error::Capacity(_)));
 }
 
@@ -543,7 +544,9 @@ fn wasm_get_reads_a_committed_row() {
     let mut registry = registry();
     register(&mut registry, "get", &get_first_body(0));
 
-    let result = registry.invoke(&mut store, "get", &ReducerArgs::new()).unwrap();
+    let result = registry
+        .invoke(&mut store, "get", &ReducerArgs::new())
+        .unwrap();
     assert_eq!(result.return_value(), &Value::U64(1), "alice's id column");
 }
 
@@ -554,9 +557,13 @@ fn wasm_contains_checks_existence() {
     register(&mut registry, "has", &contains_body(0));
     register(&mut registry, "lacks", &contains_body(99));
 
-    let result = registry.invoke(&mut store, "has", &ReducerArgs::new()).unwrap();
+    let result = registry
+        .invoke(&mut store, "has", &ReducerArgs::new())
+        .unwrap();
     assert_eq!(result.return_value(), &Value::Bool(true));
-    let result = registry.invoke(&mut store, "lacks", &ReducerArgs::new()).unwrap();
+    let result = registry
+        .invoke(&mut store, "lacks", &ReducerArgs::new())
+        .unwrap();
     assert_eq!(result.return_value(), &Value::Bool(false));
 }
 
@@ -566,13 +573,26 @@ fn wasm_insert_writes_a_row() {
     let mut registry = registry();
     register(&mut registry, "spawn", &insert_body(9, 40, 100, 9));
 
-    let result = registry.invoke(&mut store, "spawn", &ReducerArgs::new()).unwrap();
+    let result = registry
+        .invoke(&mut store, "spawn", &ReducerArgs::new())
+        .unwrap();
     assert_eq!(result.changes().len(), 1);
-    assert!(matches!(result.changes()[0].kind(), nexum_core::ChangeKind::Insert));
+    assert!(matches!(
+        result.changes()[0].kind(),
+        nexum_core::ChangeKind::Insert
+    ));
     let players = store.table("players").unwrap();
     assert_eq!(players.len(), 3);
-    assert!(players.get_by_primary_key(&[Value::U64(9)]).unwrap().is_some());
-    assert_eq!(players.lookup("by_zone", &[Value::U64(40)]).unwrap().len(), 1);
+    assert!(
+        players
+            .get_by_primary_key(&[Value::U64(9)])
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(
+        players.lookup("by_zone", &[Value::U64(40)]).unwrap().len(),
+        1
+    );
 }
 
 #[test]
@@ -587,14 +607,24 @@ fn wasm_update_modifies_a_row_and_indexes() {
     (call $ret_u64 (i64.const 0))"#;
     register(&mut registry, "move", update);
 
-    registry.invoke(&mut store, "move", &ReducerArgs::new()).unwrap();
+    registry
+        .invoke(&mut store, "move", &ReducerArgs::new())
+        .unwrap();
     let players = store.table("players").unwrap();
     let row = players.get(alice).unwrap();
     assert_eq!(row.values()[2], Value::I32(5));
     assert_eq!(row.values()[1], Value::U64(30));
     // The derived index followed the update.
-    assert_eq!(players.lookup("by_zone", &[Value::U64(30)]).unwrap(), vec![alice]);
-    assert!(players.lookup("by_zone", &[Value::U64(10)]).unwrap().is_empty());
+    assert_eq!(
+        players.lookup("by_zone", &[Value::U64(30)]).unwrap(),
+        vec![alice]
+    );
+    assert!(
+        players
+            .lookup("by_zone", &[Value::U64(10)])
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -608,7 +638,9 @@ fn wasm_delete_removes_a_row() {
     (call $ret_u64 (i64.const 0))"#;
     register(&mut registry, "remove", delete);
 
-    registry.invoke(&mut store, "remove", &ReducerArgs::new()).unwrap();
+    registry
+        .invoke(&mut store, "remove", &ReducerArgs::new())
+        .unwrap();
     let players = store.table("players").unwrap();
     assert_eq!(players.len(), 1);
     assert!(players.get(alice).is_none());
@@ -625,7 +657,9 @@ fn wasm_scan_counts_rows() {
     (call $ret_u64 (call $scan_count))"#;
     register(&mut registry, "count", scan);
 
-    let result = registry.invoke(&mut store, "count", &ReducerArgs::new()).unwrap();
+    let result = registry
+        .invoke(&mut store, "count", &ReducerArgs::new())
+        .unwrap();
     assert_eq!(result.return_value(), &Value::U64(2));
 }
 
@@ -642,9 +676,18 @@ fn wasm_lookup_unique_finds_owners() {
     (call $ret_u64 (call $lookup_count))"#;
     register(&mut registry, "levels", lookup);
 
-    let result = registry.invoke(&mut store, "levels", &ReducerArgs::new()).unwrap();
+    let result = registry
+        .invoke(&mut store, "levels", &ReducerArgs::new())
+        .unwrap();
     assert_eq!(result.return_value(), &Value::U64(1), "bob owns level 6");
-    assert_eq!(store.table("players").unwrap().lookup_unique("by_level", &[Value::U32(6)]).unwrap(), vec![bob]);
+    assert_eq!(
+        store
+            .table("players")
+            .unwrap()
+            .lookup_unique("by_level", &[Value::U32(6)])
+            .unwrap(),
+        vec![bob]
+    );
 }
 
 #[test]
@@ -658,7 +701,9 @@ fn wasm_emit_buffers_events_transaction_locally() {
     (call $ret_u64 (i64.const 0))"#;
     register(&mut registry, "cheer", emit);
 
-    let result = registry.invoke(&mut store, "cheer", &ReducerArgs::new()).unwrap();
+    let result = registry
+        .invoke(&mut store, "cheer", &ReducerArgs::new())
+        .unwrap();
     assert_eq!(result.events().len(), 1);
     assert_eq!(result.events()[0].name(), "hello");
     assert_eq!(result.events()[0].payload(), &Value::U64(42));
@@ -681,8 +726,14 @@ fn wasm_read_your_writes_insert_then_get() {
     (call $ret_u64 (call $get_first_u64))"#;
     register(&mut registry, "ryw_insert", body);
 
-    let result = registry.invoke(&mut store, "ryw_insert", &ReducerArgs::new()).unwrap();
-    assert_eq!(result.return_value(), &Value::U64(7), "the pending insert is visible");
+    let result = registry
+        .invoke(&mut store, "ryw_insert", &ReducerArgs::new())
+        .unwrap();
+    assert_eq!(
+        result.return_value(),
+        &Value::U64(7),
+        "the pending insert is visible"
+    );
     assert_eq!(result.changes().len(), 1);
 }
 
@@ -704,8 +755,14 @@ fn wasm_read_your_writes_insert_update_get() {
     (call $ret_i32 (call $get_health))"#;
     register(&mut registry, "ryw_iu", body);
 
-    let result = registry.invoke(&mut store, "ryw_iu", &ReducerArgs::new()).unwrap();
-    assert_eq!(result.return_value(), &Value::I32(5), "the updated health is visible");
+    let result = registry
+        .invoke(&mut store, "ryw_iu", &ReducerArgs::new())
+        .unwrap();
+    assert_eq!(
+        result.return_value(),
+        &Value::I32(5),
+        "the updated health is visible"
+    );
     assert_eq!(result.changes().len(), 1);
 }
 
@@ -726,9 +783,18 @@ fn wasm_read_your_writes_insert_delete_get() {
     (call $ret_bool (call $get_present))"#;
     register(&mut registry, "ryw_id", body);
 
-    let result = registry.invoke(&mut store, "ryw_id", &ReducerArgs::new()).unwrap();
-    assert_eq!(result.return_value(), &Value::Bool(false), "deleted in the transaction view");
-    assert!(result.changes().is_empty(), "insert→delete netted to nothing");
+    let result = registry
+        .invoke(&mut store, "ryw_id", &ReducerArgs::new())
+        .unwrap();
+    assert_eq!(
+        result.return_value(),
+        &Value::Bool(false),
+        "deleted in the transaction view"
+    );
+    assert!(
+        result.changes().is_empty(),
+        "insert→delete netted to nothing"
+    );
 }
 
 #[test]
@@ -746,9 +812,14 @@ fn wasm_read_your_writes_update_then_get() {
     (call $ret_i32 (call $get_health))"#;
     register(&mut registry, "ryw_update", body);
 
-    let result = registry.invoke(&mut store, "ryw_update", &ReducerArgs::new()).unwrap();
+    let result = registry
+        .invoke(&mut store, "ryw_update", &ReducerArgs::new())
+        .unwrap();
     assert_eq!(result.return_value(), &Value::I32(5));
-    assert_eq!(store.table("players").unwrap().get(alice).unwrap().values()[2], Value::I32(5));
+    assert_eq!(
+        store.table("players").unwrap().get(alice).unwrap().values()[2],
+        Value::I32(5)
+    );
 }
 
 #[test]
@@ -765,7 +836,9 @@ fn wasm_read_your_writes_delete_then_get() {
     (call $ret_bool (call $get_present))"#;
     register(&mut registry, "ryw_delete", body);
 
-    let result = registry.invoke(&mut store, "ryw_delete", &ReducerArgs::new()).unwrap();
+    let result = registry
+        .invoke(&mut store, "ryw_delete", &ReducerArgs::new())
+        .unwrap();
     assert_eq!(result.return_value(), &Value::Bool(false));
     assert_eq!(store.table("players").unwrap().len(), 1);
 }
@@ -789,8 +862,15 @@ fn wasm_unique_key_violation_aborts_with_zero_mutation() {
     let err = registry
         .invoke(&mut store, "cheat", &ReducerArgs::new())
         .unwrap_err();
-    assert!(matches!(err, Error::AlreadyExists(_)), "commit validation failed: {err}");
-    assert_eq!(store.table("players").unwrap().len(), 2, "zero authoritative mutation");
+    assert!(
+        matches!(err, Error::AlreadyExists(_)),
+        "commit validation failed: {err}"
+    );
+    assert_eq!(
+        store.table("players").unwrap().len(),
+        2,
+        "zero authoritative mutation"
+    );
 }
 
 #[test]
@@ -810,11 +890,19 @@ fn wasm_multi_table_commit_is_atomic() {
     (call $ret_u64 (i64.const 0))"#;
     register(&mut registry, "trade", body);
 
-    let result = registry.invoke(&mut store, "trade", &ReducerArgs::new()).unwrap();
+    let result = registry
+        .invoke(&mut store, "trade", &ReducerArgs::new())
+        .unwrap();
     assert_eq!(result.changes().len(), 2);
     // Deterministic commit order: table id 0 (players) before table id 1.
-    assert_eq!(result.changes()[0].table_id(), nexum_core::TableId::from_u64(0));
-    assert_eq!(result.changes()[1].table_id(), nexum_core::TableId::from_u64(1));
+    assert_eq!(
+        result.changes()[0].table_id(),
+        nexum_core::TableId::from_u64(0)
+    );
+    assert_eq!(
+        result.changes()[1].table_id(),
+        nexum_core::TableId::from_u64(1)
+    );
     assert_eq!(result.events().len(), 1);
     assert_eq!(store.table("players").unwrap().len(), 1);
     assert_eq!(store.table("economy").unwrap().len(), 1);
@@ -837,7 +925,11 @@ fn wasm_multi_table_abort_leaves_nothing() {
         .invoke(&mut store, "ghost", &ReducerArgs::new())
         .unwrap_err();
     assert!(matches!(err, Error::NotFound(_)));
-    assert_eq!(store.table("players").unwrap().len(), 2, "players untouched");
+    assert_eq!(
+        store.table("players").unwrap().len(),
+        2,
+        "players untouched"
+    );
     assert!(store.drain_changes().is_empty());
 }
 
@@ -1011,9 +1103,15 @@ fn committed_changes_carry_real_row_ids() {
     let mut registry = registry();
     register(&mut registry, "spawn", &insert_body(9, 40, 100, 9));
 
-    let result = registry.invoke(&mut store, "spawn", &ReducerArgs::new()).unwrap();
+    let result = registry
+        .invoke(&mut store, "spawn", &ReducerArgs::new())
+        .unwrap();
     // The guest saw a provisional handle; the change carries the real id.
-    assert_eq!(result.changes()[0].row_id(), RowId::from_u64(2), "next storage id");
+    assert_eq!(
+        result.changes()[0].row_id(),
+        RowId::from_u64(2),
+        "next storage id"
+    );
 }
 
 #[test]
@@ -1033,7 +1131,9 @@ fn malicious_value_count_is_a_clean_error_not_a_panic() {
     (local.set $p (call $put_value_u64 (local.get $p) (i64.const 1)))
     (drop (call $call_op (i32.const 5) (local.get $p)))
     (call $ret_u64 (i64.const 0))"#;
-    registry.register("huge-insert", 1, module(huge_insert)).unwrap();
+    registry
+        .register("huge-insert", 1, module(huge_insert))
+        .unwrap();
 
     let huge_lookup = r#"    (local $p i32)
     (local.set $p (call $put_str (i32.const 0) (i32.const 90000) (i32.const 7)))
@@ -1042,7 +1142,9 @@ fn malicious_value_count_is_a_clean_error_not_a_panic() {
     (local.set $p (call $put_value_u32 (local.get $p) (i32.const 6)))
     (drop (call $call_op (i32.const 4) (local.get $p)))
     (call $ret_u64 (i64.const 0))"#;
-    registry.register("huge-lookup", 1, module(huge_lookup)).unwrap();
+    registry
+        .register("huge-lookup", 1, module(huge_lookup))
+        .unwrap();
 
     for name in ["huge-insert", "huge-lookup"] {
         let err = registry
@@ -1064,7 +1166,9 @@ fn arguments_are_written_into_the_input_buffer_unconditionally() {
     let mut registry = registry();
     register(&mut registry, "ping", "    (call $ret_u64 (i64.const 42))");
 
-    let args = ReducerArgs::new().insert("name", "alice").insert("level", 9u64);
+    let args = ReducerArgs::new()
+        .insert("name", "alice")
+        .insert("level", 9u64);
     let result = registry.invoke(&mut store, "ping", &args).unwrap();
     assert_eq!(result.return_value(), &Value::U64(42));
 }

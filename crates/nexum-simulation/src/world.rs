@@ -49,9 +49,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use nexum_core::{
-    Error, PartitionId, Result, SystemId, TickId, TransactionId, Value, WorldId,
-};
+use nexum_core::{Error, PartitionId, Result, SystemId, TickId, TransactionId, Value, WorldId};
 use nexum_reducer::{ReducerArgs, ReducerEvent, ReducerRegistry};
 use nexum_storage::Change;
 use nexum_table::TableStore;
@@ -560,8 +558,12 @@ impl World {
             for message in &batch {
                 let started = std::time::Instant::now();
                 let (_, events) = invoke_handler(store, &mut tx, native, wasm, message)?;
-                record_reducer(&mut reducer_profile, profiling_enabled, message.kind(),
-                    started.elapsed().as_nanos() as u64);
+                record_reducer(
+                    &mut reducer_profile,
+                    profiling_enabled,
+                    message.kind(),
+                    started.elapsed().as_nanos() as u64,
+                );
                 append_events(&mut tick_events, events, max_events)?;
             }
 
@@ -571,8 +573,12 @@ impl World {
                 let started = std::time::Instant::now();
                 let (_, events) =
                     native.invoke_in_tx(store, &mut tx, event.reducer(), event.args())?;
-                record_reducer(&mut reducer_profile, profiling_enabled, event.reducer(),
-                    started.elapsed().as_nanos() as u64);
+                record_reducer(
+                    &mut reducer_profile,
+                    profiling_enabled,
+                    event.reducer(),
+                    started.elapsed().as_nanos() as u64,
+                );
                 append_events(&mut tick_events, events, max_events)?;
             }
 
@@ -588,31 +594,23 @@ impl World {
                 let mut child = Transaction::new(tx.id());
                 child.branch_of(&tx)?;
                 let started = std::time::Instant::now();
-                let outcome = invoke_reducer(
-                    store,
-                    &mut child,
-                    native,
-                    wasm,
+                let outcome =
+                    invoke_reducer(store, &mut child, native, wasm, call.reducer(), call.args());
+                record_reducer(
+                    &mut reducer_profile,
+                    profiling_enabled,
                     call.reducer(),
-                    call.args(),
+                    started.elapsed().as_nanos() as u64,
                 );
-                record_reducer(&mut reducer_profile, profiling_enabled, call.reducer(),
-                    started.elapsed().as_nanos() as u64);
                 match outcome {
                     Ok((value, events)) => {
                         tx.absorb(child)?;
-                        reducer_results.push(ReducerCallResult::ok(
-                            call.request_id(),
-                            value,
-                        ));
+                        reducer_results.push(ReducerCallResult::ok(call.request_id(), value));
                         append_events(&mut tick_events, events, max_events)?;
                     }
                     Err(error) => {
                         let _ = child.abort();
-                        reducer_results.push(ReducerCallResult::err(
-                            call.request_id(),
-                            error,
-                        ));
+                        reducer_results.push(ReducerCallResult::err(call.request_id(), error));
                     }
                 }
             }
@@ -727,12 +725,7 @@ impl World {
 /// Records one reducer invocation in the per-reducer profile (Phase 21.5
 /// instrumentation). No-op unless profiling is enabled; never influences
 /// simulation semantics.
-fn record_reducer(
-    profile: &mut BTreeMap<String, (u64, u64)>,
-    enabled: bool,
-    name: &str,
-    ns: u64,
-) {
+fn record_reducer(profile: &mut BTreeMap<String, (u64, u64)>, enabled: bool, name: &str, ns: u64) {
     if enabled {
         let entry = profile.entry(name.to_string()).or_insert((0, 0));
         entry.0 += 1;
@@ -753,15 +746,16 @@ fn invoke_handler(
     wasm: Option<&WasmModuleRegistry>,
     message: &PartitionMessage,
 ) -> Result<(Value, Vec<ReducerEvent>)> {
-    invoke_reducer(store, tx, native, wasm, message.kind(), message.payload())
-        .map_err(|error| match error {
+    invoke_reducer(store, tx, native, wasm, message.kind(), message.payload()).map_err(|error| {
+        match error {
             Error::NotFound(_) => Error::not_found(format!(
                 "no handler registered for message kind '{}' on partition {}",
                 message.kind(),
                 message.to()
             )),
             other => other,
-        })
+        }
+    })
 }
 
 /// Invokes a named reducer against a transaction (ADR-013 D3).
@@ -790,4 +784,3 @@ fn invoke_reducer(
         "no reducer registered for '{name}'"
     )))
 }
-

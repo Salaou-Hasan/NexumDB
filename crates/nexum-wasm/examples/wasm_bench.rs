@@ -280,52 +280,68 @@ fn main() {
     // empty
     let mut store = bench_world();
     time("empty", n, |i| {
-        registry.invoke(&mut store, "empty", &args(i as u64)).unwrap();
+        registry
+            .invoke(&mut store, "empty", &args(i as u64))
+            .unwrap();
     });
 
     // read-only: fixed row on a one-row store.
     let mut store = bench_world();
     seed_players(&mut store, 1);
     time("read-only (get row 0)", n, |i| {
-        registry.invoke(&mut store, "read0", &args(i as u64)).unwrap();
+        registry
+            .invoke(&mut store, "read0", &args(i as u64))
+            .unwrap();
     });
 
     // single-row read: row k on an n-row store (seeding excluded from timing).
     let mut store = bench_world();
     seed_players(&mut store, n as u64);
     time("single-row read (get k)", n, |i| {
-        registry.invoke(&mut store, "read_k", &args(i as u64)).unwrap();
+        registry
+            .invoke(&mut store, "read_k", &args(i as u64))
+            .unwrap();
     });
 
     // single-row write: growing store, unique id per invocation.
     let mut store = bench_world();
     time("single-row write", n, |i| {
-        registry.invoke(&mut store, "write1", &args(i as u64)).unwrap();
+        registry
+            .invoke(&mut store, "write1", &args(i as u64))
+            .unwrap();
     });
 
     // 10-row write.
     let mut store = bench_world();
     time("10-row write", n, |i| {
-        registry.invoke(&mut store, "write10", &args(i as u64)).unwrap();
+        registry
+            .invoke(&mut store, "write10", &args(i as u64))
+            .unwrap();
     });
 
     // multi-table transaction.
     let mut store = bench_world();
     time("multi-table tx", n, |i| {
-        registry.invoke(&mut store, "multi", &args(i as u64)).unwrap();
+        registry
+            .invoke(&mut store, "multi", &args(i as u64))
+            .unwrap();
     });
 
     // event emission.
     let mut store = bench_world();
     time("event emission", n, |i| {
-        registry.invoke(&mut store, "emit", &args(i as u64)).unwrap();
+        registry
+            .invoke(&mut store, "emit", &args(i as u64))
+            .unwrap();
     });
 
     // scan over a 1000-row table.
     let mut store = bench_world();
     seed_players(&mut store, 1_000);
     time("scan (1000 rows)", n, |i| {
-        registry.invoke(&mut store, "scan", &args(i as u64)).unwrap();
+        registry
+            .invoke(&mut store, "scan", &args(i as u64))
+            .unwrap();
     });
 
     // trap: every invocation fails (abort path cost).

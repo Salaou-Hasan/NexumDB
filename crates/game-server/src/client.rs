@@ -20,12 +20,12 @@ use std::time::{Duration, Instant};
 
 use nexum_core::{Value, WorldId};
 use nexum_sdk::transport::ClientTransport;
-use nexum_sdk::{Client, ServerEvent, SdkConfig};
+use nexum_sdk::{Client, SdkConfig, ServerEvent};
 use nexum_subscription::Query;
 
 use crate::game::{
-    COL_ALIVE, COL_AMMO, COL_CONNECTED, COL_COOLDOWN, COL_FACING, COL_HP, COL_ID, COL_SCORE,
-    COL_X, COL_Y, TABLE, ARENA_HEIGHT, ARENA_WIDTH, CLIENT_REDUCERS, START_HP,
+    ARENA_HEIGHT, ARENA_WIDTH, CLIENT_REDUCERS, COL_ALIVE, COL_AMMO, COL_CONNECTED, COL_COOLDOWN,
+    COL_FACING, COL_HP, COL_ID, COL_SCORE, COL_X, COL_Y, START_HP, TABLE,
 };
 
 /// A client-side error (any error surfaced by the SDK or setup).
@@ -129,11 +129,7 @@ fn pump(client: &mut Client) -> Vec<ServerEvent> {
 }
 
 /// Pumps until `ready` is true or the deadline passes.
-fn pump_until(
-    client: &mut Client,
-    ready: impl Fn(&Client) -> bool,
-    timeout: Duration,
-) -> bool {
+fn pump_until(client: &mut Client, ready: impl Fn(&Client) -> bool, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         let _ = client.pump();
@@ -219,7 +215,9 @@ fn render(client: &Client, local: u64, self_id: u64, tick: u64, clear: bool) {
             );
         }
     }
-    println!("  tick {tick}  |  {self_id}@world |  keys: w/a/s/d move · f fire · r reload · x respawn · q quit");
+    println!(
+        "  tick {tick}  |  {self_id}@world |  keys: w/a/s/d move · f fire · r reload · x respawn · q quit"
+    );
 }
 
 /// Extracts the last committed tick from the pending events.
@@ -243,7 +241,11 @@ pub fn run_client(args: ClientArgs) -> Result<ClientOutcome, ClientError> {
         .next()
         .ok_or("could not resolve server address")?;
     client.connect(ClientTransport::tcp_connect(addr, 256, 64 * 1024)?.into_inner())?;
-    if !pump_until(&mut client, |client| client.is_connected(), Duration::from_secs(5)) {
+    if !pump_until(
+        &mut client,
+        |client| client.is_connected(),
+        Duration::from_secs(5),
+    ) {
         return Err(format!(
             "handshake with {}:{} did not complete: {}",
             args.addr,
@@ -298,10 +300,7 @@ pub fn run_client(args: ClientArgs) -> Result<ClientOutcome, ClientError> {
         |client| {
             client
                 .view(local)
-                .map(|view| {
-                    view.rows()
-                        .any(|row| player_of(row).id == self_id)
-                })
+                .map(|view| view.rows().any(|row| player_of(row).id == self_id))
                 .unwrap_or(false)
         },
         Duration::from_secs(5),
@@ -362,13 +361,48 @@ fn run_interactive(
         }
         let key = line.trim().to_ascii_lowercase();
         let sent = match key.as_str() {
-            "w" => send_call(client, &mut outcome, "move_player", crate::game::move_args(0, -1)),
-            "a" => send_call(client, &mut outcome, "move_player", crate::game::move_args(-1, 0)),
-            "s" => send_call(client, &mut outcome, "move_player", crate::game::move_args(0, 1)),
-            "d" => send_call(client, &mut outcome, "move_player", crate::game::move_args(1, 0)),
-            "f" => send_call(client, &mut outcome, "fire_weapon", nexum_reducer::ReducerArgs::new()),
-            "r" => send_call(client, &mut outcome, "reload_weapon", nexum_reducer::ReducerArgs::new()),
-            "x" => send_call(client, &mut outcome, "respawn_player", nexum_reducer::ReducerArgs::new()),
+            "w" => send_call(
+                client,
+                &mut outcome,
+                "move_player",
+                crate::game::move_args(0, -1),
+            ),
+            "a" => send_call(
+                client,
+                &mut outcome,
+                "move_player",
+                crate::game::move_args(-1, 0),
+            ),
+            "s" => send_call(
+                client,
+                &mut outcome,
+                "move_player",
+                crate::game::move_args(0, 1),
+            ),
+            "d" => send_call(
+                client,
+                &mut outcome,
+                "move_player",
+                crate::game::move_args(1, 0),
+            ),
+            "f" => send_call(
+                client,
+                &mut outcome,
+                "fire_weapon",
+                nexum_reducer::ReducerArgs::new(),
+            ),
+            "r" => send_call(
+                client,
+                &mut outcome,
+                "reload_weapon",
+                nexum_reducer::ReducerArgs::new(),
+            ),
+            "x" => send_call(
+                client,
+                &mut outcome,
+                "respawn_player",
+                nexum_reducer::ReducerArgs::new(),
+            ),
             _ => {
                 println!("  unknown key '{key}'");
                 false
@@ -440,37 +474,65 @@ fn run_auto(
         // Act.
         if let Some(me) = &me {
             if !me.alive {
-                if send_call(client, &mut outcome, "respawn_player", nexum_reducer::ReducerArgs::new()) {
+                if send_call(
+                    client,
+                    &mut outcome,
+                    "respawn_player",
+                    nexum_reducer::ReducerArgs::new(),
+                ) {
                     outcome.respawns += 1;
                 }
             } else if me.ammo <= 2 {
-                send_call(client, &mut outcome, "reload_weapon", nexum_reducer::ReducerArgs::new());
+                send_call(
+                    client,
+                    &mut outcome,
+                    "reload_weapon",
+                    nexum_reducer::ReducerArgs::new(),
+                );
             } else if let Some(target) = nearest_other(&players, self_id) {
                 let aim = aim_cell(me);
                 let aligned = target.x == aim.0 && target.y == aim.1;
                 if aligned && me.cooldown == 0 {
-                    send_call(client, &mut outcome, "fire_weapon", nexum_reducer::ReducerArgs::new());
+                    send_call(
+                        client,
+                        &mut outcome,
+                        "fire_weapon",
+                        nexum_reducer::ReducerArgs::new(),
+                    );
                 } else if me.cooldown > 0 && aligned {
                     // Wait for the cooldown; do nothing this pass.
                 } else {
                     let (dx, dy) = step_toward(me, &target);
-                    send_call(client, &mut outcome, "move_player", crate::game::move_args(dx, dy));
+                    send_call(
+                        client,
+                        &mut outcome,
+                        "move_player",
+                        crate::game::move_args(dx, dy),
+                    );
                 }
             } else {
                 // No other player: drift toward the center.
-                let (dx, dy) = step_toward(me, &PlayerView {
-                    id: 0,
-                    x: ARENA_WIDTH / 2,
-                    y: ARENA_HEIGHT / 2,
-                    hp: 0,
-                    alive: true,
-                    connected: true,
-                    cooldown: 0,
-                    ammo: 0,
-                    score: 0,
-                    facing: 1,
-                });
-                send_call(client, &mut outcome, "move_player", crate::game::move_args(dx, dy));
+                let (dx, dy) = step_toward(
+                    me,
+                    &PlayerView {
+                        id: 0,
+                        x: ARENA_WIDTH / 2,
+                        y: ARENA_HEIGHT / 2,
+                        hp: 0,
+                        alive: true,
+                        connected: true,
+                        cooldown: 0,
+                        ammo: 0,
+                        score: 0,
+                        facing: 1,
+                    },
+                );
+                send_call(
+                    client,
+                    &mut outcome,
+                    "move_player",
+                    crate::game::move_args(dx, dy),
+                );
             }
         }
 
@@ -501,7 +563,11 @@ fn run_auto(
             .unwrap_or_else(|| "me? (not joined yet)".into());
         println!(
             "[tick {tick:>3}] {me_desc} | {} | shots {} hits {} kills {} deaths {}",
-            if seen.is_empty() { "no other players".into() } else { seen.join(" ") },
+            if seen.is_empty() {
+                "no other players".into()
+            } else {
+                seen.join(" ")
+            },
             outcome.shots_fired,
             outcome.hits_observed,
             outcome.kills_observed,

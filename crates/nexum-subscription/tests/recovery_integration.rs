@@ -6,9 +6,9 @@
 
 use std::path::PathBuf;
 
+use nexum_core::row;
 use nexum_core::schema::TableSchema;
 use nexum_core::{ColumnType, RowId, Value};
-use nexum_core::row;
 use nexum_subscription::{Query, SubscriptionRegistry, SubscriptionUpdate};
 use nexum_table::TableStore;
 use nexum_tx::Transaction;
@@ -66,7 +66,13 @@ fn recovered_history_is_not_replayed_as_live_commits() {
 
     let mut registry = SubscriptionRegistry::new();
     let sub = registry
-        .subscribe(&store, Query::builder("players").predicate_eq("zone_id", 10u64).build().unwrap())
+        .subscribe(
+            &store,
+            Query::builder("players")
+                .predicate_eq("zone_id", 10u64)
+                .build()
+                .unwrap(),
+        )
         .unwrap();
     registry.drain(sub).unwrap(); // Initial snapshot (empty)
 
@@ -80,7 +86,9 @@ fn recovered_history_is_not_replayed_as_live_commits() {
     assert_eq!(registry.drain(sub).unwrap().len(), 1); // only the zone-10 insert
 
     // Snapshot the durable state, then one more commit after it.
-    Snapshot::capture(&store, wal.lsn().as_u64()).write(&dir).unwrap();
+    Snapshot::capture(&store, wal.lsn().as_u64())
+        .write(&dir)
+        .unwrap();
     commit_and_durably_fan(&mut store, &mut wal, &mut registry, |tx, store| {
         tx.insert(store, "players", player(3, 10, 80, 3)).unwrap();
     });
@@ -102,8 +110,15 @@ fn recovered_history_is_not_replayed_as_live_commits() {
 
     // Exact reconstruction.
     assert_eq!(fresh.table("players").unwrap().len(), expected_len);
-    let p1 = fresh.table("players").unwrap().get(RowId::from_u64(0)).unwrap();
-    assert_eq!(p1.get_named(fresh.table("players").unwrap().schema(), "health"), Some(&Value::I32(100)));
+    let p1 = fresh
+        .table("players")
+        .unwrap()
+        .get(RowId::from_u64(0))
+        .unwrap();
+    assert_eq!(
+        p1.get_named(fresh.table("players").unwrap().schema(), "health"),
+        Some(&Value::I32(100))
+    );
     assert_eq!(fresh.table("players").unwrap().epoch(), expected_epoch);
     assert_eq!(fresh.next_transaction_id(), expected_next_tx);
     assert!(fresh.drain_changes().is_empty());
@@ -113,7 +128,13 @@ fn recovered_history_is_not_replayed_as_live_commits() {
     // re-delivered as live.
     let mut registry2 = SubscriptionRegistry::new();
     let sub2 = registry2
-        .subscribe(&fresh, Query::builder("players").predicate_eq("zone_id", 10u64).build().unwrap())
+        .subscribe(
+            &fresh,
+            Query::builder("players")
+                .predicate_eq("zone_id", 10u64)
+                .build()
+                .unwrap(),
+        )
         .unwrap();
     let initial = registry2.drain(sub2).unwrap();
     assert_eq!(initial.len(), 1);
@@ -136,7 +157,8 @@ fn recovered_history_is_not_replayed_as_live_commits() {
         SubscriptionUpdate::Insert { row, .. } => {
             assert_eq!(row.row_id(), RowId::from_u64(3));
             assert_eq!(
-                row.row().get_named(fresh.table("players").unwrap().schema(), "health"),
+                row.row()
+                    .get_named(fresh.table("players").unwrap().schema(), "health"),
                 Some(&Value::I32(70))
             );
         }

@@ -10,11 +10,11 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use nexum_core::{row, ColumnType, SystemId, TickId, WorldId};
+use nexum_core::{ColumnType, SystemId, TickId, WorldId, row};
 use nexum_network::{
-    protocol::{self, ClientMessage, ServerMessage},
     Connection, MemoryConnection, MemoryTransport, NetworkConfig, NetworkGateway, Principal,
     TokenAuthenticator,
+    protocol::{self, ClientMessage, ServerMessage},
 };
 use nexum_runtime::{Runtime, RuntimeConfig, WorldFactory};
 use nexum_simulation::{InputCommand, InputFrame, SimulationConfig, SystemDefinition, World};
@@ -55,44 +55,51 @@ fn ensure_players(store: &mut TableStore) {
 
 /// A world whose system consumes `spawn` commands as player rows.
 fn input_factory() -> WorldFactory {
-    Box::new(|id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-        ensure_players(&mut store);
-        let mut world = World::new(id, store, sim)?;
-        world
-            .add_system(
-                SystemDefinition::new(SystemId::from_u64(0), "consumer", 0, |ctx, frame| {
-                    for command in frame.commands() {
-                        if command.kind() == "spawn" {
-                            let id = command.payload().and_then(nexum_core::Value::as_u64).unwrap();
-                            ctx.insert("players", row![id, 10u64, 100i32])?;
+    Box::new(
+        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
+            ensure_players(&mut store);
+            let mut world = World::new(id, store, sim)?;
+            world
+                .add_system(
+                    SystemDefinition::new(SystemId::from_u64(0), "consumer", 0, |ctx, frame| {
+                        for command in frame.commands() {
+                            if command.kind() == "spawn" {
+                                let id = command
+                                    .payload()
+                                    .and_then(nexum_core::Value::as_u64)
+                                    .unwrap();
+                                ctx.insert("players", row![id, 10u64, 100i32])?;
+                            }
                         }
-                    }
-                    Ok(())
-                })
-                .unwrap(),
-            )
-            .unwrap();
-        Ok(world)
-    })
+                        Ok(())
+                    })
+                    .unwrap(),
+                )
+                .unwrap();
+            Ok(world)
+        },
+    )
 }
 
 /// A world whose system inserts one player row per tick (for subscription
 /// fan-out and slow-client scenarios).
 fn writer_factory() -> WorldFactory {
-    Box::new(|id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-        ensure_players(&mut store);
-        let mut world = World::new(id, store, sim)?;
-        world
-            .add_system(
-                SystemDefinition::new(SystemId::from_u64(0), "writer", 0, |ctx, _| {
-                    ctx.insert("players", row![ctx.tick().as_u64(), 10u64, 100i32])?;
-                    Ok(())
-                })
-                .unwrap(),
-            )
-            .unwrap();
-        Ok(world)
-    })
+    Box::new(
+        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
+            ensure_players(&mut store);
+            let mut world = World::new(id, store, sim)?;
+            world
+                .add_system(
+                    SystemDefinition::new(SystemId::from_u64(0), "writer", 0, |ctx, _| {
+                        ctx.insert("players", row![ctx.tick().as_u64(), 10u64, 100i32])?;
+                        Ok(())
+                    })
+                    .unwrap(),
+                )
+                .unwrap();
+            Ok(world)
+        },
+    )
 }
 
 fn auth() -> Arc<TokenAuthenticator> {
@@ -127,7 +134,9 @@ fn join_world(gateway: &mut NetworkGateway, client: &mut MemoryConnection, max: 
     let _ = client.try_recv_frame().unwrap().unwrap();
 
     let frame = protocol::encode_client(
-        &ClientMessage::Authenticate { credentials: "token".into() },
+        &ClientMessage::Authenticate {
+            credentials: "token".into(),
+        },
         max,
     )
     .unwrap();
@@ -136,7 +145,9 @@ fn join_world(gateway: &mut NetworkGateway, client: &mut MemoryConnection, max: 
     let _ = client.try_recv_frame().unwrap().unwrap();
 
     let frame = protocol::encode_client(
-        &ClientMessage::AttachWorld { world: WorldId::from_u64(0) },
+        &ClientMessage::AttachWorld {
+            world: WorldId::from_u64(0),
+        },
         max,
     )
     .unwrap();
@@ -191,7 +202,10 @@ fn main() {
     // 3. Session creation (handshake + auth + attach through the gateway).
     {
         let mut gateway = gateway_with(writer_factory());
-        gateway.control().create_world(WorldId::from_u64(0), SimulationConfig::new()).unwrap();
+        gateway
+            .control()
+            .create_world(WorldId::from_u64(0), SimulationConfig::new())
+            .unwrap();
         gateway.control().start_world(WorldId::from_u64(0)).unwrap();
         bench("session creation (h+a+a)", iterations, || {
             let mut client = open_client(&mut gateway, 4096);
@@ -202,7 +216,10 @@ fn main() {
     // 4. Input routing (one spawn command per frame).
     {
         let mut gateway = gateway_with(input_factory());
-        gateway.control().create_world(WorldId::from_u64(0), SimulationConfig::new()).unwrap();
+        gateway
+            .control()
+            .create_world(WorldId::from_u64(0), SimulationConfig::new())
+            .unwrap();
         gateway.control().start_world(WorldId::from_u64(0)).unwrap();
         let mut client = open_client(&mut gateway, 4096);
         join_world(&mut gateway, &mut client, max);
@@ -210,7 +227,8 @@ fn main() {
         bench("input routing (1 cmd/frame)", iterations, || {
             let mut frame = InputFrame::new(TickId::from_u64(tick));
             frame.push(InputCommand::new(1, "spawn", Some(nexum_core::Value::U64(tick))).unwrap());
-            let encoded = protocol::encode_client(&ClientMessage::InputFrame { frame }, max).unwrap();
+            let encoded =
+                protocol::encode_client(&ClientMessage::InputFrame { frame }, max).unwrap();
             client.try_send_frame(Arc::from(encoded)).unwrap();
             gateway.process_inbound();
             gateway.step_worlds().unwrap();
@@ -222,7 +240,10 @@ fn main() {
     // 5. Subscription update serialization (drain + serialize a delta).
     {
         let mut gateway = gateway_with(writer_factory());
-        gateway.control().create_world(WorldId::from_u64(0), SimulationConfig::new()).unwrap();
+        gateway
+            .control()
+            .create_world(WorldId::from_u64(0), SimulationConfig::new())
+            .unwrap();
         gateway.control().start_world(WorldId::from_u64(0)).unwrap();
         let mut client = open_client(&mut gateway, 4096);
         join_world(&mut gateway, &mut client, max);
@@ -249,7 +270,10 @@ fn main() {
     // 6. Outbound queue insertion (send-only path, no overflow).
     {
         let mut gateway = gateway_with(writer_factory());
-        gateway.control().create_world(WorldId::from_u64(0), SimulationConfig::new()).unwrap();
+        gateway
+            .control()
+            .create_world(WorldId::from_u64(0), SimulationConfig::new())
+            .unwrap();
         gateway.control().start_world(WorldId::from_u64(0)).unwrap();
         let mut client = open_client(&mut gateway, 100_000);
         join_world(&mut gateway, &mut client, max);
@@ -263,7 +287,10 @@ fn main() {
     // 7. Many connections stepping one world (fan-out).
     for (count, divisor) in [(100usize, 1usize), (1_000, 5)] {
         let mut gateway = gateway_with(writer_factory());
-        gateway.control().create_world(WorldId::from_u64(0), SimulationConfig::new()).unwrap();
+        gateway
+            .control()
+            .create_world(WorldId::from_u64(0), SimulationConfig::new())
+            .unwrap();
         gateway.control().start_world(WorldId::from_u64(0)).unwrap();
         let mut clients = Vec::new();
         for _ in 0..count {
@@ -271,12 +298,16 @@ fn main() {
             join_world(&mut gateway, &mut client, max);
             clients.push(client);
         }
-        bench(&format!("{count} connections / one tick"), iterations / divisor, || {
-            gateway.step_worlds().unwrap();
-            for client in &mut clients {
-                let _ = client.try_recv_frame().unwrap();
-            }
-        });
+        bench(
+            &format!("{count} connections / one tick"),
+            iterations / divisor,
+            || {
+                gateway.step_worlds().unwrap();
+                for client in &mut clients {
+                    let _ = client.try_recv_frame().unwrap();
+                }
+            },
+        );
     }
 
     // 8. Many subscriptions on one client (subscription flood limit raised).
@@ -284,7 +315,10 @@ fn main() {
         let config = NetworkConfig::new().with_max_subscriptions_per_session(2_000);
         let runtime = Runtime::new(RuntimeConfig::new(writer_factory())).unwrap();
         let mut gateway = NetworkGateway::new(runtime, config, auth()).unwrap();
-        gateway.control().create_world(WorldId::from_u64(0), SimulationConfig::new()).unwrap();
+        gateway
+            .control()
+            .create_world(WorldId::from_u64(0), SimulationConfig::new())
+            .unwrap();
         gateway.control().start_world(WorldId::from_u64(0)).unwrap();
         let mut client = open_client(&mut gateway, 100_000);
         join_world(&mut gateway, &mut client, max);
@@ -292,7 +326,10 @@ fn main() {
             let frame = protocol::encode_client(
                 &ClientMessage::Subscribe {
                     request_id: i as u64,
-                    query: Query::builder("players").predicate_eq("id", i as u64).build().unwrap(),
+                    query: Query::builder("players")
+                        .predicate_eq("id", i as u64)
+                        .build()
+                        .unwrap(),
                 },
                 max,
             )
@@ -315,7 +352,10 @@ fn main() {
     //    correlated ReducerResult.
     {
         let mut gateway = gateway_with(writer_factory());
-        gateway.control().create_world(WorldId::from_u64(0), SimulationConfig::new()).unwrap();
+        gateway
+            .control()
+            .create_world(WorldId::from_u64(0), SimulationConfig::new())
+            .unwrap();
         gateway.control().start_world(WorldId::from_u64(0)).unwrap();
         let mut client = open_client(&mut gateway, 4096);
         join_world(&mut gateway, &mut client, max);
@@ -333,27 +373,34 @@ fn main() {
         bench("frame decode (server ReducerResult)", iterations, || {
             let _ = protocol::decode_server(&result_frame, max).unwrap();
         });
-        bench("reducer call roundtrip (call → tick → result)", iterations / 2, || {
-            let call = ClientMessage::CallReducer {
-                request_id: request,
-                reducer: "bump".into(),
-                args: nexum_reducer::ReducerArgs::new().insert("amount", 1u64),
-            };
-            let encoded = protocol::encode_client(&call, max).unwrap();
-            client.try_send_frame(Arc::from(encoded)).unwrap();
-            gateway.process_inbound();
-            gateway.step_worlds().unwrap();
-            let _ = client.try_recv_frame().unwrap(); // TickUpdate
-            let _ = client.try_recv_frame().unwrap(); // ReducerResult
-            request += 1;
-        });
+        bench(
+            "reducer call roundtrip (call → tick → result)",
+            iterations / 2,
+            || {
+                let call = ClientMessage::CallReducer {
+                    request_id: request,
+                    reducer: "bump".into(),
+                    args: nexum_reducer::ReducerArgs::new().insert("amount", 1u64),
+                };
+                let encoded = protocol::encode_client(&call, max).unwrap();
+                client.try_send_frame(Arc::from(encoded)).unwrap();
+                gateway.process_inbound();
+                gateway.step_worlds().unwrap();
+                let _ = client.try_recv_frame().unwrap(); // TickUpdate
+                let _ = client.try_recv_frame().unwrap(); // ReducerResult
+                request += 1;
+            },
+        );
     }
 
     // 10. Slow-client isolation: one capped client falls stale while a
     //    healthy client keeps receiving every update.
     {
         let mut gateway = gateway_with(writer_factory());
-        gateway.control().create_world(WorldId::from_u64(0), SimulationConfig::new()).unwrap();
+        gateway
+            .control()
+            .create_world(WorldId::from_u64(0), SimulationConfig::new())
+            .unwrap();
         gateway.control().start_world(WorldId::from_u64(0)).unwrap();
         let mut slow = open_client(&mut gateway, 1);
         join_world(&mut gateway, &mut slow, max);

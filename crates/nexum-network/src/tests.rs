@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use nexum_core::binary::crc32;
 use nexum_core::{
-    row, ColumnType, ConnectionId, Error, ReducerId, Result, Row, RowId, SubscriptionId, SystemId,
-    TableId, TickId, TransactionId, Value, Version, WorldId,
+    ColumnType, ConnectionId, Error, ReducerId, Result, Row, RowId, SubscriptionId, SystemId,
+    TableId, TickId, TransactionId, Value, Version, WorldId, row,
 };
 use nexum_runtime::{Runtime, RuntimeConfig, RuntimeState, WorldFactory, WorldLifecycle};
 use nexum_simulation::{InputCommand, InputFrame, SimulationConfig, SystemDefinition, World};
@@ -20,7 +20,9 @@ use crate::config::{NetworkConfig, OutboundOverflowPolicy};
 use crate::error::{NetworkError, ProtocolError};
 use crate::gateway::{CALLER_SOURCE_ARG, NetworkGateway, SERVER_REQUEST_MSB};
 use crate::policy::GamePolicy;
-use crate::protocol::{self, ClientMessage, DeltaKind, ServerMessage, HEADER_LEN, PROTOCOL_MAGIC, PROTOCOL_VERSION};
+use crate::protocol::{
+    self, ClientMessage, DeltaKind, HEADER_LEN, PROTOCOL_MAGIC, PROTOCOL_VERSION, ServerMessage,
+};
 use crate::transport::{Connection, MemoryConnection, MemoryTransport};
 
 // ---------------------------------------------------------------- helpers
@@ -47,46 +49,50 @@ fn ensure_players(store: &mut TableStore) {
 
 /// A world whose system consumes `spawn` commands as player rows.
 fn input_factory() -> WorldFactory {
-    Box::new(|id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-        ensure_players(&mut store);
-        let mut world = World::new(id, store, sim)?;
-        world
-            .add_system(
-                SystemDefinition::new(SystemId::from_u64(0), "consumer", 0, |ctx, frame| {
-                    for command in frame.commands() {
-                        if command.kind() == "spawn" {
-                            let id = command.payload().and_then(Value::as_u64).unwrap();
-                            ctx.insert("players", row![id, 10u64, 100i32])?;
+    Box::new(
+        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
+            ensure_players(&mut store);
+            let mut world = World::new(id, store, sim)?;
+            world
+                .add_system(
+                    SystemDefinition::new(SystemId::from_u64(0), "consumer", 0, |ctx, frame| {
+                        for command in frame.commands() {
+                            if command.kind() == "spawn" {
+                                let id = command.payload().and_then(Value::as_u64).unwrap();
+                                ctx.insert("players", row![id, 10u64, 100i32])?;
+                            }
                         }
-                    }
-                    Ok(())
-                })
-                .unwrap(),
-            )
-            .unwrap();
-        Ok(world)
-    })
+                        Ok(())
+                    })
+                    .unwrap(),
+                )
+                .unwrap();
+            Ok(world)
+        },
+    )
 }
 
 /// A world whose system stores each command's source in the `id` column
 /// (verifies server-side principal stamping).
 fn source_factory() -> WorldFactory {
-    Box::new(|id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-        ensure_players(&mut store);
-        let mut world = World::new(id, store, sim)?;
-        world
-            .add_system(
-                SystemDefinition::new(SystemId::from_u64(0), "sourcer", 0, |ctx, frame| {
-                    for command in frame.commands() {
-                        ctx.insert("players", row![command.source(), 10u64, 0i32])?;
-                    }
-                    Ok(())
-                })
-                .unwrap(),
-            )
-            .unwrap();
-        Ok(world)
-    })
+    Box::new(
+        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
+            ensure_players(&mut store);
+            let mut world = World::new(id, store, sim)?;
+            world
+                .add_system(
+                    SystemDefinition::new(SystemId::from_u64(0), "sourcer", 0, |ctx, frame| {
+                        for command in frame.commands() {
+                            ctx.insert("players", row![command.source(), 10u64, 0i32])?;
+                        }
+                        Ok(())
+                    })
+                    .unwrap(),
+                )
+                .unwrap();
+            Ok(world)
+        },
+    )
 }
 
 /// The `bump` reducer: `+10` to a player's health; emits a `bumped` event.
@@ -120,69 +126,71 @@ fn whoami(_ctx: &mut ReducerContext, args: &ReducerArgs) -> Result<Value> {
 }
 
 fn reducer_factory() -> WorldFactory {
-    Box::new(|id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-        ensure_players(&mut store);
-        let mut world = World::new(id, store, sim)?;
-        world
-            .native_mut()
-            .register(
-                ReducerDefinition::new(ReducerId::from_u64(1), "bump", bump).unwrap(),
-            )
-            .unwrap();
-        world
-            .native_mut()
-            .register(
-                ReducerDefinition::new(ReducerId::from_u64(2), "whoami", whoami).unwrap(),
-            )
-            .unwrap();
-        Ok(world)
-    })
+    Box::new(
+        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
+            ensure_players(&mut store);
+            let mut world = World::new(id, store, sim)?;
+            world
+                .native_mut()
+                .register(ReducerDefinition::new(ReducerId::from_u64(1), "bump", bump).unwrap())
+                .unwrap();
+            world
+                .native_mut()
+                .register(ReducerDefinition::new(ReducerId::from_u64(2), "whoami", whoami).unwrap())
+                .unwrap();
+            Ok(world)
+        },
+    )
 }
 
 /// A world whose system inserts one player row per tick.
 fn writer_factory() -> WorldFactory {
-    Box::new(|id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-        ensure_players(&mut store);
-        let mut world = World::new(id, store, sim)?;
-        world
-            .add_system(
-                SystemDefinition::new(SystemId::from_u64(0), "writer", 0, |ctx, _| {
-                    ctx.insert("players", row![ctx.tick().as_u64(), 10u64, 100i32])?;
-                    Ok(())
-                })
-                .unwrap(),
-            )
-            .unwrap();
-        Ok(world)
-    })
-}
-
-/// A factory where world 1 fails on its first tick (after its writer).
-fn failing_factory() -> WorldFactory {
-    Box::new(|id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-        ensure_players(&mut store);
-        let mut world = World::new(id, store, sim)?;
-        world
-            .add_system(
-                SystemDefinition::new(SystemId::from_u64(0), "writer", 0, |ctx, _| {
-                    ctx.insert("players", row![ctx.tick().as_u64(), 10u64, 100i32])?;
-                    Ok(())
-                })
-                .unwrap(),
-            )
-            .unwrap();
-        if id.as_u64() == 1 {
+    Box::new(
+        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
+            ensure_players(&mut store);
+            let mut world = World::new(id, store, sim)?;
             world
                 .add_system(
-                    SystemDefinition::new(SystemId::from_u64(1), "fails", 10, |_ctx, _| {
-                        Err(Error::invalid_argument("boom"))
+                    SystemDefinition::new(SystemId::from_u64(0), "writer", 0, |ctx, _| {
+                        ctx.insert("players", row![ctx.tick().as_u64(), 10u64, 100i32])?;
+                        Ok(())
                     })
                     .unwrap(),
                 )
                 .unwrap();
-        }
-        Ok(world)
-    })
+            Ok(world)
+        },
+    )
+}
+
+/// A factory where world 1 fails on its first tick (after its writer).
+fn failing_factory() -> WorldFactory {
+    Box::new(
+        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
+            ensure_players(&mut store);
+            let mut world = World::new(id, store, sim)?;
+            world
+                .add_system(
+                    SystemDefinition::new(SystemId::from_u64(0), "writer", 0, |ctx, _| {
+                        ctx.insert("players", row![ctx.tick().as_u64(), 10u64, 100i32])?;
+                        Ok(())
+                    })
+                    .unwrap(),
+                )
+                .unwrap();
+            if id.as_u64() == 1 {
+                world
+                    .add_system(
+                        SystemDefinition::new(SystemId::from_u64(1), "fails", 10, |_ctx, _| {
+                            Err(Error::invalid_argument("boom"))
+                        })
+                        .unwrap(),
+                    )
+                    .unwrap();
+            }
+            Ok(world)
+        },
+    )
 }
 
 fn test_authenticator() -> TokenAuthenticator {
@@ -202,7 +210,10 @@ fn create_world(gateway: &mut NetworkGateway, id: u64) {
         .control()
         .create_world(WorldId::from_u64(id), SimulationConfig::new())
         .unwrap();
-    gateway.control().start_world(WorldId::from_u64(id)).unwrap();
+    gateway
+        .control()
+        .start_world(WorldId::from_u64(id))
+        .unwrap();
 }
 
 /// Registers a fresh memory connection and returns its client end.
@@ -266,11 +277,24 @@ fn handshake(gateway: &mut NetworkGateway, client: &mut MemoryConnection, max: u
     );
     gateway.process_inbound();
     let msg = recv_server(client, max);
-    assert!(matches!(msg, ServerMessage::HandshakeResponse { version, .. } if version == PROTOCOL_VERSION));
+    assert!(
+        matches!(msg, ServerMessage::HandshakeResponse { version, .. } if version == PROTOCOL_VERSION)
+    );
 }
 
-fn authenticate(gateway: &mut NetworkGateway, client: &mut MemoryConnection, max: u32, token: &str) {
-    send_client(client, &ClientMessage::Authenticate { credentials: token.into() }, max);
+fn authenticate(
+    gateway: &mut NetworkGateway,
+    client: &mut MemoryConnection,
+    max: u32,
+    token: &str,
+) {
+    send_client(
+        client,
+        &ClientMessage::Authenticate {
+            credentials: token.into(),
+        },
+        max,
+    );
     gateway.process_inbound();
     let msg = recv_server(client, max);
     assert!(matches!(msg, ServerMessage::AuthResult { ok: true, .. }));
@@ -280,11 +304,17 @@ fn attach(gateway: &mut NetworkGateway, client: &mut MemoryConnection, max: u32,
     send_client(client, &ClientMessage::AttachWorld { world }, max);
     gateway.process_inbound();
     let msg = recv_server(client, max);
-    assert!(matches!(msg, ServerMessage::AttachResult { ok: true, world: Some(w), .. } if w == world));
+    assert!(
+        matches!(msg, ServerMessage::AttachResult { ok: true, world: Some(w), .. } if w == world)
+    );
 }
 
 /// Subscribes to `players` and returns the server subscription id.
-fn subscribe_players(gateway: &mut NetworkGateway, client: &mut MemoryConnection, max: u32) -> SubscriptionId {
+fn subscribe_players(
+    gateway: &mut NetworkGateway,
+    client: &mut MemoryConnection,
+    max: u32,
+) -> SubscriptionId {
     send_client(
         client,
         &ClientMessage::Subscribe {
@@ -301,12 +331,7 @@ fn subscribe_players(gateway: &mut NetworkGateway, client: &mut MemoryConnection
 }
 
 /// A valid client attach flow for a client of world 0.
-fn join_world0(
-    gateway: &mut NetworkGateway,
-    client: &mut MemoryConnection,
-    max: u32,
-    token: &str,
-) {
+fn join_world0(gateway: &mut NetworkGateway, client: &mut MemoryConnection, max: u32, token: &str) {
     handshake(gateway, client, max);
     authenticate(gateway, client, max, token);
     attach(gateway, client, max, WorldId::from_u64(0));
@@ -344,22 +369,35 @@ fn client_messages_roundtrip() {
         .build()
         .unwrap();
     let messages = vec![
-        ClientMessage::Handshake { version: PROTOCOL_VERSION, name: "tester".into() },
-        ClientMessage::Authenticate { credentials: "token-1".into() },
-        ClientMessage::AttachWorld { world: WorldId::from_u64(3) },
+        ClientMessage::Handshake {
+            version: PROTOCOL_VERSION,
+            name: "tester".into(),
+        },
+        ClientMessage::Authenticate {
+            credentials: "token-1".into(),
+        },
+        ClientMessage::AttachWorld {
+            world: WorldId::from_u64(3),
+        },
         ClientMessage::InputFrame { frame },
         ClientMessage::Subscribe {
             request_id: 0,
             query,
         },
-        ClientMessage::Unsubscribe { subscription: SubscriptionId::from_u64(5) },
-        ClientMessage::Resync { subscription: SubscriptionId::from_u64(6) },
+        ClientMessage::Unsubscribe {
+            subscription: SubscriptionId::from_u64(5),
+        },
+        ClientMessage::Resync {
+            subscription: SubscriptionId::from_u64(6),
+        },
         ClientMessage::Ping { nonce: 42 },
         ClientMessage::DetachWorld,
         ClientMessage::CallReducer {
             request_id: 7,
             reducer: "move_player".into(),
-            args: nexum_reducer::ReducerArgs::new().insert("x", 1u64).insert("y", 2u64),
+            args: nexum_reducer::ReducerArgs::new()
+                .insert("x", 1u64)
+                .insert("y", 2u64),
         },
     ];
     for message in &messages {
@@ -376,7 +414,12 @@ fn server_messages_roundtrip() {
     let row1 = row![1u64, 10u64, 100i32];
     let row2 = row![2u64, 20u64, 80i32];
     let changes = vec![
-        Change::insert(table, RowId::from_u64(1), row1.clone(), Version::from_u64(1)),
+        Change::insert(
+            table,
+            RowId::from_u64(1),
+            row1.clone(),
+            Version::from_u64(1),
+        ),
         Change::update(
             table,
             RowId::from_u64(2),
@@ -385,16 +428,46 @@ fn server_messages_roundtrip() {
             row2.clone(),
             Version::from_u64(2),
         ),
-        Change::delete(table, RowId::from_u64(3), row1.clone(), Version::from_u64(1)),
+        Change::delete(
+            table,
+            RowId::from_u64(3),
+            row1.clone(),
+            Version::from_u64(1),
+        ),
     ];
     let messages = vec![
-        ServerMessage::HandshakeResponse { version: PROTOCOL_VERSION, server_name: "nexum".into() },
-        ServerMessage::AuthResult { ok: true, principal: Some(Principal::new(7, "alice")), error: None },
-        ServerMessage::AuthResult { ok: false, principal: None, error: Some("bad".into()) },
-        ServerMessage::AttachResult { ok: true, world: Some(WorldId::from_u64(3)), error: None },
-        ServerMessage::AttachResult { ok: false, world: None, error: Some("unknown".into()) },
-        ServerMessage::DetachResult { ok: true, error: None },
-        ServerMessage::DetachResult { ok: false, error: Some("not attached".into()) },
+        ServerMessage::HandshakeResponse {
+            version: PROTOCOL_VERSION,
+            server_name: "nexum".into(),
+        },
+        ServerMessage::AuthResult {
+            ok: true,
+            principal: Some(Principal::new(7, "alice")),
+            error: None,
+        },
+        ServerMessage::AuthResult {
+            ok: false,
+            principal: None,
+            error: Some("bad".into()),
+        },
+        ServerMessage::AttachResult {
+            ok: true,
+            world: Some(WorldId::from_u64(3)),
+            error: None,
+        },
+        ServerMessage::AttachResult {
+            ok: false,
+            world: None,
+            error: Some("unknown".into()),
+        },
+        ServerMessage::DetachResult {
+            ok: true,
+            error: None,
+        },
+        ServerMessage::DetachResult {
+            ok: false,
+            error: Some("not attached".into()),
+        },
         ServerMessage::TickUpdate {
             world: WorldId::from_u64(0),
             tick: TickId::from_u64(4),
@@ -425,14 +498,19 @@ fn server_messages_roundtrip() {
             row_id: RowId::from_u64(1),
             row: None,
         },
-        ServerMessage::StaleNotification { subscription: SubscriptionId::from_u64(1), seq: 5 },
+        ServerMessage::StaleNotification {
+            subscription: SubscriptionId::from_u64(1),
+            seq: 5,
+        },
         ServerMessage::Error {
             code: 17,
             message: "too much".into(),
             request_id: 0,
         },
         ServerMessage::Pong { nonce: 42 },
-        ServerMessage::Disconnect { reason: "bye".into() },
+        ServerMessage::Disconnect {
+            reason: "bye".into(),
+        },
         ServerMessage::ReducerResult {
             request_id: 7,
             ok: true,
@@ -470,8 +548,14 @@ fn idle_broadcast_shares_one_frame_allocation_across_clients() {
     // TickUpdate now goes through the direct message path (bypasses encode/decode).
     let a_msg = recv_server(&mut alice, max);
     let b_msg = recv_server(&mut bob, max);
-    assert!(matches!(a_msg, ServerMessage::TickUpdate { .. }), "alice got TickUpdate");
-    assert!(matches!(b_msg, ServerMessage::TickUpdate { .. }), "bob got TickUpdate");
+    assert!(
+        matches!(a_msg, ServerMessage::TickUpdate { .. }),
+        "alice got TickUpdate"
+    );
+    assert!(
+        matches!(b_msg, ServerMessage::TickUpdate { .. }),
+        "bob got TickUpdate"
+    );
     assert_eq!(a_msg, b_msg, "identical logical TickUpdate");
 }
 
@@ -505,11 +589,20 @@ fn attached_index_tracks_attach_detach_and_disconnect() {
     let _ = recv_server(&mut alice, max); // DetachResult (now via direct path)
     gateway.step_worlds().unwrap();
     // Detached alice gets no TickUpdate; check both frame and direct queues.
-    assert!(alice.try_recv_frame().unwrap().is_none(), "detached client gets no broadcast");
-    assert!(alice.try_recv_direct().unwrap().is_none(), "detached client no direct");
+    assert!(
+        alice.try_recv_frame().unwrap().is_none(),
+        "detached client gets no broadcast"
+    );
+    assert!(
+        alice.try_recv_direct().unwrap().is_none(),
+        "detached client no direct"
+    );
     // Bob is attached: gets TickUpdate via direct path.
     let bob_msg = recv_server(&mut bob, max);
-    assert!(matches!(bob_msg, ServerMessage::TickUpdate { .. }), "attached client still gets broadcasts");
+    assert!(
+        matches!(bob_msg, ServerMessage::TickUpdate { .. }),
+        "attached client still gets broadcasts"
+    );
 
     // Disconnect bob: the index entry is removed with the connection (the
     // Disconnect frame is drained first).
@@ -522,7 +615,13 @@ fn attached_index_tracks_attach_detach_and_disconnect() {
     assert!(bob.try_recv_frame().unwrap().is_none());
     assert!(bob.try_recv_direct().unwrap().is_none());
     // Re-attach alice still works after bob's removal (index not corrupted).
-    send_client(&mut alice, &ClientMessage::AttachWorld { world: WorldId::from_u64(0) }, max);
+    send_client(
+        &mut alice,
+        &ClientMessage::AttachWorld {
+            world: WorldId::from_u64(0),
+        },
+        max,
+    );
     gateway.process_inbound();
     let _ = recv_server(&mut alice, max); // AttachResult
     gateway.step_worlds().unwrap();
@@ -542,9 +641,17 @@ fn streaming_parse_frame_handles_partial_and_concatenated_frames() {
     let frame = protocol::encode_client(&ClientMessage::Ping { nonce: 7 }, max).unwrap();
     // Partial header.
     assert!(protocol::parse_frame(&frame[..4], max).unwrap().is_none());
-    assert!(protocol::parse_frame(&frame[..HEADER_LEN - 1], max).unwrap().is_none());
+    assert!(
+        protocol::parse_frame(&frame[..HEADER_LEN - 1], max)
+            .unwrap()
+            .is_none()
+    );
     // Partial body.
-    assert!(protocol::parse_frame(&frame[..frame.len() - 1], max).unwrap().is_none());
+    assert!(
+        protocol::parse_frame(&frame[..frame.len() - 1], max)
+            .unwrap()
+            .is_none()
+    );
     // Complete.
     let (parsed, consumed) = protocol::parse_frame(&frame, max).unwrap().unwrap();
     assert_eq!(parsed, frame);
@@ -593,17 +700,25 @@ fn unknown_kinds_are_rejected() {
 fn bad_checksums_are_detected() {
     let max = 4096;
     let frame = protocol::encode_client(
-        &ClientMessage::Authenticate { credentials: "tok".into() },
+        &ClientMessage::Authenticate {
+            credentials: "tok".into(),
+        },
         max,
     )
     .unwrap();
     let mut corrupted = frame.clone();
     corrupted[HEADER_LEN] ^= 0xFF; // flip a payload byte
-    assert!(matches!(protocol::decode_client(&corrupted, max), Err(ProtocolError::BadChecksum)));
+    assert!(matches!(
+        protocol::decode_client(&corrupted, max),
+        Err(ProtocolError::BadChecksum)
+    ));
     let mut corrupted2 = frame;
     let last = corrupted2.len() - 1;
     corrupted2[last] ^= 0xFF; // flip a checksum byte
-    assert!(matches!(protocol::decode_client(&corrupted2, max), Err(ProtocolError::BadChecksum)));
+    assert!(matches!(
+        protocol::decode_client(&corrupted2, max),
+        Err(ProtocolError::BadChecksum)
+    ));
 }
 
 #[test]
@@ -615,7 +730,10 @@ fn malformed_payloads_are_rejected() {
     payload.extend_from_slice(&0u16.to_le_bytes()); // version
     payload.push(0xFF); // string length 255, no bytes follow
     let frame = craft_frame(0x01, &payload);
-    assert!(matches!(protocol::decode_client(&frame, max), Err(ProtocolError::Malformed(_))));
+    assert!(matches!(
+        protocol::decode_client(&frame, max),
+        Err(ProtocolError::Malformed(_))
+    ));
 
     // An input frame with an empty command kind.
     let mut payload = Vec::new();
@@ -625,7 +743,10 @@ fn malformed_payloads_are_rejected() {
     payload.extend_from_slice(&0u64.to_le_bytes()); // empty kind string
     payload.push(0); // no command payload
     let frame = craft_frame(0x04, &payload);
-    assert!(matches!(protocol::decode_client(&frame, max), Err(ProtocolError::Malformed(_))));
+    assert!(matches!(
+        protocol::decode_client(&frame, max),
+        Err(ProtocolError::Malformed(_))
+    ));
 
     // Trailing garbage after a valid handshake.
     let mut payload = Vec::new();
@@ -634,14 +755,22 @@ fn malformed_payloads_are_rejected() {
     payload.extend_from_slice(b"abc");
     payload.push(0xEE);
     let frame = craft_frame(0x01, &payload);
-    assert!(matches!(protocol::decode_client(&frame, max), Err(ProtocolError::Malformed(_))));
+    assert!(matches!(
+        protocol::decode_client(&frame, max),
+        Err(ProtocolError::Malformed(_))
+    ));
 }
 
 #[test]
 fn encode_rejects_oversized_messages() {
     let max = 32;
-    let big = ServerMessage::Disconnect { reason: "x".repeat(1024) };
-    assert!(matches!(protocol::encode_server(&big, max), Err(NetworkError::Capacity(_))));
+    let big = ServerMessage::Disconnect {
+        reason: "x".repeat(1024),
+    };
+    assert!(matches!(
+        protocol::encode_server(&big, max),
+        Err(NetworkError::Capacity(_))
+    ));
 }
 
 // -------------------------------------------------------- gateway security
@@ -651,7 +780,9 @@ fn protocol_violations_disconnect_the_connection() {
     let mut gateway = gateway_with(writer_factory(), NetworkConfig::new());
     create_world(&mut gateway, 0);
     let (_, mut client) = connect_client(&mut gateway);
-    client.try_send_frame(Arc::from(b"GARBAGEGARBAGE".to_vec())).unwrap();
+    client
+        .try_send_frame(Arc::from(b"GARBAGEGARBAGE".to_vec()))
+        .unwrap();
     gateway.process_inbound();
     assert_eq!(gateway.connection_count(), 0);
     let metrics = gateway.metrics();
@@ -660,7 +791,11 @@ fn protocol_violations_disconnect_the_connection() {
     assert_eq!(metrics.clients_dropped, 1);
     // Events are bounded and observable.
     let events = gateway.drain_events();
-    assert!(events.iter().any(|e| matches!(e, crate::NetworkEvent::ProtocolError { .. })));
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, crate::NetworkEvent::ProtocolError { .. }))
+    );
 }
 
 #[test]
@@ -711,13 +846,32 @@ fn invalid_credentials_are_rejected_and_leave_the_session_unauthenticated() {
     let (_, mut client) = connect_client(&mut gateway);
     let max = gateway.config().max_frame_payload();
     handshake(&mut gateway, &mut client, max);
-    send_client(&mut client, &ClientMessage::Authenticate { credentials: "wrong".into() }, max);
+    send_client(
+        &mut client,
+        &ClientMessage::Authenticate {
+            credentials: "wrong".into(),
+        },
+        max,
+    );
     gateway.process_inbound();
     let msg = recv_server(&mut client, max);
-    assert!(matches!(msg, ServerMessage::AuthResult { ok: false, principal: None, error: Some(_) }));
+    assert!(matches!(
+        msg,
+        ServerMessage::AuthResult {
+            ok: false,
+            principal: None,
+            error: Some(_)
+        }
+    ));
     assert_eq!(gateway.metrics().auth_failures, 1);
     // The session never authenticated: attach is rejected.
-    send_client(&mut client, &ClientMessage::AttachWorld { world: WorldId::from_u64(0) }, max);
+    send_client(
+        &mut client,
+        &ClientMessage::AttachWorld {
+            world: WorldId::from_u64(0),
+        },
+        max,
+    );
     gateway.process_inbound();
     let msg = recv_server(&mut client, max);
     assert!(matches!(msg, ServerMessage::Error { code: 20, .. }));
@@ -790,7 +944,13 @@ fn session_lifecycle_attach_detach_reconnect() {
     assert_eq!(gateway.metrics().attached, 1);
 
     // Duplicate authentication is rejected.
-    send_client(&mut client, &ClientMessage::Authenticate { credentials: "alice-token".into() }, max);
+    send_client(
+        &mut client,
+        &ClientMessage::Authenticate {
+            credentials: "alice-token".into(),
+        },
+        max,
+    );
     gateway.process_inbound();
     let msg = recv_server(&mut client, max);
     assert!(matches!(msg, ServerMessage::Error { code: 20, .. }));
@@ -814,13 +974,27 @@ fn duplicate_attachment_is_idempotent_and_cross_world_attach_is_rejected() {
     join_world0(&mut gateway, &mut client, max, "alice-token");
 
     // Same world: idempotent success.
-    send_client(&mut client, &ClientMessage::AttachWorld { world: WorldId::from_u64(0) }, max);
+    send_client(
+        &mut client,
+        &ClientMessage::AttachWorld {
+            world: WorldId::from_u64(0),
+        },
+        max,
+    );
     gateway.process_inbound();
     let msg = recv_server(&mut client, max);
-    assert!(matches!(msg, ServerMessage::AttachResult { ok: true, world: Some(w), .. } if w.as_u64() == 0));
+    assert!(
+        matches!(msg, ServerMessage::AttachResult { ok: true, world: Some(w), .. } if w.as_u64() == 0)
+    );
 
     // Different world while attached: rejected.
-    send_client(&mut client, &ClientMessage::AttachWorld { world: WorldId::from_u64(1) }, max);
+    send_client(
+        &mut client,
+        &ClientMessage::AttachWorld {
+            world: WorldId::from_u64(1),
+        },
+        max,
+    );
     gateway.process_inbound();
     let msg = recv_server(&mut client, max);
     assert!(matches!(msg, ServerMessage::Error { code: 21, .. }));
@@ -856,7 +1030,12 @@ fn inputs_reach_the_attached_world() {
     // single change is the committed insert.
     let msg = recv_server(&mut client, max);
     match msg {
-        ServerMessage::TickUpdate { world, tick, changes, .. } => {
+        ServerMessage::TickUpdate {
+            world,
+            tick,
+            changes,
+            ..
+        } => {
             assert_eq!(world, WorldId::from_u64(0));
             assert_eq!(tick, TickId::from_u64(0));
             assert_eq!(changes.len(), 1);
@@ -867,7 +1046,12 @@ fn inputs_reach_the_attached_world() {
     // ...then the subscription delta.
     let msg = recv_server(&mut client, max);
     match msg {
-        ServerMessage::SubscriptionDelta { subscription, kind, row, .. } => {
+        ServerMessage::SubscriptionDelta {
+            subscription,
+            kind,
+            row,
+            ..
+        } => {
             assert_eq!(subscription, sub);
             assert_eq!(kind, DeltaKind::Insert);
             let row = row.expect("insert delta carries a row");
@@ -945,14 +1129,20 @@ fn inputs_never_reach_another_world() {
 
     // A observes world 0's commit and insert delta.
     let msg = recv_server(&mut a, max);
-    assert!(matches!(&msg, ServerMessage::TickUpdate { world, changes, .. } if world.as_u64() == 0 && changes.len() == 1));
+    assert!(
+        matches!(&msg, ServerMessage::TickUpdate { world, changes, .. } if world.as_u64() == 0 && changes.len() == 1)
+    );
     let msg = recv_server(&mut a, max);
-    assert!(matches!(&msg, ServerMessage::SubscriptionDelta { kind: DeltaKind::Insert, row, .. } if row.is_some()));
+    assert!(
+        matches!(&msg, ServerMessage::SubscriptionDelta { kind: DeltaKind::Insert, row, .. } if row.is_some())
+    );
 
     // B observes world 1's (empty) commit and nothing else: world 0's row
     // never leaked across the partition boundary.
     let msg = recv_server(&mut b, max);
-    assert!(matches!(&msg, ServerMessage::TickUpdate { world, changes, .. } if world.as_u64() == 1 && changes.is_empty()));
+    assert!(
+        matches!(&msg, ServerMessage::TickUpdate { world, changes, .. } if world.as_u64() == 1 && changes.is_empty())
+    );
     assert!(b.try_recv_frame().unwrap().is_none());
 }
 
@@ -964,10 +1154,23 @@ fn unknown_worlds_are_rejected_at_attach() {
     let max = gateway.config().max_frame_payload();
     handshake(&mut gateway, &mut client, max);
     authenticate(&mut gateway, &mut client, max, "alice-token");
-    send_client(&mut client, &ClientMessage::AttachWorld { world: WorldId::from_u64(99) }, max);
+    send_client(
+        &mut client,
+        &ClientMessage::AttachWorld {
+            world: WorldId::from_u64(99),
+        },
+        max,
+    );
     gateway.process_inbound();
     let msg = recv_server(&mut client, max);
-    assert!(matches!(msg, ServerMessage::AttachResult { ok: false, world: None, error: Some(_) }));
+    assert!(matches!(
+        msg,
+        ServerMessage::AttachResult {
+            ok: false,
+            world: None,
+            error: Some(_)
+        }
+    ));
 }
 
 #[test]
@@ -982,7 +1185,11 @@ fn failed_worlds_reject_input() {
 
     gateway.step_worlds().unwrap();
     assert_eq!(
-        gateway.runtime().world_status(WorldId::from_u64(1)).unwrap().state,
+        gateway
+            .runtime()
+            .world_status(WorldId::from_u64(1))
+            .unwrap()
+            .state,
         WorldLifecycle::Failed
     );
 
@@ -1068,7 +1275,14 @@ fn reducer_calls_require_auth_and_attachment_and_reject_duplicates() {
     );
     gateway.process_inbound();
     let msg = recv_server(&mut client, max);
-    assert!(matches!(msg, ServerMessage::ReducerResult { request_id: 1, ok: false, .. }));
+    assert!(matches!(
+        msg,
+        ServerMessage::ReducerResult {
+            request_id: 1,
+            ok: false,
+            ..
+        }
+    ));
     assert_eq!(gateway.metrics().reducer_calls_rejected, 1);
 
     // Authenticated but not attached: correlated failure.
@@ -1084,7 +1298,14 @@ fn reducer_calls_require_auth_and_attachment_and_reject_duplicates() {
     );
     gateway.process_inbound();
     let msg = recv_server(&mut client, max);
-    assert!(matches!(msg, ServerMessage::ReducerResult { request_id: 2, ok: false, .. }));
+    assert!(matches!(
+        msg,
+        ServerMessage::ReducerResult {
+            request_id: 2,
+            ok: false,
+            ..
+        }
+    ));
 
     // Attached: the first call is accepted and stays pending.
     attach(&mut gateway, &mut client, max, WorldId::from_u64(0));
@@ -1112,7 +1333,14 @@ fn reducer_calls_require_auth_and_attachment_and_reject_duplicates() {
     );
     gateway.process_inbound();
     let msg = recv_server(&mut client, max);
-    assert!(matches!(msg, ServerMessage::ReducerResult { request_id: 3, ok: false, .. }));
+    assert!(matches!(
+        msg,
+        ServerMessage::ReducerResult {
+            request_id: 3,
+            ok: false,
+            ..
+        }
+    ));
 
     // The pending-cap (1) rejects a second distinct call while the first is
     // still pending.
@@ -1127,7 +1355,14 @@ fn reducer_calls_require_auth_and_attachment_and_reject_duplicates() {
     );
     gateway.process_inbound();
     let msg = recv_server(&mut client, max);
-    assert!(matches!(msg, ServerMessage::ReducerResult { request_id: 4, ok: false, .. }));
+    assert!(matches!(
+        msg,
+        ServerMessage::ReducerResult {
+            request_id: 4,
+            ok: false,
+            ..
+        }
+    ));
     assert_eq!(gateway.metrics().reducer_calls_rejected, 4); // auth + attach + dup + cap
 
     // The first call still commits on the next tick (never lost). The
@@ -1136,7 +1371,14 @@ fn reducer_calls_require_auth_and_attachment_and_reject_duplicates() {
     let msg = recv_server(&mut client, max);
     assert!(matches!(msg, ServerMessage::TickUpdate { .. }));
     let msg = recv_server(&mut client, max);
-    assert!(matches!(msg, ServerMessage::ReducerResult { request_id: 3, ok: false, .. }));
+    assert!(matches!(
+        msg,
+        ServerMessage::ReducerResult {
+            request_id: 3,
+            ok: false,
+            ..
+        }
+    ));
     assert_eq!(gateway.metrics().reducer_results_sent, 1);
 }
 
@@ -1185,8 +1427,16 @@ fn concurrent_calls_from_different_clients_do_not_collide_on_request_ids() {
     };
     let alice_results = drain(&mut alice);
     let bob_results = drain(&mut bob);
-    assert_eq!(alice_results, vec![1], "alice gets her own result: {alice_results:?}");
-    assert_eq!(bob_results, vec![1], "bob gets his own result: {bob_results:?}");
+    assert_eq!(
+        alice_results,
+        vec![1],
+        "alice gets her own result: {alice_results:?}"
+    );
+    assert_eq!(
+        bob_results,
+        vec![1],
+        "bob gets his own result: {bob_results:?}"
+    );
     assert_eq!(gateway.metrics().reducer_results_sent, 2);
 }
 
@@ -1258,7 +1508,10 @@ fn destroyed_world_answers_pending_reducer_calls_with_a_correlated_failure() {
     assert_eq!(gateway.metrics().reducer_calls_accepted, 1);
 
     // Destroy the world while the call is pending.
-    gateway.control().destroy_world(WorldId::from_u64(0)).unwrap();
+    gateway
+        .control()
+        .destroy_world(WorldId::from_u64(0))
+        .unwrap();
     gateway.step_worlds().unwrap();
 
     let msg = recv_server(&mut client, max);
@@ -1286,7 +1539,10 @@ fn calls_to_a_destroyed_world_are_rejected_with_a_correlated_failure() {
     // The world disappears behind the session's back; a later call is
     // rejected by the runtime and answered with a correlated ReducerResult
     // (never a generic Error, never a hang, never queued).
-    gateway.control().destroy_world(WorldId::from_u64(0)).unwrap();
+    gateway
+        .control()
+        .destroy_world(WorldId::from_u64(0))
+        .unwrap();
     send_client(
         &mut client,
         &ClientMessage::CallReducer {
@@ -1300,7 +1556,11 @@ fn calls_to_a_destroyed_world_are_rejected_with_a_correlated_failure() {
     let msg = recv_server(&mut client, max);
     assert!(matches!(
         msg,
-        ServerMessage::ReducerResult { request_id: 5, ok: false, .. }
+        ServerMessage::ReducerResult {
+            request_id: 5,
+            ok: false,
+            ..
+        }
     ));
     assert_eq!(gateway.metrics().reducer_calls_rejected, 1);
 }
@@ -1408,7 +1668,14 @@ fn stopped_world_calls_fail_and_restart_accepts_new_calls() {
     gateway.control().stop_world(WorldId::from_u64(0)).unwrap();
     gateway.step_worlds().unwrap();
     let msg = recv_server(&mut client, max);
-    assert!(matches!(msg, ServerMessage::ReducerResult { request_id: 1, ok: false, .. }));
+    assert!(matches!(
+        msg,
+        ServerMessage::ReducerResult {
+            request_id: 1,
+            ok: false,
+            ..
+        }
+    ));
 
     // Restart: a fresh call (new request id) executes on the next tick.
     gateway.control().start_world(WorldId::from_u64(0)).unwrap();
@@ -1427,7 +1694,10 @@ fn stopped_world_calls_fail_and_restart_accepts_new_calls() {
     let msg = recv_server(&mut client, max);
     assert!(matches!(msg, ServerMessage::TickUpdate { .. }));
     let msg = recv_server(&mut client, max);
-    assert!(matches!(msg, ServerMessage::ReducerResult { request_id: 2, .. }));
+    assert!(matches!(
+        msg,
+        ServerMessage::ReducerResult { request_id: 2, .. }
+    ));
     assert_eq!(gateway.metrics().reducer_results_sent, 2);
 }
 
@@ -1453,7 +1723,11 @@ fn subscription_snapshot_and_delta_delivery_and_unsubscribe() {
     ));
 
     // Unsubscribe: no further deltas, but the attachment broadcast remains.
-    send_client(&mut client, &ClientMessage::Unsubscribe { subscription: sub }, max);
+    send_client(
+        &mut client,
+        &ClientMessage::Unsubscribe { subscription: sub },
+        max,
+    );
     gateway.process_inbound();
     gateway.step_worlds().unwrap();
     let msg = recv_server(&mut client, max);
@@ -1461,7 +1735,11 @@ fn subscription_snapshot_and_delta_delivery_and_unsubscribe() {
     assert!(client.try_recv_frame().unwrap().is_none());
 
     // Unsubscribing an unknown subscription reports an error.
-    send_client(&mut client, &ClientMessage::Unsubscribe { subscription: sub }, max);
+    send_client(
+        &mut client,
+        &ClientMessage::Unsubscribe { subscription: sub },
+        max,
+    );
     gateway.process_inbound();
     let msg = recv_server(&mut client, max);
     assert!(matches!(msg, ServerMessage::Error { code: 22, .. }));
@@ -1484,11 +1762,17 @@ fn resync_regenerates_the_exact_view() {
     let _ = recv_server(&mut client, max); // delta
 
     // A resync rebuilds the full view from authoritative state.
-    send_client(&mut client, &ClientMessage::Resync { subscription: sub }, max);
+    send_client(
+        &mut client,
+        &ClientMessage::Resync { subscription: sub },
+        max,
+    );
     gateway.process_inbound();
     let msg = recv_server(&mut client, max);
     match msg {
-        ServerMessage::SubscriptionSnapshot { subscription, rows, .. } => {
+        ServerMessage::SubscriptionSnapshot {
+            subscription, rows, ..
+        } => {
             assert_eq!(subscription, sub);
             assert_eq!(rows.len(), 2);
         }
@@ -1496,7 +1780,13 @@ fn resync_regenerates_the_exact_view() {
     }
 
     // Resyncing an unknown subscription reports an error.
-    send_client(&mut client, &ClientMessage::Resync { subscription: SubscriptionId::from_u64(99) }, max);
+    send_client(
+        &mut client,
+        &ClientMessage::Resync {
+            subscription: SubscriptionId::from_u64(99),
+        },
+        max,
+    );
     gateway.process_inbound();
     let msg = recv_server(&mut client, max);
     assert!(matches!(msg, ServerMessage::Error { code: 22, .. }));
@@ -1517,7 +1807,11 @@ fn failed_ticks_produce_no_updates() {
     // The failed world produced no TickUpdate and no subscription delta.
     assert!(client.try_recv_frame().unwrap().is_none());
     assert_eq!(
-        gateway.runtime().world_status(WorldId::from_u64(1)).unwrap().state,
+        gateway
+            .runtime()
+            .world_status(WorldId::from_u64(1))
+            .unwrap()
+            .state,
         WorldLifecycle::Failed
     );
 }
@@ -1545,14 +1839,22 @@ fn slow_client_is_marked_stale_without_blocking_the_world() {
 
     // The world kept ticking regardless of the slow client.
     assert_eq!(
-        gateway.runtime().world_status(WorldId::from_u64(0)).unwrap().next_tick,
+        gateway
+            .runtime()
+            .world_status(WorldId::from_u64(0))
+            .unwrap()
+            .next_tick,
         TickId::from_u64(2)
     );
 
     // Further ticks are dropped while stale (never enqueued).
     gateway.step_worlds().unwrap();
     assert_eq!(
-        gateway.runtime().world_status(WorldId::from_u64(0)).unwrap().next_tick,
+        gateway
+            .runtime()
+            .world_status(WorldId::from_u64(0))
+            .unwrap()
+            .next_tick,
         TickId::from_u64(3)
     );
 
@@ -1560,7 +1862,11 @@ fn slow_client_is_marked_stale_without_blocking_the_world() {
     // its exact view (all three rows).
     let msg = recv_server(&mut client, max);
     assert!(matches!(msg, ServerMessage::TickUpdate { tick, .. } if tick.as_u64() == 0));
-    send_client(&mut client, &ClientMessage::Resync { subscription: sub }, max);
+    send_client(
+        &mut client,
+        &ClientMessage::Resync { subscription: sub },
+        max,
+    );
     gateway.process_inbound();
     let msg = recv_server(&mut client, max);
     assert!(matches!(msg, ServerMessage::SubscriptionSnapshot { rows, .. } if rows.len() == 3));
@@ -1584,7 +1890,11 @@ fn overflow_disconnect_policy_closes_slow_connections() {
     assert!(gateway.metrics().clients_dropped >= 1);
     // The world kept ticking.
     assert_eq!(
-        gateway.runtime().world_status(WorldId::from_u64(0)).unwrap().next_tick,
+        gateway
+            .runtime()
+            .world_status(WorldId::from_u64(0))
+            .unwrap()
+            .next_tick,
         TickId::from_u64(2)
     );
     let _ = client; // dropped server-side; nothing further arrives
@@ -1627,12 +1937,26 @@ fn control_plane_lifecycle_and_health() {
     let mut gateway = gateway_with(writer_factory(), NetworkConfig::new());
     let world = WorldId::from_u64(0);
 
-    gateway.control().create_world(world, SimulationConfig::new()).unwrap();
-    assert_eq!(gateway.control().world_status(world).unwrap().state, WorldLifecycle::Created);
-    assert!(gateway.control().create_world(world, SimulationConfig::new()).is_err());
+    gateway
+        .control()
+        .create_world(world, SimulationConfig::new())
+        .unwrap();
+    assert_eq!(
+        gateway.control().world_status(world).unwrap().state,
+        WorldLifecycle::Created
+    );
+    assert!(
+        gateway
+            .control()
+            .create_world(world, SimulationConfig::new())
+            .is_err()
+    );
 
     gateway.control().start_world(world).unwrap();
-    assert_eq!(gateway.control().world_status(world).unwrap().state, WorldLifecycle::Running);
+    assert_eq!(
+        gateway.control().world_status(world).unwrap().state,
+        WorldLifecycle::Running
+    );
 
     let health = gateway.control().health();
     assert_eq!(health.worlds, 1);
@@ -1674,7 +1998,10 @@ fn metrics_count_connections_sessions_and_frames() {
     assert_eq!(metrics.connections, 2);
     assert_eq!(metrics.sessions, 1);
     assert_eq!(metrics.attached, 1);
-    assert_eq!(metrics.connections_per_world.get(&WorldId::from_u64(0)), Some(&1));
+    assert_eq!(
+        metrics.connections_per_world.get(&WorldId::from_u64(0)),
+        Some(&1)
+    );
     assert!(metrics.frames_received >= 5); // handshake+auth+attach+handshake+ping
     assert!(metrics.messages_outbound >= 4); // responses + pong
 
@@ -1701,7 +2028,12 @@ impl GamePolicy for DenyAttachPolicy {
 struct DenyInputPolicy;
 
 impl GamePolicy for DenyInputPolicy {
-    fn authorize_input(&self, _principal: &Principal, _world: WorldId, _frame: &InputFrame) -> bool {
+    fn authorize_input(
+        &self,
+        _principal: &Principal,
+        _world: WorldId,
+        _frame: &InputFrame,
+    ) -> bool {
         false
     }
 }
@@ -1718,8 +2050,7 @@ impl GamePolicy for DenyReducerPolicy {
 
 fn input_frame(tick: u64, kind: &str, payload: Option<Value>) -> InputFrame {
     let mut frame = InputFrame::new(TickId::from_u64(tick));
-    frame
-        .push(InputCommand::new(1, kind, payload).unwrap());
+    frame.push(InputCommand::new(1, kind, payload).unwrap());
     frame
 }
 
@@ -1737,7 +2068,9 @@ fn default_policy_preserves_phase_13_behavior() {
     // Input flows without a custom policy.
     send_client(
         &mut client,
-        &ClientMessage::InputFrame { frame: input_frame(0, "spawn", Some(Value::U64(1))) },
+        &ClientMessage::InputFrame {
+            frame: input_frame(0, "spawn", Some(Value::U64(1))),
+        },
         max,
     );
     gateway.process_inbound();
@@ -1785,7 +2118,13 @@ fn policy_can_deny_attach() {
     handshake(&mut gateway, &mut client, max);
     authenticate(&mut gateway, &mut client, max, "alice-token");
 
-    send_client(&mut client, &ClientMessage::AttachWorld { world: WorldId::from_u64(0) }, max);
+    send_client(
+        &mut client,
+        &ClientMessage::AttachWorld {
+            world: WorldId::from_u64(0),
+        },
+        max,
+    );
     gateway.process_inbound();
     let msg = recv_server(&mut client, max);
     assert!(matches!(
@@ -1814,7 +2153,9 @@ fn policy_can_deny_input() {
 
     send_client(
         &mut client,
-        &ClientMessage::InputFrame { frame: input_frame(0, "spawn", Some(Value::U64(1))) },
+        &ClientMessage::InputFrame {
+            frame: input_frame(0, "spawn", Some(Value::U64(1))),
+        },
         max,
     );
     gateway.process_inbound();
@@ -1960,9 +2301,7 @@ fn rate_gateway(limits: crate::rate::RateLimitConfig) -> NetworkGateway {
 
 #[test]
 fn auth_rate_limit_rejects_after_the_window_budget() {
-    let mut gateway = rate_gateway(
-        crate::rate::RateLimitConfig::new().with_auth_per_window(2, 60),
-    );
+    let mut gateway = rate_gateway(crate::rate::RateLimitConfig::new().with_auth_per_window(2, 60));
     create_world(&mut gateway, 0);
     let (_, mut client) = connect_client(&mut gateway);
     let max = gateway.config().max_frame_payload();
@@ -1972,7 +2311,9 @@ fn auth_rate_limit_rejects_after_the_window_budget() {
     authenticate(&mut gateway, &mut client, max, "alice-token");
     send_client(
         &mut client,
-        &ClientMessage::Authenticate { credentials: "bob-token".into() },
+        &ClientMessage::Authenticate {
+            credentials: "bob-token".into(),
+        },
         max,
     );
     gateway.process_inbound();
@@ -1985,7 +2326,9 @@ fn auth_rate_limit_rejects_after_the_window_budget() {
     // A third attempt on the same connection is rejected with code 19.
     send_client(
         &mut client,
-        &ClientMessage::Authenticate { credentials: "bob-token".into() },
+        &ClientMessage::Authenticate {
+            credentials: "bob-token".into(),
+        },
         max,
     );
     gateway.process_inbound();
@@ -1996,14 +2339,16 @@ fn auth_rate_limit_rejects_after_the_window_budget() {
             if message.contains("rate limit")
     ));
     assert_eq!(gateway.metrics().rate_limited, 1);
-    assert_eq!(gateway.metrics().auth_failures, 0, "rejections are not auth failures");
+    assert_eq!(
+        gateway.metrics().auth_failures,
+        0,
+        "rejections are not auth failures"
+    );
 }
 
 #[test]
 fn input_rate_limit_rejects_after_the_second_budget() {
-    let mut gateway = rate_gateway(
-        crate::rate::RateLimitConfig::new().with_input_per_sec(2),
-    );
+    let mut gateway = rate_gateway(crate::rate::RateLimitConfig::new().with_input_per_sec(2));
     create_world(&mut gateway, 0);
     let (_, mut client) = connect_client(&mut gateway);
     let max = gateway.config().max_frame_payload();
@@ -2024,20 +2369,19 @@ fn input_rate_limit_rejects_after_the_second_budget() {
     send_client(&mut client, &ClientMessage::InputFrame { frame }, max);
     gateway.process_inbound();
     let msg = recv_server(&mut client, max);
-    assert!(matches!(
-        msg,
-        ServerMessage::Error { code: 19, .. }
-    ));
+    assert!(matches!(msg, ServerMessage::Error { code: 19, .. }));
     assert_eq!(gateway.metrics().inputs_accepted, 2);
-    assert_eq!(gateway.metrics().inputs_rejected, 0, "rate rejection is counted separately");
+    assert_eq!(
+        gateway.metrics().inputs_rejected,
+        0,
+        "rate rejection is counted separately"
+    );
     assert_eq!(gateway.metrics().rate_limited, 1);
 }
 
 #[test]
 fn reducer_rate_limit_rejects_excess_calls() {
-    let mut gateway = rate_gateway(
-        crate::rate::RateLimitConfig::new().with_reducer_per_sec(2),
-    );
+    let mut gateway = rate_gateway(crate::rate::RateLimitConfig::new().with_reducer_per_sec(2));
     create_world(&mut gateway, 0);
     let (_, mut client) = connect_client(&mut gateway);
     let max = gateway.config().max_frame_payload();
@@ -2069,10 +2413,7 @@ fn reducer_rate_limit_rejects_excess_calls() {
     );
     gateway.process_inbound();
     let msg = recv_server(&mut client, max);
-    assert!(matches!(
-        msg,
-        ServerMessage::Error { code: 19, .. }
-    ));
+    assert!(matches!(msg, ServerMessage::Error { code: 19, .. }));
     assert_eq!(gateway.metrics().reducer_calls_accepted, 2);
     assert_eq!(gateway.metrics().reducer_calls_rejected, 0);
     assert_eq!(gateway.metrics().rate_limited, 1);
@@ -2080,9 +2421,8 @@ fn reducer_rate_limit_rejects_excess_calls() {
 
 #[test]
 fn subscribe_rate_limit_rejects_excess_subscriptions() {
-    let mut gateway = rate_gateway(
-        crate::rate::RateLimitConfig::new().with_subscribe_per_window(1, 60),
-    );
+    let mut gateway =
+        rate_gateway(crate::rate::RateLimitConfig::new().with_subscribe_per_window(1, 60));
     create_world(&mut gateway, 0);
     let (_, mut client) = connect_client(&mut gateway);
     let max = gateway.config().max_frame_payload();
@@ -2091,7 +2431,10 @@ fn subscribe_rate_limit_rejects_excess_subscriptions() {
     let query = Query::builder("players").build().unwrap();
     send_client(
         &mut client,
-        &ClientMessage::Subscribe { request_id: 1, query: query.clone() },
+        &ClientMessage::Subscribe {
+            request_id: 1,
+            query: query.clone(),
+        },
         max,
     );
     gateway.process_inbound();
@@ -2102,14 +2445,21 @@ fn subscribe_rate_limit_rejects_excess_subscriptions() {
     // A second subscription on the same connection exceeds the window.
     send_client(
         &mut client,
-        &ClientMessage::Subscribe { request_id: 2, query },
+        &ClientMessage::Subscribe {
+            request_id: 2,
+            query,
+        },
         max,
     );
     gateway.process_inbound();
     let msg = recv_server(&mut client, max);
     assert!(matches!(
         msg,
-        ServerMessage::Error { code: 19, request_id: 2, .. }
+        ServerMessage::Error {
+            code: 19,
+            request_id: 2,
+            ..
+        }
     ));
     assert_eq!(gateway.metrics().subscriptions, 1);
     assert_eq!(gateway.metrics().rate_limited, 1);
@@ -2117,9 +2467,8 @@ fn subscribe_rate_limit_rejects_excess_subscriptions() {
 
 #[test]
 fn resync_rate_limit_rejects_excess_resyncs() {
-    let mut gateway = rate_gateway(
-        crate::rate::RateLimitConfig::new().with_resync_per_window(1, 60),
-    );
+    let mut gateway =
+        rate_gateway(crate::rate::RateLimitConfig::new().with_resync_per_window(1, 60));
     create_world(&mut gateway, 0);
     let (_, mut client) = connect_client(&mut gateway);
     let max = gateway.config().max_frame_payload();
@@ -2128,7 +2477,10 @@ fn resync_rate_limit_rejects_excess_resyncs() {
     let query = Query::builder("players").build().unwrap();
     send_client(
         &mut client,
-        &ClientMessage::Subscribe { request_id: 1, query },
+        &ClientMessage::Subscribe {
+            request_id: 1,
+            query,
+        },
         max,
     );
     gateway.process_inbound();
@@ -2155,19 +2507,14 @@ fn resync_rate_limit_rejects_excess_resyncs() {
     );
     gateway.process_inbound();
     let msg = recv_server(&mut client, max);
-    assert!(matches!(
-        msg,
-        ServerMessage::Error { code: 19, .. }
-    ));
+    assert!(matches!(msg, ServerMessage::Error { code: 19, .. }));
     assert_eq!(gateway.metrics().rate_limited, 1);
 }
 
 #[test]
 fn rate_limits_are_per_connection_not_global() {
     // A tight input budget on one connection must not throttle another.
-    let mut gateway = rate_gateway(
-        crate::rate::RateLimitConfig::new().with_input_per_sec(1),
-    );
+    let mut gateway = rate_gateway(crate::rate::RateLimitConfig::new().with_input_per_sec(1));
     create_world(&mut gateway, 0);
     let (_, mut client_a) = connect_client(&mut gateway);
     let (_, mut client_b) = connect_client(&mut gateway);

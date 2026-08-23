@@ -71,11 +71,7 @@ pub enum RuntimeError {
 
 impl RuntimeError {
     /// Builds an invalid-world-state error.
-    pub fn world_state(
-        world: WorldId,
-        operation: &'static str,
-        state: WorldLifecycle,
-    ) -> Self {
+    pub fn world_state(world: WorldId, operation: &'static str, state: WorldLifecycle) -> Self {
         Self::InvalidWorldState {
             world,
             operation,
@@ -84,11 +80,7 @@ impl RuntimeError {
     }
 
     /// Builds an invalid-worker-state error.
-    pub fn worker_state(
-        worker: WorkerId,
-        operation: &'static str,
-        state: WorkerState,
-    ) -> Self {
+    pub fn worker_state(worker: WorkerId, operation: &'static str, state: WorkerState) -> Self {
         Self::InvalidWorkerState {
             worker,
             operation,
@@ -123,11 +115,25 @@ impl fmt::Display for RuntimeError {
             Self::OwnershipConflict(world, worker) => {
                 write!(f, "ownership conflict for world {world} on worker {worker}")
             }
-            Self::InvalidWorldState { world, operation, state } => {
-                write!(f, "cannot {operation} world {world}: current state is {state}")
+            Self::InvalidWorldState {
+                world,
+                operation,
+                state,
+            } => {
+                write!(
+                    f,
+                    "cannot {operation} world {world}: current state is {state}"
+                )
             }
-            Self::InvalidWorkerState { worker, operation, state } => {
-                write!(f, "cannot {operation} worker {worker}: current state is {state}")
+            Self::InvalidWorkerState {
+                worker,
+                operation,
+                state,
+            } => {
+                write!(
+                    f,
+                    "cannot {operation} worker {worker}: current state is {state}"
+                )
             }
             Self::InputRejected { world, reason } => {
                 write!(f, "input rejected for world {world}: {reason}")

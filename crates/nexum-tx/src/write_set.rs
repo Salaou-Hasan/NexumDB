@@ -254,7 +254,8 @@ impl WriteSet {
         match &self.base {
             None => self.own.len(),
             Some(base) => {
-                self.own.len() + base.len() - base.keys().filter(|k| self.own.contains_key(k)).count()
+                self.own.len() + base.len()
+                    - base.keys().filter(|k| self.own.contains_key(k)).count()
             }
         }
     }
@@ -263,10 +264,7 @@ impl WriteSet {
     pub fn is_empty(&self) -> bool {
         match &self.base {
             None => self.own.is_empty(),
-            Some(base) => {
-                self.own.is_empty()
-                    && !base.keys().any(|k| !self.own.contains_key(k))
-            }
+            Some(base) => self.own.is_empty() && !base.keys().any(|k| !self.own.contains_key(k)),
         }
     }
 
@@ -339,7 +337,9 @@ impl WriteSet {
     /// inserts that newly own an index key. When no inserts exist (common
     /// in update-heavy workloads), the scan can be skipped entirely.
     pub fn has_any_insert(&self) -> bool {
-        self.own.values().any(|e| matches!(e, WriteEntry::Insert(_)))
+        self.own
+            .values()
+            .any(|e| matches!(e, WriteEntry::Insert(_)))
             || self
                 .base
                 .as_ref()
@@ -349,10 +349,7 @@ impl WriteSet {
     /// Returns the table ids touched by this write set, in ascending order
     /// (logical view).
     pub fn tables(&self) -> impl Iterator<Item = TableId> + '_ {
-        let mut tables: Vec<TableId> = self
-            .entries()
-            .map(|(table_id, _, _)| table_id)
-            .collect();
+        let mut tables: Vec<TableId> = self.entries().map(|(table_id, _, _)| table_id).collect();
         tables.sort_unstable();
         tables.dedup();
         tables.into_iter()
@@ -407,7 +404,11 @@ impl WriteSet {
         // Destructure: extract child's own entries and drop base (which may
         // reference our own map via Arc). This brings our own Arc refcount
         // down to 1 so make_mut is O(1).
-        let WriteSet { base: _, own: child_own, .. } = child;
+        let WriteSet {
+            base: _,
+            own: child_own,
+            ..
+        } = child;
         // Fast path: if no Delete entries in child, no coalescing needed.
         let has_delete = child_own.values().any(|e| matches!(e, WriteEntry::Delete));
         if !has_delete {
@@ -553,7 +554,14 @@ mod tests {
         ws.insert(TableId::from_u64(1), r1(), row![3u64]).unwrap();
 
         let ids: Vec<TableId> = ws.tables().collect();
-        assert_eq!(ids, vec![TableId::from_u64(0), TableId::from_u64(1), TableId::from_u64(2)]);
+        assert_eq!(
+            ids,
+            vec![
+                TableId::from_u64(0),
+                TableId::from_u64(1),
+                TableId::from_u64(2)
+            ]
+        );
 
         let keys: Vec<(TableId, RowId)> = ws.entries().map(|(t, r, _)| (t, r)).collect();
         assert_eq!(
@@ -576,7 +584,10 @@ mod tests {
         assert!(child.base.is_some());
         assert!(child.own.is_empty());
         assert_eq!(child.len(), 1);
-        assert_eq!(child.get(T, r0()), Some(&WriteEntry::Update(row![1u64, 10u64])));
+        assert_eq!(
+            child.get(T, r0()),
+            Some(&WriteEntry::Update(row![1u64, 10u64]))
+        );
         let keys: Vec<(TableId, RowId)> = child.entries().map(|(t, r, _)| (t, r)).collect();
         assert_eq!(keys, vec![(T, r0())]);
     }
@@ -589,9 +600,15 @@ mod tests {
         child.update(T, r0(), false, row![1u64, 99u64]).unwrap();
         child.insert(T, r1(), row![2u64]).unwrap();
         // The child sees the logical overlay; the parent is untouched.
-        assert_eq!(child.get(T, r0()), Some(&WriteEntry::Update(row![1u64, 99u64])));
+        assert_eq!(
+            child.get(T, r0()),
+            Some(&WriteEntry::Update(row![1u64, 99u64]))
+        );
         assert_eq!(child.get(T, r1()), Some(&WriteEntry::Insert(row![2u64])));
-        assert_eq!(ws.get(T, r0()), Some(&WriteEntry::Update(row![1u64, 10u64])));
+        assert_eq!(
+            ws.get(T, r0()),
+            Some(&WriteEntry::Update(row![1u64, 10u64]))
+        );
         assert!(ws.get(T, r1()).is_none());
         assert_eq!(ws.len(), 1);
         assert_eq!(child.len(), 2);
@@ -605,7 +622,10 @@ mod tests {
         child.update(T, r0(), false, row![1u64, 99u64]).unwrap();
         child.insert(T, r1(), row![2u64]).unwrap();
         ws.absorb(child);
-        assert_eq!(ws.get(T, r0()), Some(&WriteEntry::Update(row![1u64, 99u64])));
+        assert_eq!(
+            ws.get(T, r0()),
+            Some(&WriteEntry::Update(row![1u64, 99u64]))
+        );
         assert_eq!(ws.get(T, r1()), Some(&WriteEntry::Insert(row![2u64])));
         assert_eq!(ws.len(), 2);
     }
@@ -623,7 +643,10 @@ mod tests {
         // maps it to `None`); the inherited insert is overridden.
         assert_eq!(child.get(T, prov), Some(&WriteEntry::Delete));
         ws.absorb(child);
-        assert!(ws.get(T, prov).is_none(), "parent insert removed (net no-op)");
+        assert!(
+            ws.get(T, prov).is_none(),
+            "parent insert removed (net no-op)"
+        );
         assert!(ws.is_empty());
     }
 
@@ -659,7 +682,9 @@ mod tests {
     fn entries_logical_merge_is_deterministic() {
         let mut parent = WriteSet::new();
         parent.update(T, r0(), false, row![1u64]).unwrap();
-        parent.insert(TableId::from_u64(1), r1(), row![2u64]).unwrap();
+        parent
+            .insert(TableId::from_u64(1), r1(), row![2u64])
+            .unwrap();
         let mut child = parent.branch();
         child.update(T, r0(), false, row![9u64]).unwrap();
         // Distinct own key: table 0, row 1 (row![3u64] is the payload).
