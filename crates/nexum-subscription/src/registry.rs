@@ -398,6 +398,26 @@ impl SubscriptionRegistry {
         Ok(subscription.take_buffer())
     }
 
+    /// Drains ALL subscriptions that have pending updates in a single pass.
+    /// Returns `(subscription_id, updates)` pairs.
+    ///
+    /// This is O(N) where N = total subscriptions, avoiding N separate
+    /// BTreeMap lookups. At 20K subscriptions this eliminates ~300K comparison
+    /// operations per tick (Phase 23-25 optimization).
+    pub fn drain_all_pending(&mut self) -> Vec<(SubscriptionId, Vec<SubscriptionUpdate>)> {
+        self.subscriptions
+            .iter_mut()
+            .filter_map(|(id, sub)| {
+                let buf = sub.take_buffer();
+                if buf.is_empty() {
+                    None
+                } else {
+                    Some((*id, buf))
+                }
+            })
+            .collect()
+    }
+
     /// Ends a subscription and drops its delivery state. The shared view is
     /// freed when the last member leaves (ADR-020 D1).
     pub fn unsubscribe(&mut self, id: SubscriptionId) -> Result<()> {

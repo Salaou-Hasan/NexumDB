@@ -1496,6 +1496,20 @@ impl Runtime {
             .map_err(RuntimeError::Core)
     }
 
+    /// Drains ALL subscriptions with pending updates in a single pass.
+    /// Returns `(subscription_id, updates)` pairs for the given world.
+    /// O(N) total instead of N separate BTreeMap lookups.
+    pub fn drain_all_pending(
+        &mut self,
+        world_id: WorldId,
+    ) -> Result<Vec<(SubscriptionId, Vec<SubscriptionUpdate>)>, RuntimeError> {
+        self.ensure_running()?;
+        let entry = self
+            .world_get_mut(world_id)
+            .ok_or(RuntimeError::UnknownWorld(world_id))?;
+        Ok(entry.subscriptions.drain_all_pending())
+    }
+
     /// Returns `true` when the subscription has buffered updates waiting.
     pub fn has_pending(
         &self,

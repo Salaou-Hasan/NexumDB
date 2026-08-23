@@ -183,7 +183,7 @@ pub enum ServerMessage {
     SubscriptionDeltaBatch {
         subscription: SubscriptionId,
         request_id: u64,
-        deltas: Vec<SubscriptionDeltaEntry>,
+        deltas: std::sync::Arc<Vec<SubscriptionDeltaEntry>>,
     },
 }
 
@@ -444,7 +444,7 @@ pub fn encode_server(message: &ServerMessage, max_payload: u32) -> Result<Vec<u8
             put_u64(&mut payload, subscription.as_u64());
             put_u64(&mut payload, *request_id);
             put_u64(&mut payload, deltas.len() as u64);
-            for d in deltas {
+            for d in deltas.iter() {
                 put_u64(&mut payload, d.seq);
                 payload.push(delta_kind_tag(d.kind));
                 put_u64(&mut payload, d.row_id.as_u64());
@@ -800,7 +800,7 @@ pub fn decode_server(frame: &[u8], max_payload: u32) -> Result<ServerMessage, Pr
             ServerMessage::SubscriptionDeltaBatch {
                 subscription,
                 request_id,
-                deltas,
+                deltas: std::sync::Arc::new(deltas),
             }
         }
         _ => return Err(ProtocolError::UnknownKind(kind)),

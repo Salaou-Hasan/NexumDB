@@ -62,6 +62,9 @@ pub(crate) struct ConnectionEntry {
     /// Encoded `StaleNotification`s queued while the outbound queue was
     /// full; flushed as soon as the queue has room.
     pending_stale: VecDeque<Vec<u8>>,
+    /// Fast-path flag: true when `pending_stale` is non-empty.
+    /// Avoids VecDeque::front() call on every send (Phase 23-25).
+    has_pending_stale: bool,
     /// Per-connection operational rate limits (ADR-016 D1).
     rate: RateLimiter,
 }
@@ -74,6 +77,7 @@ impl ConnectionEntry {
             subscriptions: BTreeMap::new(),
             stale: false,
             pending_stale: VecDeque::new(),
+            has_pending_stale: false,
             rate: RateLimiter::new(rate_limits),
         }
     }
@@ -597,6 +601,7 @@ impl NetworkGateway {
                 if let Some(entry) = self.conn_get_mut(connection) {
                     entry.stale = false;
                     entry.pending_stale.clear();
+                    entry.has_pending_stale = false;
                 }
                 match self.runtime.resync(net_sub.world, net_sub.server) {
                     Ok(()) => self.pump_subscription(connection, net_sub.world, net_sub.server),
@@ -704,16 +709,22 @@ impl NetworkGateway {
             self.metrics.reducer_calls_rejected += 1;
             return;
         }
-        let Some(session) = self
-            .conn_get(connection)
-            .and_then(|entry| entry.session.as_ref())
-            .cloned()
-        else {
-            let _ = self.send_reducer_error(connection, request_id, "authentication required");
-            self.metrics.reducer_calls_rejected += 1;
-            return;
+        // Extract principal_id and world WITHOUT cloning Session — avoids
+        // per-frame heap allocation on the hot path (Phase 23-25 optimization).
+        let (principal_id, world) = {
+            let Some(entry) = self.conn_get(connection) else {
+                let _ = self.send_reducer_error(connection, request_id, "authentication required");
+                self.metrics.reducer_calls_rejected += 1;
+                return;
+            };
+            let Some(session) = entry.session.as_ref() else {
+                let _ = self.send_reducer_error(connection, request_id, "authentication required");
+                self.metrics.reducer_calls_rejected += 1;
+                return;
+            };
+            (session.principal().id(), session.attached_world())
         };
-        let Some(world) = session.attached_world() else {
+        let Some(world) = world else {
             let _ = self.send_reducer_error(
                 connection,
                 request_id,
@@ -758,22 +769,35 @@ impl NetworkGateway {
             self.metrics.reducer_calls_rejected += 1;
             return;
         }
-        if !self
-            .policy
-            .authorize_reducer(session.principal(), world, &reducer)
+        // Policy check using a borrow — no clone needed.
         {
-            self.metrics.policy_rejections += 1;
-            self.metrics.reducer_calls_rejected += 1;
-            let _ =
-                self.send_reducer_error(connection, request_id, "not authorized by game policy");
-            return;
+            let Some(entry) = self.conn_get(connection) else {
+                let _ = self.send_reducer_error(connection, request_id, "authentication required");
+                self.metrics.reducer_calls_rejected += 1;
+                return;
+            };
+            let Some(session) = entry.session.as_ref() else {
+                let _ = self.send_reducer_error(connection, request_id, "authentication required");
+                self.metrics.reducer_calls_rejected += 1;
+                return;
+            };
+            if !self
+                .policy
+                .authorize_reducer(session.principal(), world, &reducer)
+            {
+                self.metrics.policy_rejections += 1;
+                self.metrics.reducer_calls_rejected += 1;
+                let _ =
+                    self.send_reducer_error(connection, request_id, "not authorized by game policy");
+                return;
+            }
         }
         // Stamp the caller's authoritative identity into a reserved argument
         // (ADR-013 D3 / ADR-014 D8): a client-supplied value for the key is
         // overwritten, so identity can never be forged through `args`.
         let args = args.insert(
             CALLER_SOURCE_ARG,
-            nexum_core::Value::U64(session.principal().id()),
+            nexum_core::Value::U64(principal_id),
         );
         // Allocate a gateway-unique request id so concurrent calls from
         // different clients on the same world never collide (Phase 16
@@ -1034,7 +1058,83 @@ impl NetworkGateway {
                 let message = ServerMessage::SubscriptionDeltaBatch {
                     subscription,
                     request_id,
-                    deltas,
+                    deltas: std::sync::Arc::new(deltas),
+                };
+                if self.send(connection, &message).unwrap_or(false) {
+                    self.metrics.subscription_messages_sent += 1;
+                }
+            }
+        }
+    }
+
+    /// Sends pre-drained subscription updates to a connection.
+    /// This is the batched version of pump_subscription — updates are already
+    /// drained, so no has_pending/drain overhead per subscriber.
+    fn send_subscription_updates(
+        &mut self,
+        connection: ConnectionId,
+        subscription: SubscriptionId,
+        updates: &[nexum_subscription::SubscriptionUpdate],
+    ) {
+        use crate::protocol::DeltaKind;
+        let request_id = self
+            .snapshot_requests
+            .get(&(connection, subscription))
+            .copied()
+            .unwrap_or(0);
+        if updates.len() <= 1 {
+            // Single delta: send directly.
+            for update in updates {
+                if let Some(message) = serialize_update(subscription, request_id, update)
+                    && self.send(connection, &message).unwrap_or(false)
+                {
+                    self.metrics.subscription_messages_sent += 1;
+                }
+            }
+        } else {
+            // Batch multiple deltas into one frame.
+            let mut deltas = Vec::with_capacity(updates.len());
+            for update in updates {
+                match update {
+                    nexum_subscription::SubscriptionUpdate::Insert { seq, row } => {
+                        deltas.push(crate::protocol::SubscriptionDeltaEntry {
+                            seq: *seq,
+                            kind: DeltaKind::Insert,
+                            row_id: row.row_id(),
+                            row: Some(std::sync::Arc::clone(row)),
+                        });
+                    }
+                    nexum_subscription::SubscriptionUpdate::Update { seq, row } => {
+                        deltas.push(crate::protocol::SubscriptionDeltaEntry {
+                            seq: *seq,
+                            kind: DeltaKind::Update,
+                            row_id: row.row_id(),
+                            row: Some(std::sync::Arc::clone(row)),
+                        });
+                    }
+                    nexum_subscription::SubscriptionUpdate::Delete { seq, row_id } => {
+                        deltas.push(crate::protocol::SubscriptionDeltaEntry {
+                            seq: *seq,
+                            kind: DeltaKind::Delete,
+                            row_id: *row_id,
+                            row: None,
+                        });
+                    }
+                    _ => {
+                        // Initial/Resync/Stale: send individually.
+                        if let Some(message) = serialize_update(subscription, request_id, update)
+                            && self.send(connection, &message).unwrap_or(false)
+                        {
+                            self.metrics.subscription_messages_sent += 1;
+                        }
+                    }
+                }
+            }
+            if !deltas.is_empty() {
+                let message = ServerMessage::SubscriptionDeltaBatch {
+                    subscription,
+                    request_id,
+                    deltas: std::sync::Arc::new(deltas),
                 };
                 if self.send(connection, &message).unwrap_or(false) {
                     self.metrics.subscription_messages_sent += 1;
@@ -1129,15 +1229,36 @@ impl NetworkGateway {
             // Fast path: skip the O(subscribers) scan entirely when the world
             // produced no changes this tick — no subscription buffer can have
             // new entries. This eliminates ~20K BTreeMap lookups per idle world.
+            //
+            // Batched drain: drain ALL pending subscriptions in a single O(N)
+            // pass, then fan-out from a HashMap — O(1) per subscriber instead
+            // of O(log N) BTreeMap lookup per subscriber (Phase 23-25 optimization).
             if !result.changes().is_empty()
                 && let Some(subscribers) = self.world_subscribers.get(&world)
             {
+                // Single-pass drain: O(N) total instead of N × O(log N).
+                let drained = self
+                    .runtime
+                    .drain_all_pending(world)
+                    .unwrap_or_default();
+                let mut drained_map: std::collections::HashMap<SubscriptionId, Vec<nexum_subscription::SubscriptionUpdate>> =
+                    std::collections::HashMap::with_capacity(drained.len());
+                for (sid, updates) in drained {
+                    drained_map.insert(sid, updates);
+                }
+                // Fan-out in deterministic order (connections ascending,
+                // subscriptions ascending).
                 let subs = subscribers.clone();
                 for (connection, subscription) in subs {
-                    let before = self.metrics.subscription_messages_sent;
-                    self.pump_subscription(connection, world, subscription);
-                    report.subscription_messages_sent +=
-                        self.metrics.subscription_messages_sent - before;
+                    if let Some(updates) = drained_map.remove(&subscription) {
+                        self.send_subscription_updates(
+                            connection,
+                            subscription,
+                            &updates,
+                        );
+                        report.subscription_messages_sent +=
+                            self.metrics.subscription_messages_sent;
+                    }
                 }
             }
 
@@ -1268,14 +1389,18 @@ impl NetworkGateway {
                 .ok_or(NetworkError::UnknownConnection(connection))?;
 
             // Flush pending stale notifications via frame path.
-            while let Some(pending) = entry.pending_stale.front().cloned() {
-                match entry.connection.try_send_frame(Arc::from(pending)) {
-                    Ok(()) => {
-                        entry.pending_stale.pop_front();
+            // Fast-path: skip when no stale notifications pending.
+            if entry.has_pending_stale {
+                while let Some(pending) = entry.pending_stale.front().cloned() {
+                    match entry.connection.try_send_frame(Arc::from(pending)) {
+                        Ok(()) => {
+                            entry.pending_stale.pop_front();
+                        }
+                        Err(TransportError::Full) | Err(TransportError::Closed) => break,
+                        Err(_) => break,
                     }
-                    Err(TransportError::Full) | Err(TransportError::Closed) => break,
-                    Err(_) => break,
                 }
+                entry.has_pending_stale = !entry.pending_stale.is_empty();
             }
 
             // Already stale and not a stale signal → drop.
@@ -1325,14 +1450,18 @@ impl NetworkGateway {
                 .ok_or(NetworkError::UnknownConnection(connection))?;
 
             // Flush any pending stale notifications.
-            while let Some(pending) = entry.pending_stale.front().cloned() {
-                match entry.connection.try_send_frame(Arc::from(pending)) {
-                    Ok(()) => {
-                        entry.pending_stale.pop_front();
+            // Fast-path: skip when no stale notifications pending.
+            if entry.has_pending_stale {
+                while let Some(pending) = entry.pending_stale.front().cloned() {
+                    match entry.connection.try_send_frame(Arc::from(pending)) {
+                        Ok(()) => {
+                            entry.pending_stale.pop_front();
+                        }
+                        Err(TransportError::Full) | Err(TransportError::Closed) => break,
+                        Err(_) => break,
                     }
-                    Err(TransportError::Full) | Err(TransportError::Closed) => break,
-                    Err(_) => break,
                 }
+                entry.has_pending_stale = !entry.pending_stale.is_empty();
             }
 
             if entry.stale && !stale_signal {
@@ -1369,6 +1498,7 @@ impl NetworkGateway {
                                         max_payload,
                                     ) {
                                         entry.pending_stale.push_back(notify);
+                                        entry.has_pending_stale = true;
                                     }
                                 }
                             }

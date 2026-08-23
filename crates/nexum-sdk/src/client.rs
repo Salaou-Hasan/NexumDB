@@ -346,8 +346,8 @@ impl Client {
                 request_id: _,
                 deltas,
             } => {
-                for entry in deltas {
-                    self.apply_delta(subscription, entry.seq, entry.kind, entry.row_id, entry.row);
+                for entry in deltas.iter() {
+                    self.apply_delta(subscription, entry.seq, entry.kind, entry.row_id, entry.row.clone());
                 }
             }
         }

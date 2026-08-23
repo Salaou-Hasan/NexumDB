@@ -623,7 +623,7 @@ fn main() {
     // drained too — otherwise the first measured tick pays the accumulated
     // warmup backlog as an artificial p99.9 spike (Phase 21.5 spike
     // investigation).
-    for tick in 0..50 {
+    for tick in 0..100 {
         drive_profile(args.profile, tick, &mut clients, args.hz);
         step(&mut server, &mut clients);
         drain_clients(&mut clients);
