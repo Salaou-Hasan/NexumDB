@@ -14,6 +14,7 @@ nexum-wal.workspace = true
 nexum-subscription.workspace = true
 nexum-simulation.workspace = true
 nexum-reducer.workspace = true
+rayon.workspace = true
 
 [dev-dependencies]
 nexum-core.workspace = true

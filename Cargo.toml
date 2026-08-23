@@ -61,3 +61,4 @@ nexum-network = { path = "crates/nexum-network", version = "0.1.0" }
 nexum-sdk = { path = "crates/nexum-sdk", version = "0.1.0" }
 nexum-game-server = { path = "crates/nexum-game-server", version = "0.1.0" }
 nexum-alloc-count = { path = "crates/nexum-alloc-count", version = "0.1.0" }
+rayon = "1.10"

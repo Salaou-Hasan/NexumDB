@@ -1125,7 +1125,13 @@ impl NetworkGateway {
             // connections ascending, then subscriptions ascending). Use the
             // pre-computed world_subscribers list instead of scanning every
             // connection — O(subscribers) instead of O(CCU).
-            if let Some(subscribers) = self.world_subscribers.get(&world) {
+            //
+            // Fast path: skip the O(subscribers) scan entirely when the world
+            // produced no changes this tick — no subscription buffer can have
+            // new entries. This eliminates ~20K BTreeMap lookups per idle world.
+            if !result.changes().is_empty()
+                && let Some(subscribers) = self.world_subscribers.get(&world)
+            {
                 let subs = subscribers.clone();
                 for (connection, subscription) in subs {
                     let before = self.metrics.subscription_messages_sent;

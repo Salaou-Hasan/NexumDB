@@ -1404,7 +1404,7 @@ impl Runtime {
             let base = n / threads;
             let rem = n % threads;
             let scope_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                std::thread::scope(|scope| {
+                rayon::in_place_scope(|scope| {
                     let mut slot_rest: &mut [Option<WorldEntry>] = &mut slots;
                     let mut outcome_rest: &mut [Option<TickOutcome>] = &mut outcomes;
                     let mut order_rest: &[WorldId] = order;
@@ -1416,7 +1416,7 @@ impl Runtime {
                         let (slots_head, slots_tail) = slot_rest.split_at_mut(chunk);
                         let (outcomes_head, outcomes_tail) = outcome_rest.split_at_mut(chunk);
                         let (order_head, order_tail) = order_rest.split_at(chunk);
-                        scope.spawn(move || {
+                        scope.spawn(move |_| {
                             for ((slot, outcome_slot), world_id) in slots_head
                                 .iter_mut()
                                 .zip(outcomes_head.iter_mut())

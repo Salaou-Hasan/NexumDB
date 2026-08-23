@@ -159,6 +159,10 @@ pub struct MemoryConnection {
     /// Shared atomic flag: true when `to_server` has pending frames.
     /// Lives outside the Mutex so the gateway can check without locking.
     has_inbound: Arc<AtomicBool>,
+    /// Shared atomic flag: true when `to_client` or `to_client_msg` has
+    /// pending data. Allows the client pump to skip the Mutex acquisition
+    /// entirely when there is nothing to receive.
+    has_outbound: Arc<AtomicBool>,
 }
 
 impl fmt::Debug for MemoryConnection {
@@ -183,6 +187,7 @@ impl MemoryTransport {
         outbound_cap: usize,
     ) -> (MemoryConnection, MemoryConnection) {
         let has_inbound = Arc::new(AtomicBool::new(false));
+        let has_outbound = Arc::new(AtomicBool::new(false));
         let link = Arc::new(Mutex::new(MemoryLink {
             to_server: VecDeque::new(),
             to_client: VecDeque::new(),
@@ -196,12 +201,14 @@ impl MemoryTransport {
             link: Arc::clone(&link),
             server_side: true,
             has_inbound: Arc::clone(&has_inbound),
+            has_outbound: Arc::clone(&has_outbound),
         };
         let client = MemoryConnection {
             peer: "memory:client".to_string(),
             link,
             server_side: false,
             has_inbound,
+            has_outbound,
         };
         (server, client)
     }
@@ -217,6 +224,9 @@ impl Connection for MemoryConnection {
         if self.server_side && !self.has_inbound.load(Ordering::Relaxed) {
             return Ok(None);
         }
+        if !self.server_side && !self.has_outbound.load(Ordering::Relaxed) {
+            return Ok(None);
+        }
         let mut link = self.link.lock().expect("memory link lock");
         let queue = if self.server_side {
             &mut link.to_server
@@ -226,6 +236,9 @@ impl Connection for MemoryConnection {
         let result = queue.pop_front();
         if self.server_side && result.is_none() {
             self.has_inbound.store(false, Ordering::Relaxed);
+        }
+        if !self.server_side && result.is_none() {
+            self.has_outbound.store(false, Ordering::Relaxed);
         }
         Ok(result)
     }
@@ -251,6 +264,7 @@ impl Connection for MemoryConnection {
         }
         if self.server_side {
             link.to_client.push_back(frame);
+            self.has_outbound.store(true, Ordering::Relaxed);
         } else {
             link.to_server.push_back(frame);
             self.has_inbound.store(true, Ordering::Relaxed);
@@ -283,6 +297,7 @@ impl Connection for MemoryConnection {
         }
         if self.server_side {
             link.to_client_msg.push_back(message.clone());
+            self.has_outbound.store(true, Ordering::Relaxed);
         } else {
             // Client → server direct messages not used; fall through to frame.
             return Err(TransportError::Closed);
@@ -304,18 +319,31 @@ impl Connection for MemoryConnection {
         msg_out: &mut Option<ServerMessage>,
         frame_out: &mut Option<Arc<[u8]>>,
     ) -> Result<bool, TransportError> {
+        // Fast path: skip Mutex acquisition when no outbound data is pending.
+        if !self.server_side && !self.has_outbound.load(Ordering::Relaxed) {
+            return Ok(false);
+        }
         let mut link = self.link.lock().expect("memory link lock");
         if self.server_side {
             return Ok(false);
         }
         if let Some(msg) = link.to_client_msg.pop_front() {
             *msg_out = Some(msg);
+            // If both queues are now empty, clear the flag.
+            if link.to_client_msg.is_empty() && link.to_client.is_empty() {
+                self.has_outbound.store(false, Ordering::Relaxed);
+            }
             return Ok(true);
         }
         if let Some(frame) = link.to_client.pop_front() {
             *frame_out = Some(frame);
+            if link.to_client_msg.is_empty() && link.to_client.is_empty() {
+                self.has_outbound.store(false, Ordering::Relaxed);
+            }
             return Ok(true);
         }
+        // Queues empty but flag was stale — clear it.
+        self.has_outbound.store(false, Ordering::Relaxed);
         Ok(false)
     }
 
