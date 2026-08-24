@@ -20,6 +20,7 @@ nexum-subscription.workspace = true
 nexum-wasm.workspace = true
 wat = "1.256"
 ctrlc = "3.4"
+rayon.workspace = true
 nexum-alloc-count = { workspace = true, optional = true }
 
 [[bin]]

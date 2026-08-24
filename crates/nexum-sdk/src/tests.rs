@@ -611,11 +611,11 @@ fn send_frame_flushes_the_outbound_transport() {
     // `ClientTransport::send_frame` must push buffered bytes to the
     // transport immediately (TCP correctness): queue transports flush
     // trivially, so a recording connection proves the flush is invoked.
-    use std::cell::RefCell;
-    use std::rc::Rc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
 
     struct Recording {
-        flushes: Rc<RefCell<usize>>,
+        flushes: Arc<AtomicUsize>,
         queue: std::collections::VecDeque<Vec<u8>>,
     }
     impl Connection for Recording {
@@ -630,26 +630,26 @@ fn send_frame_flushes_the_outbound_transport() {
             Ok(())
         }
         fn flush_outbound(&mut self) -> Result<(), TransportError> {
-            *self.flushes.borrow_mut() += 1;
+            self.flushes.fetch_add(1, Ordering::Relaxed);
             Ok(())
         }
         fn close(&mut self) {}
     }
 
-    let flushes = Rc::new(RefCell::new(0usize));
+    let flushes = Arc::new(AtomicUsize::new(0));
     let mut transport = ClientTransport::new(Box::new(Recording {
-        flushes: Rc::clone(&flushes),
+        flushes: Arc::clone(&flushes),
         queue: std::collections::VecDeque::new(),
     }));
     transport.send_frame(vec![1, 2, 3]).unwrap();
     assert_eq!(
-        *flushes.borrow(),
+        flushes.load(Ordering::Relaxed),
         1,
         "send_frame flushed the buffered frame to the transport"
     );
     transport.send_frame(vec![4, 5]).unwrap();
     assert_eq!(
-        *flushes.borrow(),
+        flushes.load(Ordering::Relaxed),
         2,
         "every send flushes; a stream transport never holds bytes back"
     );

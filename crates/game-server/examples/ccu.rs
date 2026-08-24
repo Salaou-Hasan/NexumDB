@@ -326,14 +326,24 @@ fn step_server(server: &mut GameServer) {
 
 /// Client-side half: drain every client's inbound frames.
 fn step_clients(clients: &mut [SimClient]) {
-    for sim in clients.iter_mut() {
-        sim.client.pump().expect("client pump");
-    }
+    use rayon::prelude::*;
+    // Parallel pump: each chunk is processed sequentially, chunks in
+    // parallel. At 20K clients this eliminates the O(CCU) serial pump
+    // bottleneck (was 72ms at 20K). Chunk size 256 balances work per
+    // thread with scheduling overhead.
+    clients.par_chunks_mut(256).for_each(|chunk| {
+        for sim in chunk.iter_mut() {
+            sim.client.pump().expect("client pump");
+        }
+    });
 }
 
 /// A realistic client consumes its event stream every tick (like a render
 /// loop); the harness must drain too, or queues grow over the measured run.
 fn drain_clients(clients: &mut [SimClient]) {
+    // Drain is intentionally sequential: take_events/take_reducer_results
+    // are trivial O(1) swaps. Parallel rayon overhead at 20K clients
+    // exceeds the work, making it 3× slower.
     for sim in clients.iter_mut() {
         sim.client.take_events();
         sim.client.take_reducer_results();

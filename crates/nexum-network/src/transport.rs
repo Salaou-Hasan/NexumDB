@@ -62,7 +62,7 @@ impl From<ProtocolError> for TransportError {
 /// Implementations bound both directions (`try_send_frame` returns
 /// [`TransportError::Full`] at capacity) so a slow peer can never block the
 /// gateway.
-pub trait Connection {
+pub trait Connection: Send + Sync {
     /// A display identity for the peer (for logging and metrics).
     fn peer(&self) -> &str;
 

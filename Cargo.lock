@@ -142,6 +142,7 @@ dependencies = [
  "nexum-table",
  "nexum-tx",
  "nexum-wasm",
+ "rayon",
  "wat",
 ]
 
