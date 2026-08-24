@@ -68,6 +68,11 @@ struct Args {
     /// Runtime per-world queued reducer-call cap (sized to the workload;
     /// overflow is explicit backpressure, never silent loss).
     queue: usize,
+    /// Number of lobbies (separate games/worlds). When > 1, clients are
+    /// distributed evenly across lobbies, each lobby having its own world.
+    /// This tests the lobby-based architecture where 1K players per lobby
+    /// replaces 20K in a single world.
+    lobbies: usize,
     /// Print per-phase timing breakdown for every tick.
     profile_detail: bool,
     /// Enable per-reducer execution profiling (Phase 21.5) and print the
@@ -95,6 +100,7 @@ fn parse_args() -> Args {
         profile_detail: false,
         reducer_profile: false,
         count_alloc: false,
+        lobbies: 1,
         wasm_stages: false,
     };
     let mut it = std::env::args().skip(1);
@@ -109,6 +115,7 @@ fn parse_args() -> Args {
             "--workers" => args.workers = value().parse().unwrap(),
             "--window" => args.window = value().parse().unwrap(),
             "--queue" => args.queue = value().parse().unwrap(),
+            "--lobbies" => args.lobbies = value().parse().unwrap(),
             "--profile-detail" => args.profile_detail = true,
             "--reducer-profile" => args.reducer_profile = true,
             "--count-alloc" => args.count_alloc = true,
@@ -117,8 +124,8 @@ fn parse_args() -> Args {
                 println!(
                     "usage: ccu [--clients N] [--profile A|B|C|D|E] [--ticks N] \
                      [--hz N] [--partitions N] [--workers N] [--window N] \
-                     [--queue N] [--profile-detail] [--reducer-profile] \
-                     [--count-alloc] [--wasm-stages]"
+                     [--queue N] [--lobbies N] [--profile-detail] \
+                     [--reducer-profile] [--count-alloc] [--wasm-stages]"
                 );
                 std::process::exit(0);
             }
@@ -144,15 +151,13 @@ struct SimClient {
     client: Client,
 }
 
-/// Boots the real stack with the arena game running and reducers exposed.
-fn boot(args: &Args) -> (GameServer, nexum_core::GameInstanceId) {
+/// Boots the real stack with arena games (lobbies) running and reducers exposed.
+/// Returns the server and a list of game ids (one per lobby).
+fn boot(args: &Args) -> (GameServer, Vec<nexum_core::GameInstanceId>) {
     let runtime_config = RuntimeConfig::new(game_factory())
         .with_worker_count(args.workers)
         .with_max_queued_reducer_calls(args.queue);
     let runtime = Runtime::new(runtime_config).expect("runtime");
-    // Bounded TickUpdate (ADR-020 D2): the broadcast carries tick metadata
-    // only; clients receive windowed subscription deltas as the delivery
-    // path — removing the O(changes × clients) redundant decode.
     let network = NetworkConfig::new()
         .with_max_connections(args.clients.saturating_add(16))
         .with_max_queued_outbound_frames(args.clients.saturating_add(16))
@@ -163,19 +168,25 @@ fn boot(args: &Args) -> (GameServer, nexum_core::GameInstanceId) {
         .with_reducer_profiling(args.reducer_profile);
     let mut server = GameServer::new(runtime, network, auth_for(args.clients), server_config)
         .expect("game server");
-    let game = server
-        .create_game(
-            GameInstanceConfig::new("arena")
-                .with_partition_count(args.partitions)
-                .with_max_players(args.clients)
-                .with_on_player_join("player_join"),
-        )
-        .expect("create game");
-    server.start_game(game).expect("start game");
+    // Create lobbies: each lobby is a separate game with its own world.
+    let players_per_lobby = (args.clients + args.lobbies - 1) / args.lobbies;
+    let mut games = Vec::with_capacity(args.lobbies);
+    for lobby in 0..args.lobbies {
+        let game = server
+            .create_game(
+                GameInstanceConfig::new(&format!("arena_{lobby}"))
+                    .with_partition_count(args.partitions)
+                    .with_max_players(players_per_lobby)
+                    .with_on_player_join("player_join"),
+            )
+            .expect("create game");
+        server.start_game(game).expect("start game");
+        games.push(game);
+    }
     for reducer in CLIENT_REDUCERS {
         server.expose_reducer(reducer).expect("expose reducer");
     }
-    (server, game)
+    (server, games)
 }
 
 /// Connects one SDK client end-to-end: handshake, authenticate, join (the
@@ -594,18 +605,19 @@ fn main() {
         return;
     }
     println!(
-        "CCU harness: clients={} profile={} ticks={} hz={} partitions={} workers={} window={}",
-        args.clients, args.profile, args.ticks, args.hz, args.partitions, args.workers, args.window
+        "CCU harness: clients={} profile={} ticks={} hz={} partitions={} workers={} window={} lobbies={}",
+        args.clients, args.profile, args.ticks, args.hz, args.partitions, args.workers, args.window, args.lobbies
     );
 
     let started = Instant::now();
-    let (mut server, game) = boot(&args);
+    let (mut server, games) = boot(&args);
 
-    // Connect every client (one at a time through the real gateway).
+    // Connect every client, distributing across lobbies.
     let mut clients = Vec::with_capacity(args.clients);
     for i in 0..args.clients {
         let token = format!("p{i}");
-        let sim = connect_one(&mut server, game, &token, args.window);
+        let lobby = i % games.len();
+        let sim = connect_one(&mut server, games[lobby], &token, args.window);
         clients.push(sim);
     }
     let connect_elapsed = started.elapsed();
