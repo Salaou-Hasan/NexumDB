@@ -151,6 +151,10 @@ pub struct SubscriptionRegistry {
     views: Vec<Option<SharedView>>,
     /// Member count per view slot (parallel to `views`).
     view_counts: Vec<usize>,
+    /// Fast drain index: subscription ids whose buffer is non-empty.
+    /// Maintained by `push_commit` / `take_buffer` so that
+    /// `drain_all_pending` iterates O(pending) instead of O(total).
+    pending_set: std::collections::BTreeSet<SubscriptionId>,
     next_id: u64,
     next_seq: u64,
     config: SubscriptionConfig,
@@ -170,6 +174,7 @@ impl SubscriptionRegistry {
             subscriptions: BTreeMap::new(),
             views: Vec::new(),
             view_counts: Vec::new(),
+            pending_set: std::collections::BTreeSet::new(),
             next_id: 0,
             next_seq: 0,
             config: SubscriptionConfig::default(),
@@ -186,6 +191,7 @@ impl SubscriptionRegistry {
             subscriptions: BTreeMap::new(),
             views: Vec::new(),
             view_counts: Vec::new(),
+            pending_set: std::collections::BTreeSet::new(),
             next_id: 0,
             next_seq: 0,
             config,
@@ -361,9 +367,14 @@ impl SubscriptionRegistry {
                 if sub.state() == SubscriptionState::Stale {
                     continue;
                 }
+                let before = sub.buffer_len();
                 sub.push_commit(&scratch, seq);
                 fanouts += scratch.len() as u64;
                 affected.push(*sid);
+                // Track in pending_set when buffer transitions empty → non-empty.
+                if before == 0 && sub.buffer_len() > 0 {
+                    self.pending_set.insert(*sid);
+                }
             }
         }
 
@@ -391,6 +402,7 @@ impl SubscriptionRegistry {
     /// Takes the pending updates of one subscription, leaving its buffer
     /// empty. Returns [`Error::not_found`] for an unknown subscription.
     pub fn drain(&mut self, id: SubscriptionId) -> Result<Vec<SubscriptionUpdate>> {
+        self.pending_set.remove(&id);
         let subscription = self
             .subscriptions
             .get_mut(&id)
@@ -405,9 +417,14 @@ impl SubscriptionRegistry {
     /// BTreeMap lookups. At 20K subscriptions this eliminates ~300K comparison
     /// operations per tick (Phase 23-25 optimization).
     pub fn drain_all_pending(&mut self) -> Vec<(SubscriptionId, Vec<SubscriptionUpdate>)> {
-        self.subscriptions
-            .iter_mut()
-            .filter_map(|(id, sub)| {
+        // Fast path: iterate only subscriptions known to have pending data
+        // (O(pending) instead of O(total_subscriptions)).
+        let pending: Vec<SubscriptionId> = self.pending_set.iter().copied().collect();
+        self.pending_set.clear();
+        pending
+            .iter()
+            .filter_map(|id| {
+                let sub = self.subscriptions.get_mut(id)?;
                 let buf = sub.take_buffer();
                 if buf.is_empty() {
                     None
