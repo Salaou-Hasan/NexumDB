@@ -1007,10 +1007,10 @@ impl NetworkGateway {
             .copied()
             .unwrap_or(0);
         if updates.len() <= 1 {
-            // Single delta: send directly.
+            // Single delta: send directly (no clone — ownership moved).
             for update in &updates {
                 if let Some(message) = serialize_update(subscription, request_id, update)
-                    && self.send(connection, &message).unwrap_or(false)
+                    && self.send_direct(connection, message).unwrap_or(false)
                 {
                     self.metrics.subscription_messages_sent += 1;
                 }
@@ -1047,7 +1047,7 @@ impl NetworkGateway {
                     _ => {
                         // Initial/Resync/Stale: send individually.
                         if let Some(message) = serialize_update(subscription, request_id, update)
-                            && self.send(connection, &message).unwrap_or(false)
+                            && self.send_direct(connection, message).unwrap_or(false)
                         {
                             self.metrics.subscription_messages_sent += 1;
                         }
@@ -1060,7 +1060,9 @@ impl NetworkGateway {
                     request_id,
                     deltas: std::sync::Arc::new(deltas),
                 };
-                if self.send(connection, &message).unwrap_or(false) {
+                // Use send_direct to avoid clone: message is moved into the
+                // connection's direct queue under one Mutex lock.
+                if self.send_direct(connection, message).unwrap_or(false) {
                     self.metrics.subscription_messages_sent += 1;
                 }
             }
@@ -1083,10 +1085,10 @@ impl NetworkGateway {
             .copied()
             .unwrap_or(0);
         if updates.len() <= 1 {
-            // Single delta: send directly.
+            // Single delta: send directly (no clone — ownership moved).
             for update in updates {
                 if let Some(message) = serialize_update(subscription, request_id, update)
-                    && self.send(connection, &message).unwrap_or(false)
+                    && self.send_direct(connection, message).unwrap_or(false)
                 {
                     self.metrics.subscription_messages_sent += 1;
                 }
@@ -1136,7 +1138,9 @@ impl NetworkGateway {
                     request_id,
                     deltas: std::sync::Arc::new(deltas),
                 };
-                if self.send(connection, &message).unwrap_or(false) {
+                // Use send_direct to avoid clone: message is moved into the
+                // connection's direct queue under one Mutex lock.
+                if self.send_direct(connection, message).unwrap_or(false) {
                     self.metrics.subscription_messages_sent += 1;
                 }
             }
@@ -1368,6 +1372,64 @@ impl NetworkGateway {
 
     // ------------------------------------------------------------ outbound
 
+    /// Hot-path direct send: takes ownership of the message and pushes it
+    /// to the connection's direct queue under one Mutex lock. Eliminates
+    /// the clone that `send()` would perform when converting
+    /// &ServerMessage → owned.
+    ///
+    /// On overflow (Full), marks the connection stale and enqueues
+    /// StaleNotifications — same semantics as `send` but faster.
+    fn send_direct(
+        &mut self,
+        connection: ConnectionId,
+        message: ServerMessage,
+    ) -> Result<bool, NetworkError> {
+        let max_payload = self.config.max_frame_payload();
+        let event_limit = self.config.event_log_limit();
+        let entry = self
+            .conn_get_mut(connection)
+            .ok_or(NetworkError::UnknownConnection(connection))?;
+        if entry.stale {
+            return Ok(false);
+        }
+        match entry.connection.try_send_direct(message, max_payload) {
+            Ok(()) => {
+                self.metrics.messages_outbound += 1;
+                Ok(true)
+            }
+            Err(TransportError::Full) => {
+                if !entry.stale {
+                    entry.stale = true;
+                    let stale_subs: Vec<SubscriptionId> = entry
+                        .subscriptions
+                        .keys()
+                        .copied()
+                        .collect();
+                    for sub in &stale_subs {
+                        if let Ok(notify) = protocol::encode_server(
+                            &ServerMessage::StaleNotification {
+                                subscription: *sub,
+                                seq: 0,
+                            },
+                            max_payload,
+                        ) {
+                            entry.pending_stale.push_back(notify);
+                            entry.has_pending_stale = true;
+                        }
+                    }
+                    Self::push_event(
+                        &mut self.events,
+                        event_limit,
+                        NetworkEvent::SessionStale { connection },
+                    );
+                }
+                self.metrics.messages_dropped += 1;
+                Ok(false)
+            }
+            Err(_) => Ok(false),
+        }
+    }
+
     /// Sends a message to a connection. Returns `Ok(true)` when the frame
     /// was enqueued, `Ok(false)` when it was dropped by the stale/overflow
     /// policy, and `Err` for unknown connections or transport failures.
@@ -1412,7 +1474,7 @@ impl NetworkGateway {
             // Try direct send.
             if entry
                 .connection
-                .try_send_direct(message, max_payload)
+                .try_send_direct(message.clone(), max_payload)
                 .is_ok()
             {
                 self.metrics.messages_outbound += 1;

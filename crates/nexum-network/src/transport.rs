@@ -87,6 +87,7 @@ pub trait Connection {
     fn close(&mut self);
 
     /// Send a [`ServerMessage`] directly, bypassing encode → frame.
+    /// Takes ownership to avoid a clone inside the queue push.
     /// Returns `Ok(())` when the message was stored; the caller must NOT
     /// fall back to `try_send_frame`.
     ///
@@ -94,7 +95,7 @@ pub trait Connection {
     /// callers can fall back to encode+`try_send_frame`.
     fn try_send_direct(
         &mut self,
-        _message: &ServerMessage,
+        _message: ServerMessage,
         _max_payload: u32,
     ) -> Result<(), TransportError> {
         Err(TransportError::Closed)
@@ -274,7 +275,7 @@ impl Connection for MemoryConnection {
 
     fn try_send_direct(
         &mut self,
-        message: &ServerMessage,
+        message: ServerMessage,
         _max_payload: u32,
     ) -> Result<(), TransportError> {
         let mut link = self.link.lock().expect("memory link lock");
@@ -296,7 +297,7 @@ impl Connection for MemoryConnection {
             return Err(TransportError::Full);
         }
         if self.server_side {
-            link.to_client_msg.push_back(message.clone());
+            link.to_client_msg.push_back(message);
             self.has_outbound.store(true, Ordering::Relaxed);
         } else {
             // Client → server direct messages not used; fall through to frame.
