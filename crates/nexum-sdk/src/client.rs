@@ -539,7 +539,7 @@ impl Client {
 
     /// Takes every buffered server event in order, clearing the queue.
     pub fn take_events(&mut self) -> Vec<ServerEvent> {
-        self.events.drain(..).collect()
+        std::mem::take(&mut self.events).into()
     }
 
     /// Returns the number of buffered server events.
