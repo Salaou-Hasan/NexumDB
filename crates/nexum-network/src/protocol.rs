@@ -15,8 +15,8 @@
 //! so framing bounds are enforced at the transport too.
 
 use nexum_core::binary::{
-    Crc32, get_bool, get_row, get_str, get_u64, get_value, put_bool, put_row, put_str, put_u64,
-    put_value,
+    Crc32, get_bool, get_row, get_string, get_u64, get_value, put_bool, put_row,
+    put_str, put_u64, put_value,
 };
 use nexum_core::{
     Error, Row, RowId, SubscriptionId, TickId, TransactionId, Value, Version, WorldId,
@@ -495,13 +495,13 @@ pub fn decode_client(frame: &[u8], max_payload: u32) -> Result<ClientMessage, Pr
         KIND_HANDSHAKE => {
             let mut cursor = payload.as_slice();
             let version = get_u16(&mut cursor)?;
-            let name = get_str(&mut cursor)?;
+            let name = get_string(&mut cursor)?;
             ensure_consumed(cursor)?;
             ClientMessage::Handshake { version, name }
         }
         KIND_AUTHENTICATE => {
             let mut cursor = payload.as_slice();
-            let credentials = get_str(&mut cursor)?;
+            let credentials = get_string(&mut cursor)?;
             ensure_consumed(cursor)?;
             ClientMessage::Authenticate { credentials }
         }
@@ -550,7 +550,7 @@ pub fn decode_client(frame: &[u8], max_payload: u32) -> Result<ClientMessage, Pr
         KIND_CALL_REDUCER => {
             let mut cursor = payload.as_slice();
             let request_id = get_u64(&mut cursor)?;
-            let reducer = get_str(&mut cursor)?;
+            let reducer = get_string(&mut cursor)?;
             if reducer.is_empty() {
                 return Err(malformed("reducer call name must not be empty"));
             }
@@ -573,7 +573,7 @@ pub fn decode_server(frame: &[u8], max_payload: u32) -> Result<ServerMessage, Pr
         KIND_HANDSHAKE_RESPONSE => {
             let mut cursor = payload.as_slice();
             let version = get_u16(&mut cursor)?;
-            let server_name = get_str(&mut cursor)?;
+            let server_name = get_string(&mut cursor)?;
             ensure_consumed(cursor)?;
             ServerMessage::HandshakeResponse {
                 version,
@@ -585,7 +585,7 @@ pub fn decode_server(frame: &[u8], max_payload: u32) -> Result<ServerMessage, Pr
             let ok = get_bool(&mut cursor)?;
             if ok {
                 let id = get_u64(&mut cursor)?;
-                let name = get_str(&mut cursor)?;
+                let name = get_string(&mut cursor)?;
                 ensure_consumed(cursor)?;
                 ServerMessage::AuthResult {
                     ok: true,
@@ -593,7 +593,7 @@ pub fn decode_server(frame: &[u8], max_payload: u32) -> Result<ServerMessage, Pr
                     error: None,
                 }
             } else {
-                let error = get_str(&mut cursor)?;
+                let error = get_string(&mut cursor)?;
                 ensure_consumed(cursor)?;
                 ServerMessage::AuthResult {
                     ok: false,
@@ -614,7 +614,7 @@ pub fn decode_server(frame: &[u8], max_payload: u32) -> Result<ServerMessage, Pr
                     error: None,
                 }
             } else {
-                let error = get_str(&mut cursor)?;
+                let error = get_string(&mut cursor)?;
                 ensure_consumed(cursor)?;
                 ServerMessage::AttachResult {
                     ok: false,
@@ -633,7 +633,7 @@ pub fn decode_server(frame: &[u8], max_payload: u32) -> Result<ServerMessage, Pr
                     error: None,
                 }
             } else {
-                let error = get_str(&mut cursor)?;
+                let error = get_string(&mut cursor)?;
                 ensure_consumed(cursor)?;
                 ServerMessage::DetachResult {
                     ok: false,
@@ -660,7 +660,7 @@ pub fn decode_server(frame: &[u8], max_payload: u32) -> Result<ServerMessage, Pr
                 .try_reserve(event_count as usize)
                 .map_err(|_| malformed("event count exceeds memory capacity"))?;
             for _ in 0..event_count {
-                let name = get_str(&mut cursor)?;
+                let name = get_string(&mut cursor)?;
                 let payload = get_value(&mut cursor)?;
                 events.push(ReducerEvent::new(name, payload));
             }
@@ -725,7 +725,7 @@ pub fn decode_server(frame: &[u8], max_payload: u32) -> Result<ServerMessage, Pr
         KIND_ERROR => {
             let mut cursor = payload.as_slice();
             let code = get_u16(&mut cursor)?;
-            let message = get_str(&mut cursor)?;
+            let message = get_string(&mut cursor)?;
             let request_id = get_u64(&mut cursor)?;
             ensure_consumed(cursor)?;
             ServerMessage::Error {
@@ -742,7 +742,7 @@ pub fn decode_server(frame: &[u8], max_payload: u32) -> Result<ServerMessage, Pr
         }
         KIND_DISCONNECT => {
             let mut cursor = payload.as_slice();
-            let reason = get_str(&mut cursor)?;
+            let reason = get_string(&mut cursor)?;
             ensure_consumed(cursor)?;
             ServerMessage::Disconnect { reason }
         }
@@ -760,7 +760,7 @@ pub fn decode_server(frame: &[u8], max_payload: u32) -> Result<ServerMessage, Pr
                     error: None,
                 }
             } else {
-                let error = get_str(&mut cursor)?;
+                let error = get_string(&mut cursor)?;
                 ensure_consumed(cursor)?;
                 ServerMessage::ReducerResult {
                     request_id,
@@ -934,7 +934,7 @@ fn decode_frame_payload(cursor: &mut &[u8]) -> Result<InputFrame, ProtocolError>
     let mut frame = InputFrame::with_capacity(tick, count as usize);
     for _ in 0..count {
         let source = get_u64(cursor)?;
-        let kind = get_str(cursor)?;
+        let kind = get_string(cursor)?;
         if kind.is_empty() {
             return Err(malformed("input command kind must not be empty"));
         }
@@ -991,17 +991,17 @@ fn encode_query(out: &mut Vec<u8>, query: &Query) {
 /// Decodes a query payload, reconstructing it through the validating
 /// builder (so an empty table name etc. is a malformed error).
 fn decode_query(cursor: &mut &[u8]) -> Result<Query, ProtocolError> {
-    let table = get_str(cursor)?;
+    let table = get_string(cursor)?;
     let mut builder = Query::builder(table);
     let predicate_count = get_u64(cursor)?;
     for _ in 0..predicate_count {
-        let column = get_str(cursor)?;
+        let column = get_string(cursor)?;
         let op = comparison_op_from_tag(take_byte(cursor)?)?;
         let value = get_value(cursor)?;
         builder = builder.predicate(column, op, value);
     }
     if take_byte(cursor)? == 1 {
-        let column = get_str(cursor)?;
+        let column = get_string(cursor)?;
         let direction = order_direction_from_tag(take_byte(cursor)?)?;
         builder = builder.order_by(column, direction);
     }
@@ -1015,7 +1015,7 @@ fn decode_query(cursor: &mut &[u8]) -> Result<Query, ProtocolError> {
             .try_reserve(count as usize)
             .map_err(|_| malformed("projection count exceeds memory capacity"))?;
         for _ in 0..count {
-            columns.push(get_str(cursor)?);
+            columns.push(get_string(cursor)?);
         }
         let names: Vec<&str> = columns.iter().map(String::as_str).collect();
         builder = builder.project(&names);
@@ -1047,7 +1047,7 @@ fn get_reducer_args(cursor: &mut &[u8]) -> Result<ReducerArgs, ProtocolError> {
     }
     let mut args = ReducerArgs::new();
     for _ in 0..count {
-        let name = get_str(cursor)?;
+        let name = get_string(cursor)?;
         let value = get_value(cursor)?;
         args = args.insert(name, value);
     }

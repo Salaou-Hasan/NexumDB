@@ -100,7 +100,7 @@ pub fn encode_table_row(table: &str, row_id: u64) -> Vec<u8> {
 }
 
 /// Decodes `GET`/`CONTAINS`/`DELETE` args.
-pub fn decode_table_row(cursor: &mut &[u8]) -> Result<(String, u64)> {
+pub fn decode_table_row(cursor: &mut &[u8]) -> Result<(Box<str>, u64)> {
     let table = get_str(cursor)?;
     let row_id = get_u64(cursor)?;
     Ok((table, row_id))
@@ -115,7 +115,7 @@ pub fn encode_table(table: &str) -> Vec<u8> {
 }
 
 /// Decodes `SCAN` args.
-pub fn decode_table(cursor: &mut &[u8]) -> Result<String> {
+pub fn decode_table(cursor: &mut &[u8]) -> Result<Box<str>> {
     get_str(cursor)
 }
 
@@ -136,7 +136,7 @@ pub fn encode_lookup(table: &str, index: &str, key: &[Value]) -> Vec<u8> {
 ///
 /// The key count is guest-controlled, so the reserve uses [`Vec::try_reserve`]
 /// — a hostile count yields a clean error, never a capacity-overflow panic.
-pub fn decode_lookup(cursor: &mut &[u8]) -> Result<(String, String, Vec<Value>)> {
+pub fn decode_lookup(cursor: &mut &[u8]) -> Result<(Box<str>, Box<str>, Vec<Value>)> {
     let table = get_str(cursor)?;
     let index = get_str(cursor)?;
     let count = get_u64(cursor)?;
@@ -169,14 +169,14 @@ pub fn encode_update(table: &str, row_id: u64, row: &Row) -> Vec<u8> {
 }
 
 /// Decodes `INSERT` args (table + row).
-pub fn decode_insert(cursor: &mut &[u8]) -> Result<(String, Row)> {
+pub fn decode_insert(cursor: &mut &[u8]) -> Result<(Box<str>, Row)> {
     let table = get_str(cursor)?;
     let row = get_row(cursor)?;
     Ok((table, row))
 }
 
 /// Decodes `UPDATE` args (table + row id + row).
-pub fn decode_update(cursor: &mut &[u8]) -> Result<(String, u64, Row)> {
+pub fn decode_update(cursor: &mut &[u8]) -> Result<(Box<str>, u64, Row)> {
     let table = get_str(cursor)?;
     let row_id = get_u64(cursor)?;
     let row = get_row(cursor)?;
@@ -193,7 +193,7 @@ pub fn encode_emit(name: &str, payload: &Value) -> Vec<u8> {
 }
 
 /// Decodes `EMIT` args.
-pub fn decode_emit(cursor: &mut &[u8]) -> Result<(String, Value)> {
+pub fn decode_emit(cursor: &mut &[u8]) -> Result<(Box<str>, Value)> {
     let name = get_str(cursor)?;
     let payload = nexum_core::binary::get_value(cursor)?;
     Ok((name, payload))
@@ -303,7 +303,7 @@ mod tests {
         roundtrip(
             |c| {
                 let (table, row_id) = decode_table_row(c)?;
-                assert_eq!(table, "players");
+                assert_eq!(&*table, "players");
                 assert_eq!(row_id, 7);
                 Ok(())
             },
@@ -313,7 +313,7 @@ mod tests {
         bytes = encode_table("players");
         roundtrip(
             |c| {
-                assert_eq!(decode_table(c).unwrap(), "players");
+                assert_eq!(&*decode_table(c).unwrap(), "players");
                 Ok(())
             },
             bytes,
@@ -323,8 +323,8 @@ mod tests {
         roundtrip(
             |c| {
                 let (table, index, key) = decode_lookup(c)?;
-                assert_eq!(table, "players");
-                assert_eq!(index, "by_level");
+                assert_eq!(&*table, "players");
+                assert_eq!(&*index, "by_level");
                 assert_eq!(key, vec![Value::U32(6)]);
                 Ok(())
             },
@@ -336,7 +336,7 @@ mod tests {
         roundtrip(
             |c| {
                 let (table, row) = decode_insert(c)?;
-                assert_eq!(table, "players");
+                assert_eq!(&*table, "players");
                 assert_eq!(row, player);
                 Ok(())
             },
@@ -347,7 +347,7 @@ mod tests {
         roundtrip(
             |c| {
                 let (table, row_id, row) = decode_update(c)?;
-                assert_eq!(table, "players");
+                assert_eq!(&*table, "players");
                 assert_eq!(row_id, 3);
                 assert_eq!(row, player);
                 Ok(())
@@ -359,7 +359,7 @@ mod tests {
         roundtrip(
             |c| {
                 let (name, payload) = decode_emit(c)?;
-                assert_eq!(name, "joined");
+                assert_eq!(&*name, "joined");
                 assert_eq!(payload, Value::U64(42));
                 Ok(())
             },

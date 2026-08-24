@@ -40,10 +40,10 @@ pub fn put_bytes(out: &mut Vec<u8>, bytes: &[u8]) {
 }
 
 /// Reads a length-prefixed byte slice.
-pub fn get_bytes(cursor: &mut &[u8]) -> Result<Vec<u8>> {
+pub fn get_bytes(cursor: &mut &[u8]) -> Result<Box<[u8]>> {
     let len = get_u64(cursor)?;
     let bytes = take(cursor, len as usize)?;
-    Ok(bytes.to_vec())
+    Ok(bytes.to_vec().into_boxed_slice())
 }
 
 /// Appends a length-prefixed UTF-8 string.
@@ -51,10 +51,17 @@ pub fn put_str(out: &mut Vec<u8>, s: &str) {
     put_bytes(out, s.as_bytes());
 }
 
-/// Reads a length-prefixed UTF-8 string.
-pub fn get_str(cursor: &mut &[u8]) -> Result<String> {
+/// Reads a length-prefixed UTF-8 string as `Box<str>` (compact, 16B).
+pub fn get_str(cursor: &mut &[u8]) -> Result<Box<str>> {
     let bytes = get_bytes(cursor)?;
-    String::from_utf8(bytes).map_err(|_| Error::internal("binary: invalid UTF-8 string"))
+    String::from_utf8(bytes.into_vec()).map_err(|_| Error::internal("binary: invalid UTF-8 string"))
+        .map(|s| s.into_boxed_str())
+}
+
+/// Reads a length-prefixed UTF-8 string as `String` (for protocol types).
+pub fn get_string(cursor: &mut &[u8]) -> Result<String> {
+    let bytes = get_bytes(cursor)?;
+    String::from_utf8(bytes.into_vec()).map_err(|_| Error::internal("binary: invalid UTF-8 string"))
 }
 
 /// Appends a boolean as a single byte.
@@ -203,7 +210,7 @@ pub fn get_schema(cursor: &mut &[u8]) -> Result<TableSchema> {
         for _ in 0..primary_count {
             primary.push(get_str(cursor)?);
         }
-        let names: Vec<&str> = primary.iter().map(String::as_str).collect();
+        let names: Vec<&str> = primary.iter().map(|s| s.as_ref()).collect();
         builder = builder.primary_key(&names);
     }
     let index_count = get_u64(cursor)?;
@@ -215,7 +222,7 @@ pub fn get_schema(cursor: &mut &[u8]) -> Result<TableSchema> {
         for _ in 0..column_count {
             columns.push(get_str(cursor)?);
         }
-        let names: Vec<&str> = columns.iter().map(String::as_str).collect();
+        let names: Vec<&str> = columns.iter().map(|s| s.as_ref()).collect();
         builder = if unique {
             builder.unique_index(index_name, &names)
         } else {
@@ -412,7 +419,7 @@ mod tests {
             Value::F32(-1.5),
             Value::F64(2.5),
             Value::String("héllo wörld".into()),
-            Value::Bytes(vec![0, 1, 2, 255]),
+            Value::Bytes(vec![0, 1, 2, 255].into_boxed_slice()),
         ];
         for value in values {
             roundtrip(put_value, get_value, value);

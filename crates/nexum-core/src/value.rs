@@ -102,10 +102,10 @@ pub enum Value {
     F32(f32),
     /// 64-bit IEEE-754 float.
     F64(f64),
-    /// UTF-8 string.
-    String(String),
-    /// Opaque byte blob.
-    Bytes(Vec<u8>),
+    /// UTF-8 string (Box<str> = 16B vs String = 24B, saving 8 bytes per value).
+    String(Box<str>),
+    /// Opaque byte blob (Box<[u8]> = 16B vs Vec<u8> = 24B, saving 8 bytes per value).
+    Bytes(Box<[u8]>),
 }
 
 impl Value {
@@ -382,25 +382,25 @@ impl From<f64> for Value {
 
 impl From<String> for Value {
     fn from(value: String) -> Self {
-        Self::String(value)
+        Self::String(value.into_boxed_str())
     }
 }
 
 impl From<&str> for Value {
     fn from(value: &str) -> Self {
-        Self::String(value.to_owned())
+        Self::String(value.into())
     }
 }
 
 impl From<Vec<u8>> for Value {
     fn from(value: Vec<u8>) -> Self {
-        Self::Bytes(value)
+        Self::Bytes(value.into_boxed_slice())
     }
 }
 
 impl From<&[u8]> for Value {
     fn from(value: &[u8]) -> Self {
-        Self::Bytes(value.to_vec())
+        Self::Bytes(value.into())
     }
 }
 
@@ -423,7 +423,7 @@ mod tests {
         assert_eq!(Value::U64(1).type_of(), ColumnType::U64);
         assert_eq!(Value::F64(1.0).type_of(), ColumnType::F64);
         assert_eq!(Value::String("x".into()).type_of(), ColumnType::String);
-        assert_eq!(Value::Bytes(vec![1]).type_of(), ColumnType::Bytes);
+        assert_eq!(Value::Bytes(vec![1].into_boxed_slice()).type_of(), ColumnType::Bytes);
     }
 
     #[test]
@@ -432,7 +432,7 @@ mod tests {
         assert_eq!(Value::I32(7).as_u64(), None);
         assert_eq!(Value::U64(9).as_u64(), Some(9));
         assert_eq!(Value::String("hi".into()).as_str(), Some("hi"));
-        assert_eq!(Value::Bytes(vec![1, 2]).as_bytes(), Some(&[1, 2][..]));
+        assert_eq!(Value::Bytes(vec![1, 2].into_boxed_slice()).as_bytes(), Some(&[1, 2][..]));
         assert_eq!(Value::F64(2.5).as_f64(), Some(2.5));
         assert!(Value::Bool(true).is(ColumnType::Bool));
         assert!(!Value::Bool(true).is(ColumnType::I32));
@@ -443,7 +443,7 @@ mod tests {
         assert_eq!(Value::from(7i32), Value::I32(7));
         assert_eq!(Value::from(7u64), Value::U64(7));
         assert_eq!(Value::from("hi"), Value::String("hi".into()));
-        assert_eq!(Value::from(vec![1u8]), Value::Bytes(vec![1]));
+        assert_eq!(Value::from(vec![1u8]), Value::Bytes(vec![1].into_boxed_slice()));
         assert_eq!(Value::from(1.5f64), Value::F64(1.5));
     }
 
