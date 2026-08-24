@@ -28,6 +28,7 @@ use nexum_storage::Change;
 use nexum_table::TableStore;
 
 use crate::commit;
+use crate::snapshot::TxSnapshot;
 use crate::read_set::ReadSet;
 use crate::write_set::{WriteEntry, WriteSet};
 
@@ -181,6 +182,32 @@ impl Transaction {
             }
         }
         Ok(())
+    }
+
+    /// Takes a lightweight snapshot of mutable state for fast reducer
+    /// execution without the branch/absorb cycle.
+    ///
+    /// The WriteSet is an Arc clone (O(1)); the ReadSet and provisional
+    /// counters are cloned separately. On success the caller simply
+    /// continues — the reducer's writes are already in this transaction.
+    /// On failure, call [`rollback`](Self::rollback) to restore state.
+    pub fn snapshot(&self) -> TxSnapshot {
+        TxSnapshot {
+            writes: self.writes.clone(),
+            reads: self.reads.clone(),
+            provisional: self.provisional.clone(),
+        }
+    }
+
+    /// Restores mutable state from a snapshot, discarding all mutations
+    /// made since the snapshot was taken.
+    ///
+    /// Used to rollback a failed reducer invocation without the
+    /// branch/absorb overhead.
+    pub fn rollback(&mut self, snapshot: TxSnapshot) {
+        self.writes = snapshot.writes;
+        self.reads = snapshot.reads;
+        self.provisional = snapshot.provisional;
     }
 
     /// Returns the transaction's current state.

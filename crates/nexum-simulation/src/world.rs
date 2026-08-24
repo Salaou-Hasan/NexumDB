@@ -583,19 +583,16 @@ impl World {
             }
 
             // Phase 0c — client reducer calls, in call order (ADR-013 D3).
-            // Each runs against a branch of the tick transaction: a
-            // successful call absorbs into the tick tx (its writes and
-            // events commit atomically with the tick); a failed call
-            // discards its branch — zero mutation, zero events — and records
-            // a typed per-call error while the tick continues. Resolution is
-            // native first, WASM fallback, then `NotFound` (a per-call
-            // error, not a tick failure).
+            // Phase 22.5: execute directly against the tick transaction
+            // with snapshot/rollback instead of branch/absorb. This
+            // eliminates the ~100 µs absorb overhead per call by keeping
+            // writes in the parent tx and only rolling back on failure.
+            // Resolution is native first, WASM fallback, then `NotFound`.
             for call in calls {
-                let mut child = Transaction::new(tx.id());
-                child.branch_of(&tx)?;
+                let snapshot = tx.snapshot();
                 let started = std::time::Instant::now();
                 let outcome =
-                    invoke_reducer(store, &mut child, native, wasm, call.reducer(), call.args());
+                    invoke_reducer(store, &mut tx, native, wasm, call.reducer(), call.args());
                 record_reducer(
                     &mut reducer_profile,
                     profiling_enabled,
@@ -604,12 +601,11 @@ impl World {
                 );
                 match outcome {
                     Ok((value, events)) => {
-                        tx.absorb(child)?;
                         reducer_results.push(ReducerCallResult::ok(call.request_id(), value));
                         append_events(&mut tick_events, events, max_events)?;
                     }
                     Err(error) => {
-                        let _ = child.abort();
+                        tx.rollback(snapshot);
                         reducer_results.push(ReducerCallResult::err(call.request_id(), error));
                     }
                 }

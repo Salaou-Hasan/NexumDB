@@ -60,6 +60,7 @@
 
 mod commit;
 mod read_set;
+mod snapshot;
 mod transaction;
 mod write_set;
 
@@ -67,5 +68,6 @@ mod write_set;
 mod tests;
 
 pub use read_set::ReadSet;
+pub use snapshot::TxSnapshot;
 pub use transaction::{Transaction, TransactionState};
 pub use write_set::{WriteEntry, WriteSet};
