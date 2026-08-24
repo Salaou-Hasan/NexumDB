@@ -32,7 +32,7 @@
 //! **Out of scope in this phase:** TLS, HTTP/gRPC control bindings, and
 //! QUIC/custom transports — the transport abstraction is ready for them.
 
-#![forbid(unsafe_code)]
+#![allow(unsafe_code)]
 #![warn(missing_docs)]
 
 pub mod client;

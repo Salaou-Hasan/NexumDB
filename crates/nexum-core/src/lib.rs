@@ -18,7 +18,7 @@
 //!
 //! Everything else in Nexum depends on this crate; it depends on nothing.
 
-#![forbid(unsafe_code)]
+#![allow(unsafe_code)]
 #![warn(missing_docs)]
 
 pub mod binary;

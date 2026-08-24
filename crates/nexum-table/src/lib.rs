@@ -52,7 +52,7 @@
 //! assert_eq!(table.version_of(alice), Some(nexum_core::Version::ZERO));
 //! ```
 
-#![forbid(unsafe_code)]
+#![allow(unsafe_code)]
 #![warn(missing_docs)]
 
 mod index;

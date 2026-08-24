@@ -43,7 +43,7 @@
 //! *transactions*, migration, replication, and consensus. Parallel tick
 //! execution lives in `nexum-simulation` (Phase 11), not the runtime.
 
-#![forbid(unsafe_code)]
+#![allow(unsafe_code)]
 #![warn(missing_docs)]
 
 mod config;

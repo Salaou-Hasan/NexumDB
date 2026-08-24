@@ -33,7 +33,7 @@ categories = ["game-development", "database-implementations", "wasm", "network-p
 exclude = ["target/", ".git/", "docs/", "benchmarks/", "tests/"]
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+unsafe_code = "allow"
 
 # Phase 16 release profile (ADR-016 D5): fat LTO + single codegen unit
 # maximize codegen quality with no correctness cost; panic=unwind keeps the

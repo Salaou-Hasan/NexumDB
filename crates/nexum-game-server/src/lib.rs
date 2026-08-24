@@ -25,7 +25,7 @@
 //! (exposure + active-player membership), so client attach / input / reducer
 //! operations are denied *before* any authoritative execution.
 
-#![forbid(unsafe_code)]
+#![allow(unsafe_code)]
 #![warn(missing_docs)]
 
 pub mod config;

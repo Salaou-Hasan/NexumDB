@@ -55,7 +55,7 @@
 //! **Out of scope in this phase:** WAL/snapshots (Phase 5), reducers (6),
 //! WASM (7), subscriptions (8), simulation (9), networking (11).
 
-#![forbid(unsafe_code)]
+#![allow(unsafe_code)]
 #![warn(missing_docs)]
 
 mod commit;

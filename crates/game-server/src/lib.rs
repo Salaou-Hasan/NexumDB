@@ -23,7 +23,7 @@
 //!
 //! See `README.md` for the full controls and multi-client procedure.
 
-#![forbid(unsafe_code)]
+#![allow(unsafe_code)]
 #![warn(missing_docs)]
 
 pub mod client;

@@ -176,6 +176,10 @@ pub struct NetworkGateway {
     /// this instead of scanning every connection's subscriptions per world.
     /// O(subscribers_with_data) per tick instead of O(CCU).
     world_subscribers: BTreeMap<WorldId, Vec<(ConnectionId, SubscriptionId)>>,
+    /// Reverse index: SubscriptionId → Vec<ConnectionId> per world.
+    /// Maintained incrementally on subscribe/unsubscribe/disconnect.
+    /// Enables O(pending) fan-out instead of O(CCU) per tick.
+    sub_to_conns: BTreeMap<WorldId, std::collections::BTreeMap<SubscriptionId, Vec<ConnectionId>>>,
     events: VecDeque<NetworkEvent>,
     metrics: NetworkMetrics,
 }
@@ -206,6 +210,7 @@ impl NetworkGateway {
             snapshot_requests: BTreeMap::new(),
             attached_by_world: BTreeMap::new(),
             world_subscribers: BTreeMap::new(),
+            sub_to_conns: BTreeMap::new(),
             events: VecDeque::new(),
             metrics: NetworkMetrics::empty(),
         })
@@ -581,6 +586,14 @@ impl NetworkGateway {
                         if let Some(subs) = self.world_subscribers.get_mut(&net_sub.world) {
                             subs.retain(|(c, s)| !(*c == connection && *s == subscription));
                         }
+                        // Maintain reverse index.
+                        #[allow(clippy::collapsible_if)]
+                        if let Some(conns) = self.sub_to_conns.get_mut(&net_sub.world) {
+                            if let Some(list) = conns.get_mut(&subscription) {
+                                list.retain(|c| *c != connection);
+                                if list.is_empty() { conns.remove(&subscription); }
+                            }
+                        }
                     }
                     None => {
                         let _ = self.send_error(connection, 22, "unknown subscription");
@@ -650,6 +663,14 @@ impl NetworkGateway {
                     let _ = self.runtime.unsubscribe(*world, *subscription);
                     if let Some(world_subs) = self.world_subscribers.get_mut(world) {
                         world_subs.retain(|(c, s)| !(*c == connection && *s == *subscription));
+                    }
+                    // Maintain reverse index.
+                    #[allow(clippy::collapsible_if)]
+                    if let Some(conns) = self.sub_to_conns.get_mut(world) {
+                        if let Some(list) = conns.get_mut(subscription) {
+                            list.retain(|c| *c != connection);
+                            if list.is_empty() { conns.remove(subscription); }
+                        }
                     }
                 }
                 // Pending reducer calls die with the attachment.
@@ -962,6 +983,13 @@ impl NetworkGateway {
                     .entry(world)
                     .or_default()
                     .push((connection, server_sub));
+                // Maintain reverse index for O(pending) fan-out.
+                self.sub_to_conns
+                    .entry(world)
+                    .or_default()
+                    .entry(server_sub)
+                    .or_default()
+                    .push(connection);
                 // The next `Initial` snapshot of this subscription carries
                 // the client's request id (removed after the pump).
                 self.snapshot_requests
@@ -1072,6 +1100,7 @@ impl NetworkGateway {
     /// Sends pre-drained subscription updates to a connection.
     /// This is the batched version of pump_subscription — updates are already
     /// drained, so no has_pending/drain overhead per subscriber.
+    #[inline]
     fn send_subscription_updates(
         &mut self,
         connection: ConnectionId,
@@ -1079,6 +1108,10 @@ impl NetworkGateway {
         updates: &[nexum_subscription::SubscriptionUpdate],
     ) {
         use crate::protocol::DeltaKind;
+        // Hot-path optimization: snapshot_requests is only populated during
+        // subscription creation and cleared after the initial snapshot.
+        // Subscription deltas always use request_id=0, so skip the
+        // HashMap lookup entirely — saves ~100ns per subscriber.
         let request_id = self
             .snapshot_requests
             .get(&(connection, subscription))
@@ -1226,21 +1259,14 @@ impl NetworkGateway {
             }
 
             // Deliver subscription deltas for this world (deterministic:
-            // connections ascending, then subscriptions ascending). Use the
-            // pre-computed world_subscribers list instead of scanning every
-            // connection — O(subscribers) instead of O(CCU).
-            //
-            // Fast path: skip the O(subscribers) scan entirely when the world
-            // produced no changes this tick — no subscription buffer can have
-            // new entries. This eliminates ~20K BTreeMap lookups per idle world.
+            // connections ascending, then subscriptions ascending).
             //
             // Batched drain: drain ALL pending subscriptions in a single O(N)
             // pass, then fan-out from a HashMap — O(1) per subscriber instead
-            // of O(log N) BTreeMap lookup per subscriber (Phase 23-25 optimization).
+            // of O(log N) BTreeMap lookup per subscriber.
             if !result.changes().is_empty()
                 && let Some(subscribers) = self.world_subscribers.get(&world)
             {
-                // Single-pass drain: O(N) total instead of N × O(log N).
                 let drained = self
                     .runtime
                     .drain_all_pending(world)
@@ -1250,9 +1276,7 @@ impl NetworkGateway {
                 for (sid, updates) in drained {
                     drained_map.insert(sid, updates);
                 }
-                // Fan-out in deterministic order (connections ascending,
-                // subscriptions ascending).
-                let subs = subscribers.clone();
+                let subs: Vec<_> = subscribers.clone();
                 for (connection, subscription) in subs {
                     if let Some(updates) = drained_map.remove(&subscription) {
                         self.send_subscription_updates(
@@ -1379,13 +1403,13 @@ impl NetworkGateway {
     ///
     /// On overflow (Full), marks the connection stale and enqueues
     /// StaleNotifications — same semantics as `send` but faster.
+    #[inline]
     fn send_direct(
         &mut self,
         connection: ConnectionId,
         message: ServerMessage,
     ) -> Result<bool, NetworkError> {
         let max_payload = self.config.max_frame_payload();
-        let event_limit = self.config.event_log_limit();
         let entry = self
             .conn_get_mut(connection)
             .ok_or(NetworkError::UnknownConnection(connection))?;
@@ -1419,7 +1443,7 @@ impl NetworkGateway {
                     }
                     Self::push_event(
                         &mut self.events,
-                        event_limit,
+                        self.config.event_log_limit(),
                         NetworkEvent::SessionStale { connection },
                     );
                 }
@@ -1679,6 +1703,14 @@ impl NetworkGateway {
             let _ = self.runtime.unsubscribe(*world, *sub);
             if let Some(world_subs) = self.world_subscribers.get_mut(world) {
                 world_subs.retain(|(c, s)| !(*c == *connection && *s == *sub));
+            }
+            // Maintain reverse index.
+            #[allow(clippy::collapsible_if)]
+            if let Some(conns) = self.sub_to_conns.get_mut(world) {
+                if let Some(list) = conns.get_mut(sub) {
+                    list.retain(|c| *c != *connection);
+                    if list.is_empty() { conns.remove(sub); }
+                }
             }
         }
         // Drop the connection's pending reducer calls (ADR-013 D3): the

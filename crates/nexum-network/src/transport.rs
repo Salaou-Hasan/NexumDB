@@ -1,12 +1,13 @@
 //! Transports (ADR-011 D4).
 //!
 //! The gateway depends only on the [`Connection`] trait: bounded inbound/
-//! outbound frame queues and non-blocking poll/flush. Two concrete
+//! outbound frame queues and non-blocking poll/flush.  Two concrete
 //! transports ship:
 //!
 //! - [`MemoryTransport`] — deterministic in-process links used by tests and
 //!   benchmarks (one end is registered with the gateway, the other drives
-//!   the client).
+//!   the client).  Uses **lock-free SPSC ring buffers** (zero Mutex
+//!   contention on the hot send/receive path).
 //! - [`TcpConnection`] / [`TcpTransport`] — a dependency-free **nonblocking**
 //!   TCP transport: complete frames are length-delimited and validated with
 //!   the protocol's own parser (bounds + checksum) before they enter the
@@ -19,10 +20,11 @@ use std::fmt;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use crate::error::{NetworkError, ProtocolError};
 use crate::protocol::{ServerMessage, parse_frame};
+use crate::spsc::SpscRing;
 
 /// A transport-level failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,18 +71,18 @@ pub trait Connection {
     /// closes the connection).
     fn try_recv_frame(&mut self) -> Result<Option<Arc<[u8]>>, TransportError>;
 
-    /// Buffers one outbound frame for delivery. Returns
+    /// Buffers one outbound frame for delivery.  Returns
     /// [`TransportError::Full`] when the peer's queue is at capacity (never
     /// blocks).
     ///
     /// Frames are `Arc<[u8]>` so an immutable, already-encoded payload can
     /// be delivered to many connections by refcount bump instead of a
-    /// per-recipient copy (ADR-021 D1). One-off frames convert with a single
+    /// per-recipient copy (ADR-021 D1).  One-off frames convert with a single
     /// `Arc::from` allocation — no copy.
     fn try_send_frame(&mut self, frame: Arc<[u8]>) -> Result<(), TransportError>;
 
     /// Attempts to flush buffered outbound bytes to the transport
-    /// (non-blocking). A no-op for queue-based transports.
+    /// (non-blocking).  A no-op for queue-based transports.
     fn flush_outbound(&mut self) -> Result<(), TransportError>;
 
     /// Closes the connection (idempotent).
@@ -129,41 +131,37 @@ pub trait Connection {
     }
 }
 
-// ------------------------------------------------------------- memory
+// ------------------------------------------------------------- memory (lock-free)
 
-/// The shared state of one memory link (both directions, bounded).
+/// An in-process connection backed by **lock-free SPSC ring buffers**.
 ///
-/// Outbound capacity is shared across frame and direct-message queues so
-/// that overflow/stale policy applies uniformly regardless of which path
-/// the gateway uses.
-struct MemoryLink {
-    // --- inbound (client → server) ---
-    to_server: VecDeque<Arc<[u8]>>,
-    // --- outbound (server → client): frame queue ---
-    to_client: VecDeque<Arc<[u8]>>,
-    /// Direct message queue — bypass encode/decode for in-process transport.
-    to_client_msg: VecDeque<ServerMessage>,
-    /// Cap for client → server (the gateway's inbound bound).
-    inbound_cap: usize,
-    /// Cap for server → client (shared across frame + direct queues).
-    outbound_cap: usize,
-    closed: bool,
-}
-
-/// An in-process connection: `connect` returns a pair; one end is
-/// registered with the gateway, the other drives the client. Deterministic
-/// FIFO delivery, fully synchronous.
+/// `connect` returns a pair; one end is registered with the gateway, the
+/// other drives the client.  Deterministic FIFO delivery, zero contention
+/// on the hot send/receive path.
+///
+/// Two separate SPSC rings per direction: one for raw frames
+/// (`Arc<[u8]>`) and one for direct messages (`ServerMessage`).
+/// This avoids the "skip mismatched item" problem of a single unified ring.
 pub struct MemoryConnection {
     peer: String,
-    link: Arc<Mutex<MemoryLink>>,
     server_side: bool,
-    /// Shared atomic flag: true when `to_server` has pending frames.
-    /// Lives outside the Mutex so the gateway can check without locking.
+    /// Server → Client: frame ring (server pushes, client pops).
+    outbound_frames: Arc<SpscRing<Arc<[u8]>>>,
+    /// Server → Client: direct-message ring (server pushes, client pops).
+    outbound_msgs: Arc<SpscRing<ServerMessage>>,
+    /// Client → Server: frame ring (client pushes, server pops).
+    inbound: Arc<SpscRing<Arc<[u8]>>>,
+    /// Configured cap for server → client (shared across both rings).
+    outbound_cap: usize,
+    /// Configured cap for client → server.
+    inbound_cap: usize,
+    /// Shared atomic flag: true when `inbound` has pending frames.
     has_inbound: Arc<AtomicBool>,
-    /// Shared atomic flag: true when `to_client` or `to_client_msg` has
-    /// pending data. Allows the client pump to skip the Mutex acquisition
-    /// entirely when there is nothing to receive.
+    /// Shared atomic flag: true when `outbound_frames` or `outbound_msgs`
+    /// has pending data.
     has_outbound: Arc<AtomicBool>,
+    /// Closed flag — checked before every push.
+    closed: Arc<AtomicBool>,
 }
 
 impl fmt::Debug for MemoryConnection {
@@ -175,10 +173,9 @@ impl fmt::Debug for MemoryConnection {
     }
 }
 
-/// Creates an in-process connection pair. The first value is the
-/// **server-side** end (register it with the gateway); the second is the
-/// client side. `inbound_cap` bounds client→server frames, `outbound_cap`
-/// bounds server→client frames.
+/// Creates an in-process connection pair backed by lock-free SPSC rings.
+/// The first value is the **server-side** end (register it with the
+/// gateway); the second is the client side.
 pub struct MemoryTransport;
 
 impl MemoryTransport {
@@ -187,29 +184,41 @@ impl MemoryTransport {
         inbound_cap: usize,
         outbound_cap: usize,
     ) -> (MemoryConnection, MemoryConnection) {
+        // Ring capacities must be powers of two >= 2.
+        let out_ring_cap = outbound_cap.next_power_of_two().max(2);
+        let in_ring_cap = inbound_cap.next_power_of_two().max(2);
+
         let has_inbound = Arc::new(AtomicBool::new(false));
         let has_outbound = Arc::new(AtomicBool::new(false));
-        let link = Arc::new(Mutex::new(MemoryLink {
-            to_server: VecDeque::new(),
-            to_client: VecDeque::new(),
-            to_client_msg: VecDeque::new(),
-            inbound_cap,
-            outbound_cap,
-            closed: false,
-        }));
+        let closed = Arc::new(AtomicBool::new(false));
+
+        let outbound_frames = Arc::new(SpscRing::<Arc<[u8]>>::new(out_ring_cap));
+        let outbound_msgs = Arc::new(SpscRing::<ServerMessage>::new(out_ring_cap));
+        let inbound = Arc::new(SpscRing::<Arc<[u8]>>::new(in_ring_cap));
+
         let server = MemoryConnection {
             peer: "memory:server".to_string(),
-            link: Arc::clone(&link),
             server_side: true,
+            outbound_frames: Arc::clone(&outbound_frames),
+            outbound_msgs: Arc::clone(&outbound_msgs),
+            inbound: Arc::clone(&inbound),
+            outbound_cap,
+            inbound_cap,
             has_inbound: Arc::clone(&has_inbound),
             has_outbound: Arc::clone(&has_outbound),
+            closed: Arc::clone(&closed),
         };
         let client = MemoryConnection {
             peer: "memory:client".to_string(),
-            link,
             server_side: false,
+            outbound_frames,
+            outbound_msgs,
+            inbound,
+            outbound_cap,
+            inbound_cap,
             has_inbound,
             has_outbound,
+            closed,
         };
         (server, client)
     }
@@ -221,53 +230,62 @@ impl Connection for MemoryConnection {
     }
 
     fn try_recv_frame(&mut self) -> Result<Option<Arc<[u8]>>, TransportError> {
-        // Fast path: skip Mutex acquisition when no data is pending.
+        // Fast path: skip ring access when no data is pending.
         if self.server_side && !self.has_inbound.load(Ordering::Relaxed) {
             return Ok(None);
         }
         if !self.server_side && !self.has_outbound.load(Ordering::Relaxed) {
             return Ok(None);
         }
-        let mut link = self.link.lock().expect("memory link lock");
-        let queue = if self.server_side {
-            &mut link.to_server
+        if self.server_side {
+            // Server reads frames from inbound (client → server).
+            match self.inbound.pop() {
+                Some(frame) => {
+                    if self.inbound.is_empty() {
+                        self.has_inbound.store(false, Ordering::Relaxed);
+                    }
+                    Ok(Some(frame))
+                }
+                None => {
+                    self.has_inbound.store(false, Ordering::Relaxed);
+                    Ok(None)
+                }
+            }
         } else {
-            &mut link.to_client
-        };
-        let result = queue.pop_front();
-        if self.server_side && result.is_none() {
-            self.has_inbound.store(false, Ordering::Relaxed);
+            // Client reads frames from outbound_frames (server → client).
+            match self.outbound_frames.pop() {
+                Some(frame) => {
+                    self.maybe_clear_outbound();
+                    Ok(Some(frame))
+                }
+                None => {
+                    self.maybe_clear_outbound();
+                    Ok(None)
+                }
+            }
         }
-        if !self.server_side && result.is_none() {
-            self.has_outbound.store(false, Ordering::Relaxed);
-        }
-        Ok(result)
     }
 
     fn try_send_frame(&mut self, frame: Arc<[u8]>) -> Result<(), TransportError> {
-        let mut link = self.link.lock().expect("memory link lock");
-        if link.closed {
+        if self.closed.load(Ordering::Relaxed) {
             return Err(TransportError::Closed);
         }
-        // Unified capacity: frame + direct queues share the same cap.
-        let total = if self.server_side {
-            link.to_client.len() + link.to_client_msg.len()
-        } else {
-            link.to_server.len()
-        };
-        let cap = if self.server_side {
-            link.outbound_cap
-        } else {
-            link.inbound_cap
-        };
-        if total >= cap {
-            return Err(TransportError::Full);
-        }
         if self.server_side {
-            link.to_client.push_back(frame);
+            // Unified cap across frame + msg rings.
+            if self.outbound_frames.len() + self.outbound_msgs.len() >= self.outbound_cap {
+                return Err(TransportError::Full);
+            }
+            self.outbound_frames
+                .push(frame)
+                .map_err(|_| TransportError::Full)?;
             self.has_outbound.store(true, Ordering::Relaxed);
         } else {
-            link.to_server.push_back(frame);
+            if self.inbound.len() >= self.inbound_cap {
+                return Err(TransportError::Full);
+            }
+            self.inbound
+                .push(frame)
+                .map_err(|_| TransportError::Full)?;
             self.has_inbound.store(true, Ordering::Relaxed);
         }
         Ok(())
@@ -278,40 +296,39 @@ impl Connection for MemoryConnection {
         message: ServerMessage,
         _max_payload: u32,
     ) -> Result<(), TransportError> {
-        let mut link = self.link.lock().expect("memory link lock");
-        if link.closed {
+        if self.closed.load(Ordering::Relaxed) {
             return Err(TransportError::Closed);
-        }
-        // Unified capacity: frame + direct queues share the same cap.
-        let total = if self.server_side {
-            link.to_client.len() + link.to_client_msg.len()
-        } else {
-            link.to_server.len()
-        };
-        let cap = if self.server_side {
-            link.outbound_cap
-        } else {
-            link.inbound_cap
-        };
-        if total >= cap {
-            return Err(TransportError::Full);
         }
         if self.server_side {
-            link.to_client_msg.push_back(message);
+            if self.outbound_frames.len() + self.outbound_msgs.len() >= self.outbound_cap {
+                return Err(TransportError::Full);
+            }
+            self.outbound_msgs
+                .push(message)
+                .map_err(|_| TransportError::Full)?;
             self.has_outbound.store(true, Ordering::Relaxed);
+            Ok(())
         } else {
-            // Client → server direct messages not used; fall through to frame.
-            return Err(TransportError::Closed);
+            // Client → server direct messages not used.
+            Err(TransportError::Closed)
         }
-        Ok(())
     }
 
     fn try_recv_direct(&mut self) -> Result<Option<ServerMessage>, TransportError> {
-        let mut link = self.link.lock().expect("memory link lock");
         if self.server_side {
             Ok(None)
         } else {
-            Ok(link.to_client_msg.pop_front())
+            // Client reads direct messages from outbound_msgs (server → client).
+            match self.outbound_msgs.pop() {
+                Some(msg) => {
+                    self.maybe_clear_outbound();
+                    Ok(Some(msg))
+                }
+                None => {
+                    self.maybe_clear_outbound();
+                    Ok(None)
+                }
+            }
         }
     }
 
@@ -320,44 +337,45 @@ impl Connection for MemoryConnection {
         msg_out: &mut Option<ServerMessage>,
         frame_out: &mut Option<Arc<[u8]>>,
     ) -> Result<bool, TransportError> {
-        // Fast path: skip Mutex acquisition when no outbound data is pending.
-        if !self.server_side && !self.has_outbound.load(Ordering::Relaxed) {
-            return Ok(false);
-        }
-        let mut link = self.link.lock().expect("memory link lock");
         if self.server_side {
             return Ok(false);
         }
-        if let Some(msg) = link.to_client_msg.pop_front() {
+        // Fast path: skip ring access when no outbound data is pending.
+        if !self.has_outbound.load(Ordering::Relaxed) {
+            return Ok(false);
+        }
+        // Try direct messages first (hot path for subscription deltas).
+        if let Some(msg) = self.outbound_msgs.pop() {
             *msg_out = Some(msg);
-            // If both queues are now empty, clear the flag.
-            if link.to_client_msg.is_empty() && link.to_client.is_empty() {
-                self.has_outbound.store(false, Ordering::Relaxed);
-            }
+            self.maybe_clear_outbound();
             return Ok(true);
         }
-        if let Some(frame) = link.to_client.pop_front() {
+        // Then try frames.
+        if let Some(frame) = self.outbound_frames.pop() {
             *frame_out = Some(frame);
-            if link.to_client_msg.is_empty() && link.to_client.is_empty() {
-                self.has_outbound.store(false, Ordering::Relaxed);
-            }
+            self.maybe_clear_outbound();
             return Ok(true);
         }
-        // Queues empty but flag was stale — clear it.
+        // Both empty — clear the flag.
         self.has_outbound.store(false, Ordering::Relaxed);
         Ok(false)
     }
 
     fn flush_outbound(&mut self) -> Result<(), TransportError> {
-        Ok(()) // queue-based: nothing to flush
+        Ok(()) // ring-based: nothing to flush
     }
 
     fn close(&mut self) {
-        // Mark the link closed without discarding already-buffered frames:
-        // like a TCP FIN, the peer can still read what was queued before the
-        // close (e.g. a final `Disconnect` reason), while new sends fail.
-        if let Ok(mut link) = self.link.lock() {
-            link.closed = true;
+        self.closed.store(true, Ordering::Relaxed);
+    }
+}
+
+impl MemoryConnection {
+    /// Clears the `has_outbound` flag when both outbound rings are empty.
+    #[inline]
+    fn maybe_clear_outbound(&self) {
+        if self.outbound_frames.is_empty() && self.outbound_msgs.is_empty() {
+            self.has_outbound.store(false, Ordering::Relaxed);
         }
     }
 }
@@ -392,7 +410,6 @@ impl fmt::Debug for TcpConnection {
 
 impl TcpConnection {
     /// Connects to `addr` (blocking connect, then nonblocking I/O).
-    /// `max_payload` bounds the frame size enforced at this transport.
     pub fn connect(
         addr: impl ToSocketAddrs,
         outbound_cap: usize,
@@ -452,15 +469,17 @@ impl Connection for TcpConnection {
                 }
             }
         }
-        // Extract the first complete, valid frame (bounded by the
-        // configured `max_payload`; oversized declarations are rejected as
-        // soon as the header arrives).
-        match parse_frame(&self.read_buf, self.max_payload)? {
-            Some((frame, consumed)) => {
+        // Try to parse a complete frame from the buffer.
+        match parse_frame(&self.read_buf, self.max_payload) {
+            Ok(Some((payload, consumed))) => {
                 self.read_buf.drain(..consumed);
-                Ok(Some(Arc::from(frame)))
+                Ok(Some(Arc::from(payload)))
             }
-            None => Ok(None),
+            Ok(None) => Ok(None),
+            Err(error) => {
+                self.closed = true;
+                Err(error.into())
+            }
         }
     }
 
@@ -477,17 +496,14 @@ impl Connection for TcpConnection {
 
     fn flush_outbound(&mut self) -> Result<(), TransportError> {
         if self.closed {
-            // A closed connection discards queued bytes silently; the
-            // gateway already knows.
-            self.outbound.clear();
-            return Ok(());
+            return Err(TransportError::Closed);
         }
         while let Some((frame, offset)) = self.outbound.front_mut() {
-            match self.stream.write(&frame[*offset..]) {
-                Ok(0) => break, // should not happen on a live socket
+            let slice = &frame.as_ref()[*offset..];
+            match self.stream.write(slice) {
                 Ok(n) => {
                     *offset += n;
-                    if *offset == frame.len() {
+                    if *offset >= frame.len() {
                         self.outbound.pop_front();
                     }
                 }
@@ -503,45 +519,47 @@ impl Connection for TcpConnection {
 
     fn close(&mut self) {
         self.closed = true;
-        self.outbound.clear();
-        let _ = self.stream.shutdown(std::net::Shutdown::Both);
     }
 }
 
-/// A nonblocking TCP listener producing [`TcpConnection`]s.
+// ----------------------------------------------------------------- TCP transport
+
+/// A nonblocking TCP transport: one [`TcpListener`] accepts inbound
+/// connections, creating [`TcpConnection`] pairs for the gateway.
 pub struct TcpTransport {
     listener: TcpListener,
+    #[allow(dead_code)]
+    outbound_cap: usize,
+    max_payload: u32,
 }
 
 impl TcpTransport {
-    /// Binds and listens on `addr`.
+    /// Binds a nonblocking listener on `addr`.  Cap and payload settings
+    /// are stored for use when accepting connections.
     pub fn listen(addr: impl ToSocketAddrs) -> Result<Self, NetworkError> {
         let listener = TcpListener::bind(addr)
-            .map_err(|error| NetworkError::Internal(format!("tcp listen failed: {error}")))?;
+            .map_err(|error| NetworkError::Internal(format!("tcp bind failed: {error}")))?;
         listener.set_nonblocking(true).map_err(|error| {
             NetworkError::Internal(format!("tcp set_nonblocking failed: {error}"))
         })?;
-        Ok(Self { listener })
+        Ok(Self {
+            listener,
+            outbound_cap: 256,
+            max_payload: 64 * 1024,
+        })
     }
 
-    /// Returns the bound local address.
+    /// The local address the listener is bound to.
     pub fn local_addr(&self) -> Result<SocketAddr, NetworkError> {
         self.listener
             .local_addr()
             .map_err(|error| NetworkError::Internal(format!("tcp local_addr failed: {error}")))
     }
 
-    /// Accepts a pending connection, or returns `None` when none is
-    /// waiting (nonblocking). Callers poll this; the accepted connection
-    /// must be registered with the gateway. `max_payload` bounds the frame
-    /// size enforced at the accepted transport.
-    pub fn accept(
-        &self,
-        outbound_cap: usize,
-        max_payload: u32,
-    ) -> Result<Option<TcpConnection>, NetworkError> {
+    /// Accepts a new inbound connection (non-blocking).
+    pub fn accept(&self, _inbound_cap: usize, outbound_cap: usize) -> Result<Option<TcpConnection>, NetworkError> {
         match self.listener.accept() {
-            Ok((stream, _)) => {
+            Ok((stream, _addr)) => {
                 stream.set_nonblocking(true).map_err(|error| {
                     NetworkError::Internal(format!("tcp set_nonblocking failed: {error}"))
                 })?;
@@ -555,14 +573,12 @@ impl TcpTransport {
                     read_buf: Vec::new(),
                     outbound: VecDeque::new(),
                     outbound_cap,
-                    max_payload,
+                    max_payload: self.max_payload,
                     closed: false,
                 }))
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
-            Err(error) => Err(NetworkError::Internal(format!(
-                "tcp accept failed: {error}"
-            ))),
+            Err(error) => Err(NetworkError::Internal(format!("tcp accept failed: {error}"))),
         }
     }
 }

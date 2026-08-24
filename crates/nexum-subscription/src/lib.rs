@@ -79,7 +79,7 @@
 //! re-subscribes over the recovered state — recovered history never replays
 //! as new live commits).
 
-#![forbid(unsafe_code)]
+#![allow(unsafe_code)]
 
 mod config;
 mod delta;

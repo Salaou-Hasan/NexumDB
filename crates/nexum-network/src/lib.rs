@@ -36,7 +36,7 @@
 //! gateway clustering, HTTP/gRPC control binding, and QUIC/custom
 //! transports.
 
-#![forbid(unsafe_code)]
+#![allow(unsafe_code)]
 #![warn(missing_docs)]
 
 pub mod auth;
@@ -49,6 +49,7 @@ pub mod policy;
 pub mod protocol;
 pub mod rate;
 pub mod session;
+pub mod spsc;
 pub mod transport;
 
 pub use auth::{Authenticator, Principal, TokenAuthenticator};

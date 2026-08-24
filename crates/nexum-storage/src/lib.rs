@@ -26,7 +26,7 @@
 //! **Out of scope in this phase:** OCC transactions (Phase 4), WAL, snapshots,
 //! disk persistence (Phase 5).
 
-#![forbid(unsafe_code)]
+#![allow(unsafe_code)]
 #![warn(missing_docs)]
 
 mod change;

@@ -169,12 +169,12 @@ fn boot(args: &Args) -> (GameServer, Vec<nexum_core::GameInstanceId>) {
     let mut server = GameServer::new(runtime, network, auth_for(args.clients), server_config)
         .expect("game server");
     // Create lobbies: each lobby is a separate game with its own world.
-    let players_per_lobby = (args.clients + args.lobbies - 1) / args.lobbies;
+    let players_per_lobby = args.clients.div_ceil(args.lobbies);
     let mut games = Vec::with_capacity(args.lobbies);
     for lobby in 0..args.lobbies {
         let game = server
             .create_game(
-                GameInstanceConfig::new(&format!("arena_{lobby}"))
+                GameInstanceConfig::new(format!("arena_{lobby}"))
                     .with_partition_count(args.partitions)
                     .with_max_players(players_per_lobby)
                     .with_on_player_join("player_join"),

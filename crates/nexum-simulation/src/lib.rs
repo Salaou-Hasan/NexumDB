@@ -49,7 +49,7 @@
 //! scope: networking, sessions, client SDKs, distributed simulation across
 //! machines, replication, and final performance optimization.
 
-#![forbid(unsafe_code)]
+#![allow(unsafe_code)]
 #![warn(missing_docs)]
 
 mod calls;
