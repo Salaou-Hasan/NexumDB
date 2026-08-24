@@ -1248,12 +1248,25 @@ impl NetworkGateway {
                     .get(&world)
                     .map(|set| set.iter().copied().collect())
                     .unwrap_or_default();
-                for connection in attached {
-                    if self.send(connection, &message).unwrap_or(false) {
-                        report.tick_updates_sent += 1;
-                        self.metrics.tick_updates_sent += 1;
-                    } else {
-                        report.messages_dropped += 1;
+                // Encode the frame ONCE and share the immutable bytes
+                // across all subscribers — eliminates per-connection
+                // ServerMessage::clone + encode overhead (ADR-021 D1).
+                if !attached.is_empty() {
+                    let max_payload = self.config.max_frame_payload();
+                    if let Ok(encoded) = protocol::encode_server(&message, max_payload) {
+                        let frame: Arc<[u8]> = Arc::from(encoded);
+                        let stale_signal = is_stale_signal(&message);
+                        for connection in &attached {
+                            if self
+                                .send_encoded(*connection, frame.clone(), stale_signal)
+                                .unwrap_or(false)
+                            {
+                                report.tick_updates_sent += 1;
+                                self.metrics.tick_updates_sent += 1;
+                            } else {
+                                report.messages_dropped += 1;
+                            }
+                        }
                     }
                 }
             }
