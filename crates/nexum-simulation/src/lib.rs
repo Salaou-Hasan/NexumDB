@@ -71,7 +71,7 @@ pub use partition::PartitionMessage;
 pub use rng::DeterministicRng;
 pub use schedule::{Schedule, ScheduledEvent};
 pub use systems::{SystemAccess, SystemDefinition, SystemFn, SystemRegistry};
-pub use world::{TickError, TickResult, World};
+pub use world::{TickBreakdown, TickError, TickResult, World};
 
 #[cfg(test)]
 mod parallel_tests;

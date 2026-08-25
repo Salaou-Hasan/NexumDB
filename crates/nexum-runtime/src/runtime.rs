@@ -580,6 +580,23 @@ impl Runtime {
             .ok_or(RuntimeError::UnknownWorld(world_id))
     }
 
+    /// Returns every world's most-recent-tick phase breakdown (Phase 27b
+    /// instrumentation), in deterministic (world id) order.
+    pub fn last_tick_breakdowns(&self) -> Vec<(WorldId, nexum_simulation::TickBreakdown)> {
+        self.worlds
+            .iter()
+            .enumerate()
+            .filter_map(|(index, slot)| {
+                slot.as_ref().map(|entry| {
+                    (
+                        WorldId::from_u64(index as u64),
+                        entry.world.last_tick_breakdown(),
+                    )
+                })
+            })
+            .collect()
+    }
+
     /// Returns every world's status in deterministic (world id) order.
     pub fn list_worlds(&self) -> Vec<(WorldId, WorldStatus)> {
         self.worlds

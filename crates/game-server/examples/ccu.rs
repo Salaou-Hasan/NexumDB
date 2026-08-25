@@ -1637,6 +1637,18 @@ fn main() {
             phase_timers.sub_apply_ns as f64 / n / 1e6,
             phase_timers.sub_apply_ns as f64 / tick_total as f64 * 100.0
         );
+        // Phase 27b: tick-phase breakdown summed across worlds (last tick).
+        let bds = server.runtime().last_tick_breakdowns();
+        let (mut c, mut s, mut m) = (0u64, 0u64, 0u64);
+        for (_, bd) in &bds {
+            c += bd.calls_ns;
+            s += bd.systems_ns;
+            m += bd.commit_ns;
+        }
+        println!("\n=== TICK PHASES (summed across worlds, ms) ===");
+        println!("  calls    {:>7.1}", c as f64 / 1e6);
+        println!("  systems  {:>7.1}", s as f64 / 1e6);
+        println!("  commit   {:>7.1}", m as f64 / 1e6);
         // Phase 27: gateway-internal stage breakdown (per step, diffed).
         let gw_after = server.gateway().metrics().last_step;
         let n = phase_timers.count.max(1) as f64;
