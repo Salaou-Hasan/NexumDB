@@ -140,6 +140,18 @@ impl<'a> SimulationContext<'a> {
         self.tx.lookup_unique(self.store, table, index_name, key)
     }
 
+    /// Looks up the row ids matching `key` in the named non-unique index,
+    /// through the tick transaction's logical view (Phase 27: parity with
+    /// the reducer context so systems can do indexed reads too).
+    pub fn lookup_index(
+        &mut self,
+        table: &str,
+        index_name: &str,
+        key: &[Value],
+    ) -> Result<Vec<RowId>> {
+        self.tx.lookup_index(self.store, table, index_name, key)
+    }
+
     // --------------------------------------------------------------- writes
 
     /// Buffers an insert; returns a provisional `RowId` handle (storage

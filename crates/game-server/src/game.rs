@@ -474,6 +474,73 @@ fn relay_station(ctx: &mut SimulationContext, frame: &InputFrame) -> Result<()> 
     Ok(())
 }
 
+/// `movement_stream` — Phase 27a battery system: applies client movement
+/// commands (`mv`, payload `(dx+1)*3+(dy+1)`, source = gateway-stamped
+/// principal) submitted as input frames instead of correlated reducer
+/// calls. Identical authority and semantics to `move_player` (alive check,
+/// arena clamp, occupancy via the position index, facing derivation);
+/// commands arrive merged per world-tick in FIFO order.
+fn movement_stream(ctx: &mut SimulationContext, frame: &InputFrame) -> Result<()> {
+    for command in frame.commands() {
+        if command.kind() != "mv" {
+            continue;
+        }
+        let player_id = command.source();
+        let code = as_i64(command.payload());
+        let dy = code % 3 - 1;
+        let dx = code / 3 - 1;
+        if !(-1..=1).contains(&dx) || !(-1..=1).contains(&dy) || (dx == 0 && dy == 0) {
+            continue;
+        }
+        let Some((row_id, player)) = unit_or_player(ctx, player_id)? else {
+            continue;
+        };
+        if get(&player, COL_ALIVE) == 0 {
+            continue;
+        }
+        let x = get(&player, COL_X);
+        let y = get(&player, COL_Y);
+        let nx = (x + dx).clamp(0, ARENA_WIDTH - 1);
+        let ny = (y + dy).clamp(0, ARENA_HEIGHT - 1);
+        if nx == x && ny == y {
+            continue;
+        }
+        let occupants = ctx.lookup_index(TABLE, POS_INDEX, &[Value::I64(nx), Value::I64(ny)])?;
+        let occupied = occupants.iter().any(|&other_id| {
+            other_id != row_id
+                && ctx
+                    .get(TABLE, other_id)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|other| get(&other, COL_ALIVE) != 0)
+        });
+        if occupied {
+            continue;
+        }
+        let row = with(
+            with(with(player, COL_X, Value::I64(nx)), COL_Y, Value::I64(ny)),
+            COL_FACING,
+            Value::I64(facing_of(dx, dy)),
+        );
+        ctx.update(TABLE, row_id, row)?;
+    }
+    Ok(())
+}
+
+/// Resolves a battery actor by id: a player row if present, else nothing.
+/// (Kept separate from `player_by_id` so the stream system can skip absent
+/// actors instead of erroring a whole tick.)
+fn unit_or_player(ctx: &mut SimulationContext, player_id: u64) -> Result<Option<(RowId, Row)>> {
+    let owners = ctx.lookup_unique(TABLE, PK, &[Value::U64(player_id)])?;
+    let Some(&row_id) = owners.first() else {
+        return Ok(None);
+    };
+    match ctx.get(TABLE, row_id)? {
+        Some(row) => Ok(Some((row_id, row))),
+        None => Ok(None),
+    }
+}
+
 // Per-thread cooldown tracking map. Each world runs on its own thread
 // (parallel via `std::thread::scope`, serial by definition), so a
 // thread-local provides natural isolation without cross-world or
@@ -670,6 +737,17 @@ pub fn game_factory() -> WorldFactory {
                     )
                     .unwrap();
             }
+            world
+                .add_system(
+                    SystemDefinition::new(
+                        SystemId::from_u64(2),
+                        "movement_stream",
+                        5,
+                        movement_stream,
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
             let mut wasm = WasmModuleRegistry::new(WasmLimits::default()).unwrap();
             wasm.register("fire_weapon", 1, fire_weapon_module())
                 .unwrap();

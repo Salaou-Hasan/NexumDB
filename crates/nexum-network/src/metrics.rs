@@ -8,6 +8,26 @@
 use nexum_core::WorldId;
 use std::collections::BTreeMap;
 
+/// Cumulative wall-time per gateway stage (Phase 27 instrumentation):
+/// inbound (collect/decode/dispatch) and fan-out (TickUpdate/deltas/
+/// results), in nanoseconds since gateway start. Diff two snapshots to get
+/// per-window averages.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GatewayStepProfile {
+    /// Inbound Phase 1: ring collection across the connection slab.
+    pub collect_ns: u64,
+    /// Inbound Phase 2: protocol decode of collected frames.
+    pub decode_ns: u64,
+    /// Inbound Phase 2: dispatch of decoded messages.
+    pub dispatch_ns: u64,
+    /// Fan-out: per-world TickUpdate encode + attached-connection pushes.
+    pub tick_update_ns: u64,
+    /// Fan-out: subscription delta drain + per-subscriber delivery.
+    pub deltas_ns: u64,
+    /// Fan-out: reducer-result correlation + routing.
+    pub results_ns: u64,
+}
+
 /// A point-in-time snapshot of the gateway's counters.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NetworkMetrics {
@@ -55,6 +75,8 @@ pub struct NetworkMetrics {
     pub tick_updates_sent: u64,
     /// Subscription deltas/snapshots serialized.
     pub subscription_messages_sent: u64,
+    /// Stage breakdown of the most recent step (see [`GatewayStepProfile`]).
+    pub last_step: GatewayStepProfile,
 }
 
 impl NetworkMetrics {
@@ -83,6 +105,7 @@ impl NetworkMetrics {
             reducer_results_sent: 0,
             tick_updates_sent: 0,
             subscription_messages_sent: 0,
+            last_step: GatewayStepProfile::default(),
         }
     }
 }

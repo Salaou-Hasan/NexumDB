@@ -346,6 +346,7 @@ impl NetworkGateway {
     pub fn process_inbound(&mut self) -> ProcessReport {
         let mut report = ProcessReport::default();
         let max_payload = self.config.max_frame_payload();
+        let step_started = std::time::Instant::now();
 
         // Phase 1: Batch frame collection — iterate the slab, pop all
         // pending frames into a contiguous Vec. This separates I/O
@@ -398,8 +399,20 @@ impl NetworkGateway {
         // net-negative (p50 +100 µs, p99 +0.7 ms at E@1K) — dispatch, not
         // decode, dominates the inbound phase, and pool scheduling overhead
         // is not repaid. Keep it serial.
-        for (connection, frame) in frames {
-            match protocol::decode_client(&frame, max_payload) {
+        let decode_done = std::time::Instant::now();
+        // Two-pass decode→dispatch (same order as inline handling): decode
+        // is pure, so splitting it out gives clean stage timings without
+        // changing any observable behavior.
+        let decoded: Vec<(
+            ConnectionId,
+            Result<ClientMessage, crate::error::ProtocolError>,
+        )> = frames
+            .iter()
+            .map(|(connection, frame)| (*connection, protocol::decode_client(frame, max_payload)))
+            .collect();
+        let dispatch_started = std::time::Instant::now();
+        for (connection, decoded) in decoded {
+            match decoded {
                 Ok(message) => {
                     report.dispatched += 1;
                     self.dispatch(connection, message);
@@ -421,6 +434,10 @@ impl NetworkGateway {
                 }
             }
         }
+        // Preserve the fan-out half written by fan_out_results.
+        self.metrics.last_step.collect_ns += (decode_done - step_started).as_nanos() as u64;
+        self.metrics.last_step.decode_ns += (dispatch_started - decode_done).as_nanos() as u64;
+        self.metrics.last_step.dispatch_ns += decode_done.elapsed().as_nanos() as u64;
         let _ = self.flush_outbound();
         report
     }
@@ -1237,6 +1254,9 @@ impl NetworkGateway {
         results: &[(WorldId, nexum_simulation::TickResult)],
     ) -> StepReport {
         let mut report = StepReport::default();
+        let fanout_started = std::time::Instant::now();
+        let mut deltas_ns = 0u64;
+        let mut results_ns = 0u64;
         for (world, result) in results {
             let world = *world;
             report.worlds += 1;
@@ -1304,6 +1324,7 @@ impl NetworkGateway {
             // Batched drain: drain ALL pending subscriptions in a single O(N)
             // pass, then fan-out from a HashMap — O(1) per subscriber instead
             // of O(log N) BTreeMap lookup per subscriber.
+            let deltas_started = std::time::Instant::now();
             if !result.changes().is_empty()
                 && let Some(subscribers) = self.world_subscribers.get(&world)
             {
@@ -1329,6 +1350,8 @@ impl NetworkGateway {
             // requesting connections, in call order. The runtime echoes the
             // gateway-allocated id; translate it back to the client's own id
             // and the awaiting connection (Phase 16 namespace fix).
+            deltas_ns += deltas_started.elapsed().as_nanos() as u64;
+            let results_started = std::time::Instant::now();
             for call_result in result.reducer_results() {
                 if let Some(pending) = self
                     .pending_calls
@@ -1361,6 +1384,7 @@ impl NetworkGateway {
                         self.metrics.reducer_results_sent += 1;
                     }
                 }
+                results_ns += results_started.elapsed().as_nanos() as u64;
             }
         }
 
@@ -1398,6 +1422,12 @@ impl NetworkGateway {
                 self.metrics.reducer_results_sent += 1;
             }
         }
+        // The TickUpdate bucket is the fan-out remainder (encode + attached
+        // pushes + per-world overhead). Inbound half preserved.
+        let total_ns = fanout_started.elapsed().as_nanos() as u64;
+        self.metrics.last_step.tick_update_ns += total_ns.saturating_sub(deltas_ns + results_ns);
+        self.metrics.last_step.deltas_ns += deltas_ns;
+        self.metrics.last_step.results_ns += results_ns;
         report
     }
 
