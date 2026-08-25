@@ -1393,42 +1393,50 @@ impl NetworkGateway {
             }
         }
 
-        // Answer pending calls whose world can no longer produce a result —
-        // it failed, was stopped, or was destroyed during this step — with a
-        // correlated failure (the client's own request id), so no caller is
-        // left hanging (ADR-013 D3). A still-Running world's calls stay
-        // pending for its next tick.
-        let unresolved: Vec<(WorldId, u64, PendingCall)> = self
-            .pending_calls
-            .iter()
-            .filter_map(|((world, gateway_id), pending)| {
-                let unresolved = match self.runtime.world_status(*world) {
+        // Answer pending calls whose world can no longer produce a result.
+        //
+        // Phase 27c-b fast path: when every pending call belongs to a world
+        // that was just successfully ticked (the overwhelmingly common case),
+        // skip the O(pending) health sweep entirely.
+        let has_unhealthy = !self.pending_calls.is_empty()
+            && self.pending_calls.keys().any(|(world, _)| {
+                match self.runtime.world_status(*world) {
                     Ok(status) => status.state != nexum_runtime::WorldLifecycle::Running,
-                    // Destroyed: the world no longer exists.
                     Err(_) => true,
+                }
+            });
+        if has_unhealthy {
+            let unresolved: Vec<(WorldId, u64, PendingCall)> = self
+                .pending_calls
+                .iter()
+                .filter_map(|((world, gateway_id), pending)| {
+                    let dead = match self.runtime.world_status(*world) {
+                        Ok(status) => status.state != nexum_runtime::WorldLifecycle::Running,
+                        Err(_) => true,
+                    };
+                    dead.then_some((*world, *gateway_id, *pending))
+                })
+                .collect();
+            for (world, gateway_id, pending) in unresolved {
+                self.pending_calls.remove(&(world, gateway_id));
+                if let Some(ids) = self.pending_by_connection.get_mut(&pending.connection) {
+                    ids.remove(&pending.client_request_id);
+                }
+                let message = ServerMessage::ReducerResult {
+                    request_id: pending.client_request_id,
+                    ok: false,
+                    value: None,
+                    error: Some(format!(
+                        "world {world} is no longer running; the call could not commit"
+                    )),
                 };
-                unresolved.then_some((*world, *gateway_id, *pending))
-            })
-            .collect();
-        for (world, gateway_id, pending) in unresolved {
-            self.pending_calls.remove(&(world, gateway_id));
-            if let Some(ids) = self.pending_by_connection.get_mut(&pending.connection) {
-                ids.remove(&pending.client_request_id);
-            }
-            let message = ServerMessage::ReducerResult {
-                request_id: pending.client_request_id,
-                ok: false,
-                value: None,
-                error: Some(format!(
-                    "world {world} is no longer running; the call could not commit"
-                )),
-            };
-            if self.send(pending.connection, &message).unwrap_or(false) {
-                self.metrics.reducer_results_sent += 1;
+                if self.send(pending.connection, &message).unwrap_or(false) {
+                    self.metrics.reducer_results_sent += 1;
+                }
             }
         }
-        // The TickUpdate bucket is the fan-out remainder (encode + attached
-        // pushes + per-world overhead). Inbound half preserved.
+        // TickUpdate bucket: fan-out remainder (encode + attached pushes).
+        // Inbound half preserved.
         let total_ns = fanout_started.elapsed().as_nanos() as u64;
         self.metrics.last_step.tick_update_ns += total_ns.saturating_sub(deltas_ns + results_ns);
         self.metrics.last_step.deltas_ns += deltas_ns;
