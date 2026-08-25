@@ -19,8 +19,8 @@ use std::collections::VecDeque;
 use std::fmt;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::error::{NetworkError, ProtocolError};
 use crate::protocol::{ServerMessage, parse_frame};
@@ -283,9 +283,7 @@ impl Connection for MemoryConnection {
             if self.inbound.len() >= self.inbound_cap {
                 return Err(TransportError::Full);
             }
-            self.inbound
-                .push(frame)
-                .map_err(|_| TransportError::Full)?;
+            self.inbound.push(frame).map_err(|_| TransportError::Full)?;
             self.has_inbound.store(true, Ordering::Relaxed);
         }
         Ok(())
@@ -557,7 +555,11 @@ impl TcpTransport {
     }
 
     /// Accepts a new inbound connection (non-blocking).
-    pub fn accept(&self, _inbound_cap: usize, outbound_cap: usize) -> Result<Option<TcpConnection>, NetworkError> {
+    pub fn accept(
+        &self,
+        _inbound_cap: usize,
+        outbound_cap: usize,
+    ) -> Result<Option<TcpConnection>, NetworkError> {
         match self.listener.accept() {
             Ok((stream, _addr)) => {
                 stream.set_nonblocking(true).map_err(|error| {
@@ -578,7 +580,9 @@ impl TcpTransport {
                 }))
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
-            Err(error) => Err(NetworkError::Internal(format!("tcp accept failed: {error}"))),
+            Err(error) => Err(NetworkError::Internal(format!(
+                "tcp accept failed: {error}"
+            ))),
         }
     }
 }

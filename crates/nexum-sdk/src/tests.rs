@@ -611,8 +611,8 @@ fn send_frame_flushes_the_outbound_transport() {
     // `ClientTransport::send_frame` must push buffered bytes to the
     // transport immediately (TCP correctness): queue transports flush
     // trivially, so a recording connection proves the flush is invoked.
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct Recording {
         flushes: Arc<AtomicUsize>,

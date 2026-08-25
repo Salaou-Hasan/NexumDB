@@ -75,7 +75,8 @@ impl<T> SpscRing<T> {
         unsafe {
             (*self.buf[write & self.mask].get()).write(item);
         }
-        self.write_idx.store(write.wrapping_add(1), Ordering::Release);
+        self.write_idx
+            .store(write.wrapping_add(1), Ordering::Release);
         Ok(())
     }
 

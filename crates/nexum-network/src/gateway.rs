@@ -602,7 +602,9 @@ impl NetworkGateway {
                         if let Some(conns) = self.sub_to_conns.get_mut(&net_sub.world) {
                             if let Some(list) = conns.get_mut(&subscription) {
                                 list.retain(|c| *c != connection);
-                                if list.is_empty() { conns.remove(&subscription); }
+                                if list.is_empty() {
+                                    conns.remove(&subscription);
+                                }
                             }
                         }
                     }
@@ -680,7 +682,9 @@ impl NetworkGateway {
                     if let Some(conns) = self.sub_to_conns.get_mut(world) {
                         if let Some(list) = conns.get_mut(subscription) {
                             list.retain(|c| *c != connection);
-                            if list.is_empty() { conns.remove(subscription); }
+                            if list.is_empty() {
+                                conns.remove(subscription);
+                            }
                         }
                     }
                 }
@@ -819,18 +823,18 @@ impl NetworkGateway {
             {
                 self.metrics.policy_rejections += 1;
                 self.metrics.reducer_calls_rejected += 1;
-                let _ =
-                    self.send_reducer_error(connection, request_id, "not authorized by game policy");
+                let _ = self.send_reducer_error(
+                    connection,
+                    request_id,
+                    "not authorized by game policy",
+                );
                 return;
             }
         }
         // Stamp the caller's authoritative identity into a reserved argument
         // (ADR-013 D3 / ADR-014 D8): a client-supplied value for the key is
         // overwritten, so identity can never be forged through `args`.
-        let args = args.insert(
-            CALLER_SOURCE_ARG,
-            nexum_core::Value::U64(principal_id),
-        );
+        let args = args.insert(CALLER_SOURCE_ARG, nexum_core::Value::U64(principal_id));
         // Allocate a gateway-unique request id so concurrent calls from
         // different clients on the same world never collide (Phase 16
         // finding: all SDK clients start their ids at 1).
@@ -1291,23 +1295,18 @@ impl NetworkGateway {
             if !result.changes().is_empty()
                 && let Some(subscribers) = self.world_subscribers.get(&world)
             {
-                let drained = self
-                    .runtime
-                    .drain_all_pending(world)
-                    .unwrap_or_default();
-                let mut drained_map: std::collections::HashMap<SubscriptionId, Vec<nexum_subscription::SubscriptionUpdate>> =
-                    std::collections::HashMap::with_capacity(drained.len());
+                let drained = self.runtime.drain_all_pending(world).unwrap_or_default();
+                let mut drained_map: std::collections::HashMap<
+                    SubscriptionId,
+                    Vec<nexum_subscription::SubscriptionUpdate>,
+                > = std::collections::HashMap::with_capacity(drained.len());
                 for (sid, updates) in drained {
                     drained_map.insert(sid, updates);
                 }
                 let subs: Vec<_> = subscribers.clone();
                 for (connection, subscription) in subs {
                     if let Some(updates) = drained_map.remove(&subscription) {
-                        self.send_subscription_updates(
-                            connection,
-                            subscription,
-                            &updates,
-                        );
+                        self.send_subscription_updates(connection, subscription, &updates);
                         report.subscription_messages_sent +=
                             self.metrics.subscription_messages_sent;
                     }
@@ -1448,11 +1447,8 @@ impl NetworkGateway {
             Err(TransportError::Full) => {
                 if !entry.stale {
                     entry.stale = true;
-                    let stale_subs: Vec<SubscriptionId> = entry
-                        .subscriptions
-                        .keys()
-                        .copied()
-                        .collect();
+                    let stale_subs: Vec<SubscriptionId> =
+                        entry.subscriptions.keys().copied().collect();
                     for sub in &stale_subs {
                         if let Ok(notify) = protocol::encode_server(
                             &ServerMessage::StaleNotification {
@@ -1733,7 +1729,9 @@ impl NetworkGateway {
             if let Some(conns) = self.sub_to_conns.get_mut(world) {
                 if let Some(list) = conns.get_mut(sub) {
                     list.retain(|c| *c != *connection);
-                    if list.is_empty() { conns.remove(sub); }
+                    if list.is_empty() {
+                        conns.remove(sub);
+                    }
                 }
             }
         }

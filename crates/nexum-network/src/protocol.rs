@@ -15,8 +15,8 @@
 //! so framing bounds are enforced at the transport too.
 
 use nexum_core::binary::{
-    Crc32, get_bool, get_row, get_string, get_u64, get_value, put_bool, put_row,
-    put_str, put_u64, put_value,
+    Crc32, get_bool, get_row, get_string, get_u64, get_value, put_bool, put_row, put_str, put_u64,
+    put_value,
 };
 use nexum_core::{
     Error, Row, RowId, SubscriptionId, TickId, TransactionId, Value, Version, WorldId,

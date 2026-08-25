@@ -423,7 +423,10 @@ mod tests {
         assert_eq!(Value::U64(1).type_of(), ColumnType::U64);
         assert_eq!(Value::F64(1.0).type_of(), ColumnType::F64);
         assert_eq!(Value::String("x".into()).type_of(), ColumnType::String);
-        assert_eq!(Value::Bytes(vec![1].into_boxed_slice()).type_of(), ColumnType::Bytes);
+        assert_eq!(
+            Value::Bytes(vec![1].into_boxed_slice()).type_of(),
+            ColumnType::Bytes
+        );
     }
 
     #[test]
@@ -432,7 +435,10 @@ mod tests {
         assert_eq!(Value::I32(7).as_u64(), None);
         assert_eq!(Value::U64(9).as_u64(), Some(9));
         assert_eq!(Value::String("hi".into()).as_str(), Some("hi"));
-        assert_eq!(Value::Bytes(vec![1, 2].into_boxed_slice()).as_bytes(), Some(&[1, 2][..]));
+        assert_eq!(
+            Value::Bytes(vec![1, 2].into_boxed_slice()).as_bytes(),
+            Some(&[1, 2][..])
+        );
         assert_eq!(Value::F64(2.5).as_f64(), Some(2.5));
         assert!(Value::Bool(true).is(ColumnType::Bool));
         assert!(!Value::Bool(true).is(ColumnType::I32));
@@ -443,7 +449,10 @@ mod tests {
         assert_eq!(Value::from(7i32), Value::I32(7));
         assert_eq!(Value::from(7u64), Value::U64(7));
         assert_eq!(Value::from("hi"), Value::String("hi".into()));
-        assert_eq!(Value::from(vec![1u8]), Value::Bytes(vec![1].into_boxed_slice()));
+        assert_eq!(
+            Value::from(vec![1u8]),
+            Value::Bytes(vec![1].into_boxed_slice())
+        );
         assert_eq!(Value::from(1.5f64), Value::F64(1.5));
     }
 

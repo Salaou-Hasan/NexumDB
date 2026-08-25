@@ -243,11 +243,26 @@ fn instantiate_stage_breakdown() {
         let ns = |d: Duration| d.as_nanos() as f64 / N as f64;
         let kib = format!("{} KiB", pages * 64);
         println!("\n{pages} pages ({kib}) linear memory:");
-        println!("  store setup (Store+limiter+fuel)   {:>8.0} ns", ns(store_setup));
-        println!("  linker clone (cached)              {:>8.0} ns", ns(linker_clone));
-        println!("  linker.instantiate                 {:>8.0} ns", ns(instantiate));
-        println!("  InstancePre::start                 {:>8.0} ns", ns(start_fn));
-        println!("  memory export lookup               {:>8.0} ns", ns(export_lookup));
+        println!(
+            "  store setup (Store+limiter+fuel)   {:>8.0} ns",
+            ns(store_setup)
+        );
+        println!(
+            "  linker clone (cached)              {:>8.0} ns",
+            ns(linker_clone)
+        );
+        println!(
+            "  linker.instantiate                 {:>8.0} ns",
+            ns(instantiate)
+        );
+        println!(
+            "  InstancePre::start                 {:>8.0} ns",
+            ns(start_fn)
+        );
+        println!(
+            "  memory export lookup               {:>8.0} ns",
+            ns(export_lookup)
+        );
         println!(
             "  ------------------------------------------\n  total                              {:>8.0} ns",
             ns(store_setup + linker_clone + instantiate + start_fn + export_lookup)

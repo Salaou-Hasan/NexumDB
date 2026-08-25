@@ -24,9 +24,7 @@ use crate::host::{HostState, define_host};
 /// subsequent calls just clone (~200ns vs ~2-3µs).
 ///
 /// If the engine changes (e.g., different test), the cache is rebuilt.
-pub(crate) fn clone_cached_linker<'a, 'b>(
-    engine: &Engine,
-) -> Linker<HostState<'a, 'b>> {
+pub(crate) fn clone_cached_linker<'a, 'b>(engine: &Engine) -> Linker<HostState<'a, 'b>> {
     thread_local! {
         static CACHE: RefCell<Option<(Engine, Linker<HostState<'static, 'static>>)>> =
             const { RefCell::new(None) };
@@ -44,8 +42,7 @@ pub(crate) fn clone_cached_linker<'a, 'b>(
             unsafe {
                 let static_ref: &mut Linker<HostState<'static, 'static>> =
                     std::mem::transmute(&mut linker);
-                define_host(static_ref)
-                    .expect("host ABI definition must succeed on first call");
+                define_host(static_ref).expect("host ABI definition must succeed on first call");
             }
             *borrow = Some((engine.clone(), linker));
         }

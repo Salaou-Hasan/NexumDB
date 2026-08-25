@@ -54,7 +54,8 @@ pub fn put_str(out: &mut Vec<u8>, s: &str) {
 /// Reads a length-prefixed UTF-8 string as `Box<str>` (compact, 16B).
 pub fn get_str(cursor: &mut &[u8]) -> Result<Box<str>> {
     let bytes = get_bytes(cursor)?;
-    String::from_utf8(bytes.into_vec()).map_err(|_| Error::internal("binary: invalid UTF-8 string"))
+    String::from_utf8(bytes.into_vec())
+        .map_err(|_| Error::internal("binary: invalid UTF-8 string"))
         .map(|s| s.into_boxed_str())
 }
 

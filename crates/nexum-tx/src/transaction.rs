@@ -28,8 +28,8 @@ use nexum_storage::Change;
 use nexum_table::TableStore;
 
 use crate::commit;
-use crate::snapshot::TxSnapshot;
 use crate::read_set::ReadSet;
+use crate::snapshot::TxSnapshot;
 use crate::write_set::{WriteEntry, WriteSet};
 
 /// Provisional `RowId`s (insert handles) are real row ids with this bit set.

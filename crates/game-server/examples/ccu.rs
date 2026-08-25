@@ -616,7 +616,14 @@ fn main() {
     }
     println!(
         "CCU harness: clients={} profile={} ticks={} hz={} partitions={} workers={} window={} lobbies={}",
-        args.clients, args.profile, args.ticks, args.hz, args.partitions, args.workers, args.window, args.lobbies
+        args.clients,
+        args.profile,
+        args.ticks,
+        args.hz,
+        args.partitions,
+        args.workers,
+        args.window,
+        args.lobbies
     );
 
     let started = Instant::now();
