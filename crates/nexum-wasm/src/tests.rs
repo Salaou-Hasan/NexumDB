@@ -123,6 +123,138 @@ fn register(registry: &mut WasmModuleRegistry, name: &str, body: &str) {
     registry.register(name, 1, module(body)).unwrap();
 }
 
+/// Breaks the post-linker-cache `instantiate` stage (~5.9 µs/call) into its
+/// component costs and measures how the declared linear-memory size affects
+/// instantiation (wasmi allocates + zeroes initial pages eagerly).
+///
+/// Not part of CI; run explicitly with:
+/// `cargo test --release -p nexum-wasm -- --ignored --nocapture instantiate_stage_breakdown`
+#[test]
+#[ignore]
+fn instantiate_stage_breakdown() {
+    use std::time::{Duration, Instant};
+
+    use wasmi::{Config, EnforcedLimits, Engine, StackLimits, Store};
+
+    use crate::host::HostState;
+    use crate::linker_cache::clone_cached_linker;
+
+    let limits = WasmLimits::default();
+    let mut config = Config::default();
+    config.consume_fuel(true);
+    config.set_stack_limits(StackLimits::new(32, 65_536, 1_024).unwrap());
+    config.enforced_limits(EnforcedLimits::strict());
+    let engine = Engine::new(&config);
+
+    const N: usize = 20_000;
+
+    // Reference: building a Linker from scratch (what the cache eliminated).
+    let n_build = 2_000;
+    let mut build = Duration::ZERO;
+    for _ in 0..n_build {
+        let s = Instant::now();
+        let mut linker = wasmi::Linker::new(&engine);
+        crate::host::define_host(&mut linker).unwrap();
+        build += s.elapsed();
+    }
+    println!(
+        "linker build (Linker::new + define_host)   {:>8.0} ns",
+        build.as_nanos() as f64 / n_build as f64
+    );
+
+    // Control: same 2-page module but with NO data segments — isolates the
+    // data-segment-initialization share of linker.instantiate.
+    {
+        let wat = r#"(module
+  (import "nexum" "op" (func $op (param i32 i32 i32 i32 i32) (result i32)))
+  (memory (export "memory") 2)
+  (global (export "_nexum_in_ptr") i32 (i32.const 0))
+  (global (export "_nexum_out_ptr") i32 (i32.const 16384))
+  (func (export "_nexum_reducer_run") (result i32) (i64.store align=1 (i32.const 16385) (i64.const 0)) (i32.const 9)))
+"#;
+        let module = crate::module::WasmReducerModule::new(
+            &engine,
+            "probe-nodata".into(),
+            1,
+            wat::parse_str(wat).unwrap(),
+            &limits,
+        )
+        .unwrap();
+        let mut total = Duration::ZERO;
+        for _ in 0..N {
+            let mut store = Store::new(&engine, HostState::new(None, &limits));
+            store.limiter(|state: &mut HostState<'_, '_>| &mut state.memory_limiter);
+            store.set_fuel(limits.max_fuel).unwrap();
+            let linker: wasmi::Linker<HostState<'_, '_>> = clone_cached_linker(&engine);
+            let s = Instant::now();
+            let pre = linker.instantiate(&mut store, module.compiled()).unwrap();
+            pre.start(&mut store).unwrap();
+            total += s.elapsed();
+        }
+        println!(
+            "\ncontrol: 2 pages, no data segments:       {:>8.0} ns (instantiate+start)",
+            total.as_nanos() as f64 / N as f64
+        );
+    }
+
+    for pages in [2u32, 16u32] {
+        let module = crate::module::WasmReducerModule::new(
+            &engine,
+            format!("probe{pages}"),
+            1,
+            module_with_memory(pages, "    (call $ret_u64 (i64.const 0))"),
+            &limits,
+        )
+        .unwrap();
+
+        // Warm the per-thread linker cache before timing.
+        let _: wasmi::Linker<HostState<'_, '_>> = clone_cached_linker(&engine);
+
+        let (mut store_setup, mut linker_clone) = (Duration::ZERO, Duration::ZERO);
+        let (mut instantiate, mut start_fn, mut export_lookup) =
+            (Duration::ZERO, Duration::ZERO, Duration::ZERO);
+
+        for _ in 0..N {
+            let s = Instant::now();
+            let mut store = Store::new(&engine, HostState::new(None, &limits));
+            store.limiter(|state: &mut HostState<'_, '_>| &mut state.memory_limiter);
+            store.set_fuel(limits.max_fuel).unwrap();
+            store_setup += s.elapsed();
+
+            let s = Instant::now();
+            let linker: wasmi::Linker<HostState<'_, '_>> = clone_cached_linker(&engine);
+            linker_clone += s.elapsed();
+
+            let s = Instant::now();
+            let pre = linker.instantiate(&mut store, module.compiled()).unwrap();
+            instantiate += s.elapsed();
+
+            let s = Instant::now();
+            let instance = pre.start(&mut store).unwrap();
+            start_fn += s.elapsed();
+
+            let s = Instant::now();
+            let _memory = instance
+                .get_export(&store, "memory")
+                .and_then(|e| e.into_memory());
+            export_lookup += s.elapsed();
+        }
+
+        let ns = |d: Duration| d.as_nanos() as f64 / N as f64;
+        let kib = format!("{} KiB", pages * 64);
+        println!("\n{pages} pages ({kib}) linear memory:");
+        println!("  store setup (Store+limiter+fuel)   {:>8.0} ns", ns(store_setup));
+        println!("  linker clone (cached)              {:>8.0} ns", ns(linker_clone));
+        println!("  linker.instantiate                 {:>8.0} ns", ns(instantiate));
+        println!("  InstancePre::start                 {:>8.0} ns", ns(start_fn));
+        println!("  memory export lookup               {:>8.0} ns", ns(export_lookup));
+        println!(
+            "  ------------------------------------------\n  total                              {:>8.0} ns",
+            ns(store_setup + linker_clone + instantiate + start_fn + export_lookup)
+        );
+    }
+}
+
 fn registry() -> WasmModuleRegistry {
     WasmModuleRegistry::new(WasmLimits::default()).unwrap()
 }

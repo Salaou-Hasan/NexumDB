@@ -41,7 +41,10 @@ pub fn fire_weapon_module() -> Vec<u8> {
 
 const WAT: &str = r#"(module
   (import "nexum" "op" (func $op (param i32 i32 i32 i32 i32) (result i32)))
-  (memory (export "memory") 16)
+  ;; 2 pages (128 KiB): buffers end at 81920 and string constants at ~91300.
+  ;; Instantiation cost scales with declared linear memory — every extra
+  ;; page is eagerly allocated + zeroed per reducer call (~280 ns/page).
+  (memory (export "memory") 2)
   (global (export "_nexum_in_ptr") i32 (i32.const 0))
   (global (export "_nexum_out_ptr") i32 (i32.const 16384))
 

@@ -112,7 +112,7 @@ fn module(body: &str) -> Vec<u8> {
     let wat = format!(
         r#"(module
   (import "nexum" "op" (func $op (param i32 i32 i32 i32 i32) (result i32)))
-  (memory (export "memory") 16)
+  (memory (export "memory") 2)
   (global (export "_nexum_in_ptr") i32 (i32.const 0))
   (global (export "_nexum_out_ptr") i32 (i32.const 16384))
   (data (i32.const 90000) "players")

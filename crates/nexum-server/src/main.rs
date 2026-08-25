@@ -109,7 +109,7 @@ fn server_secret(ctx: &mut ReducerContext, args: &ReducerArgs) -> Result<Value> 
 fn ping_module() -> Vec<u8> {
     let wat = r#"(module
   (import "nexum" "op" (func $op (param i32 i32 i32 i32 i32) (result i32)))
-  (memory (export "memory") 16)
+  (memory (export "memory") 2)
   (global (export "_nexum_in_ptr") i32 (i32.const 0))
   (global (export "_nexum_out_ptr") i32 (i32.const 16384))
   (func (export "_nexum_reducer_run") (result i32)
