@@ -23,6 +23,13 @@ ctrlc = "3.4"
 rayon.workspace = true
 nexum-alloc-count = { workspace = true, optional = true }
 
+# Phase 26 OS tuning (--os-tune): timer resolution, priority, affinity.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_System_Threading",
+    "Win32_Media",
+] }
+
 [[bin]]
 name = "game-server"
 path = "src/bin/main.rs"

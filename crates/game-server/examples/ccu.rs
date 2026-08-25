@@ -85,16 +85,25 @@ struct Args {
     /// invocation (store setup / instantiate / encode / exec / result) and
     /// exit. Requires no clients; ignores the rest of the harness.
     wasm_stages: bool,
+    /// Phase 26 OS tuning (Windows): 1 ms timer resolution,
+    /// HIGH_PRIORITY_CLASS, rayon-pool worker affinity. On by default;
+    /// `--no-os-tune` restores raw scheduler behavior for A/B comparison.
+    os_tune: bool,
 }
 
 fn parse_args() -> Args {
+    // workers = 0 means "auto": resolved in boot() to
+    // min(available_parallelism, lobbies × partitions) — a production
+    // deployment ticks independent lobbies in parallel (Phase 18), so the
+    // harness must too, or it measures a serial strawman. More workers than
+    // worlds is pure idle overhead.
     let mut args = Args {
         clients: 1_000,
         profile: 'B',
         ticks: 200,
         hz: 20,
         partitions: 1,
-        workers: 1,
+        workers: 0,
         window: 32,
         queue: 1 << 20,
         profile_detail: false,
@@ -102,6 +111,7 @@ fn parse_args() -> Args {
         count_alloc: false,
         lobbies: 1,
         wasm_stages: false,
+        os_tune: true,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -120,6 +130,8 @@ fn parse_args() -> Args {
             "--reducer-profile" => args.reducer_profile = true,
             "--count-alloc" => args.count_alloc = true,
             "--wasm-stages" => args.wasm_stages = true,
+            "--os-tune" => args.os_tune = true,
+            "--no-os-tune" => args.os_tune = false,
             "--help" | "-h" => {
                 println!(
                     "usage: ccu [--clients N] [--profile A|B|C|D|E] [--ticks N] \
@@ -314,16 +326,6 @@ fn step_server_timed(server: &mut GameServer, t: &mut PhaseTimers) {
         .push((inbound, tick, fanout, pump, flush, 0, 0));
 }
 
-fn step_server(server: &mut GameServer) {
-    server.gateway_mut().process_inbound();
-    let _ = server.step();
-    server.gateway_mut().pump_subscriptions();
-    server
-        .gateway_mut()
-        .flush_outbound()
-        .expect("flush outbound");
-}
-
 /// Client-side half: drain every client's inbound frames.
 fn step_clients(clients: &mut [SimClient]) {
     use rayon::prelude::*;
@@ -486,6 +488,8 @@ fn wasm_stage_breakdown() {
     registry
         .register("fire_weapon", 1, fire_weapon_module())
         .unwrap();
+    // Match the production game configuration (Phase 26 instance pooling).
+    registry.set_poolable("fire_weapon", true).unwrap();
 
     let iterations = 20_000usize;
     let warmup = 2_000usize;
@@ -604,12 +608,177 @@ fn wasm_stage_breakdown() {
         "  total     {:>9.1} ns/call",
         total_ns as f64 / total_n as f64
     );
-    println!();
+
+    // -------------------------------------------------------------- absorb scaling
+    // Isolates the branch/write/absorb cycle from WASM entirely: does the
+    // per-call cost grow with the parent transaction's accumulated write
+    // set (the O(parent) signature), or stay flat?
+    use nexum_core::{RowId as WRowId, TableSchema as WSchema};
+    use nexum_tx::Transaction as WTx;
+    println!("\n=== BRANCH/WRITE/ABSORB SCALING (pure tx cycle, no WASM) ===");
+    // Variant A: raw WriteSet only (no Transaction, no ReadSet, no store).
+    {
+        use nexum_tx::WriteSet;
+        let mkrow = || nexum_core::row![9_999u64, 7i32];
+        for w in [0usize, 1000] {
+            let mut pws = WriteSet::new();
+            for i in 0..w {
+                pws.update(
+                    nexum_core::TableId::from_u64(0),
+                    WRowId::from_u64(i as u64),
+                    false,
+                    mkrow(),
+                )
+                .unwrap();
+            }
+            const CALLS: usize = 20_000;
+            let mut t = 0u128;
+            for i in 0..CALLS {
+                let mut cws = pws.branch();
+                cws.update(
+                    nexum_core::TableId::from_u64(0),
+                    WRowId::from_u64((w + 50_000 + i) as u64),
+                    false,
+                    mkrow(),
+                )
+                .unwrap();
+                let t0 = Instant::now();
+                pws.absorb(cws);
+                t += (Instant::now() - t0).as_nanos();
+            }
+            println!(
+                "  [raw WriteSet]   parent_writes={w:>5}:   absorb {:>8.1} ns/call",
+                t as f64 / CALLS as f64
+            );
+        }
+    }
+    let mut scale_store = nexum_table::TableStore::new();
+    scale_store
+        .create_table(
+            WSchema::builder("players")
+                .column("id", nexum_core::ColumnType::U64)
+                .column("x", nexum_core::ColumnType::I32)
+                .primary_key(&["id"])
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
+    {
+        fn seed(store: &nexum_table::TableStore, parent: &mut WTx, n: usize) {
+            for i in 0..n {
+                parent
+                    .update(
+                        store,
+                        "players",
+                        WRowId::from_u64(i as u64),
+                        nexum_core::row![i as u64, 5i32],
+                    )
+                    .unwrap();
+            }
+        }
+        for w in [0usize, 250, 500, 1000, 2000] {
+            let mut parent = WTx::begin(&mut scale_store);
+            seed(&scale_store, &mut parent, w);
+            const CALLS: usize = 3_000;
+            let mut t_absorb = 0u128;
+            let mut t_cycle = 0u128;
+            for i in 0..CALLS {
+                let rid = WRowId::from_u64((w + 10_000 + i) as u64);
+                let t0 = Instant::now();
+                let mut child = WTx::new(parent.id());
+                child.branch_of(&parent).unwrap();
+                child
+                    .update(
+                        &scale_store,
+                        "players",
+                        rid,
+                        nexum_core::row![9_999u64, 7i32],
+                    )
+                    .unwrap();
+                let t1 = Instant::now();
+                parent.absorb(child).unwrap();
+                let t2 = Instant::now();
+                t_absorb += (t2 - t1).as_nanos();
+                t_cycle += (t2 - t0).as_nanos();
+            }
+            println!(
+                "  parent_writes={w:>5}:   absorb {:>8.1} ns/call   full cycle {:>8.1} ns/call",
+                t_absorb as f64 / CALLS as f64,
+                t_cycle as f64 / CALLS as f64
+            );
+            let _ = parent.abort();
+        }
+        println!();
+    }
 }
+
+/// Phase 26 OS tuning: reduce kernel-side latency noise so the measured
+/// percentiles reflect the engine, not the scheduler.
+///
+/// - **Timer resolution** (`timeBeginPeriod(1)`): Windows' default 15.6 ms
+///   timer granularity makes `thread::sleep` overshoot and lengthens
+///   scheduler quanta; both inflate tail latencies.
+/// - **Process priority** (`HIGH_PRIORITY_CLASS`): keeps worker threads from
+///   being preempted by background work under load.
+/// - **Worker affinity**: the runtime's parallel tick path runs on the
+///   global rayon pool; pre-building that pool with a custom spawner pins
+///   each pool thread to one logical processor (round-robin), cutting
+///   cross-core migration and cache bouncing. On Intel hybrid CPUs Windows
+///   enumerates P-cores at lower processor numbers, so round-robin packs
+///   the first workers onto P-cores.
+#[cfg(windows)]
+fn os_tune() {
+    use windows_sys::Win32::Media::timeBeginPeriod;
+    use windows_sys::Win32::System::Threading::{
+        GetCurrentProcess, GetCurrentThread, HIGH_PRIORITY_CLASS, SetPriorityClass,
+        SetThreadAffinityMask,
+    };
+    // SAFETY: these are plain Win32 configuration calls with no memory
+    // ownership implications.
+    unsafe {
+        timeBeginPeriod(1);
+        SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS);
+    }
+    let procs = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
+    let _ = rayon::ThreadPoolBuilder::new()
+        .num_threads(procs)
+        .spawn_handler(move |thread| {
+            let index = thread.index();
+            std::thread::Builder::new()
+                .name(format!("nexum-worker-{index}"))
+                .spawn(move || {
+                    // Round-robin over logical processors (see doc comment).
+                    #[allow(clippy::useless_conversion)]
+                    let mask: usize = 1usize << (index % procs);
+                    unsafe {
+                        SetThreadAffinityMask(GetCurrentThread(), mask);
+                    }
+                    thread.run();
+                })
+                .expect("spawn rayon pool thread");
+            Ok(())
+        })
+        .build_global();
+}
+
+/// Non-Windows fallback: nothing to do yet (Linux equivalent would be
+/// SCHED_FIFO / pthread_setaffinity_np).
+#[cfg(not(windows))]
+fn os_tune() {}
 
 /// Runs the harness and classifies the result honestly.
 fn main() {
-    let args = parse_args();
+    let mut args = parse_args();
+    if args.os_tune {
+        os_tune();
+    }
+    // Resolve the auto worker default (workers == 0) up front so the config
+    // echo reports what actually runs: min(available_parallelism,
+    // lobbies × partitions). More workers than worlds is idle overhead.
+    if args.workers == 0 {
+        let cores = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
+        args.workers = cores.min(args.lobbies * args.partitions).max(1);
+    }
     if args.wasm_stages {
         wasm_stage_breakdown();
         return;
@@ -659,6 +828,10 @@ fn main() {
     }
 
     // Measured phase.
+    // Let the per-connection fixed-window rate buckets (1 s) reset first:
+    // the unpaced warmup burst would otherwise consume the entire first
+    // measured second and report artificial rejections.
+    std::thread::sleep(Duration::from_secs(1));
     let tick_budget = Duration::from_millis(1000 / args.hz);
     let mut tick_samples: Vec<Duration> = Vec::with_capacity(args.ticks as usize);
     let measured_started = Instant::now();
@@ -688,20 +861,32 @@ fn main() {
     };
 
     let mut phase_timers = PhaseTimers::default();
+    // Server-only per-tick samples: inbound+tick+fanout+flush wall time.
+    // On a dedicated deployment the client pump/drain below runs on client
+    // machines, so this is the honest server latency series.
+    let mut server_samples: Vec<Duration> = Vec::with_capacity(args.ticks as usize);
     for tick in 0..args.ticks {
         drive_profile(args.profile, tick, &mut clients, args.hz);
         let tick_started = Instant::now();
-        if args.profile_detail {
-            step_server_timed(&mut server, &mut phase_timers);
-        } else {
-            step_server(&mut server);
-        }
-        let t_mid1 = Instant::now();
+        step_server_timed(&mut server, &mut phase_timers);
+        let t_server_end = Instant::now();
+        let t_mid1 = t_server_end;
+        server_samples.push(t_server_end.duration_since(tick_started));
         step_clients(&mut clients);
         let t_mid2 = Instant::now();
         drain_clients(&mut clients);
         let t_end = Instant::now();
         tick_samples.push(t_end.duration_since(tick_started));
+        // Pace the loop to the configured tick rate. A production server
+        // ticks at --hz wall-clock; without this the harness blasts every
+        // tick's work into a single wall-clock second, exhausting the
+        // per-connection fixed-window rate limits and measuring rejection,
+        // not gameplay. Percentiles above are unaffected: the sample is
+        // pushed before the sleep, so it measures work time only.
+        let elapsed = t_end.duration_since(tick_started);
+        if elapsed < tick_budget {
+            std::thread::sleep(tick_budget - elapsed);
+        }
         if args.profile_detail {
             let client_ns = t_mid2.duration_since(t_mid1).as_nanos() as u64;
             let drain_ns = t_end.duration_since(t_mid2).as_nanos() as u64;
@@ -744,6 +929,16 @@ fn main() {
     let max = *tick_samples.last().unwrap();
     let avg = tick_samples.iter().sum::<Duration>() / tick_samples.len() as u32;
 
+    // Server-only latency series (inbound+tick+fanout+flush): what a
+    // dedicated deployment would pay; the client pump/drain above runs on
+    // client machines in production.
+    server_samples.sort_unstable();
+    let sp50 = server_samples[server_samples.len() / 2];
+    let sp95 = server_samples[(server_samples.len() as f64 * 0.95) as usize];
+    let sp99 = server_samples[(server_samples.len() as f64 * 0.99) as usize];
+    let sp999 = server_samples[(server_samples.len() as f64 * 0.999) as usize];
+    let savg = server_samples.iter().sum::<Duration>() / server_samples.len() as u32;
+
     let metrics = server.gateway().metrics();
     let runtime_metrics = server.runtime().metrics();
     let game_metrics = server.metrics();
@@ -769,6 +964,14 @@ fn main() {
     );
     println!(
         "work:  accepted={accepted_delta}  rejected={rejected_delta}  dropped={dropped_delta}"
+    );
+    println!(
+        "server: p50={:.1}us  p95={:.1}us  p99={:.1}us  p99.9={:.1}us  avg={:.1}us",
+        sp50.as_micros(),
+        sp95.as_micros(),
+        sp99.as_micros(),
+        sp999.as_micros(),
+        savg.as_micros()
     );
     println!(
         "state: ticks_ok={} ticks_failed={} worlds={} partitions={}",
