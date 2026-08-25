@@ -1,19 +1,19 @@
 //! Phase 16 CCU (concurrent users) load harness (ADR-016 D4).
 //!
-//! Boots the **real stack** â€” GameServer â†’ Runtime â†’ World with the arena
-//! game â€” and drives N simulated clients through the **real gateway + real
+//! Boots the **real stack** ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â GameServer ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ Runtime ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ World with the arena
+//! game ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â and drives N simulated clients through the **real gateway + real
 //! protocol codec + real SDK client objects** over in-process transport
 //! (honest scope: the socket layer is in-process; the protocol, gateway,
 //! runtime, world, subscriptions, and SDK views are all real).
 //!
 //! Profiles:
 //!
-//! - `A` â€” connection only: connect + authenticate + attach + subscribe, then
+//! - `A` ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â connection only: connect + authenticate + attach + subscribe, then
 //!   stay connected.
-//! - `B` â€” light input: each client sends movement at a realistic rate.
-//! - `C` â€” realistic game: movement + received subscription updates +
+//! - `B` ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â light input: each client sends movement at a realistic rate.
+//! - `C` ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â realistic game: movement + received subscription updates +
 //!   occasional `fire_weapon` reducer calls.
-//! - `D` â€” stress: high input + reducer pressure until saturation.
+//! - `D` ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â stress: high input + reducer pressure until saturation.
 //!
 //! Every client is a real [`nexum_sdk::Client`] over a memory transport pair,
 //! so the measured cost includes the real SDK encode/decode and view
@@ -27,7 +27,7 @@
 //! ```
 //!
 //! Results are classified PASS / DEGRADED / SATURATED / FAILED against the
-//! tick budget (p99 tick â‰¤ budget) and the no-silent-loss rule.
+//! tick budget (p99 tick ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â°ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¤ budget) and the no-silent-loss rule.
 
 use std::time::{Duration, Instant};
 
@@ -61,7 +61,7 @@ struct Args {
     hz: u64,
     partitions: usize,
     workers: usize,
-    /// Subscription window per client (realistic interest management â€”
+    /// Subscription window per client (realistic interest management ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â
     /// clients never hold the whole table; Phase 15 measured full-table
     /// snapshots as O(N) per subscriber).
     window: u32,
@@ -96,7 +96,7 @@ struct Args {
     workload: Option<String>,
     /// RTS density: units per player commanded every tick (`unit_move`).
     density: usize,
-    /// Deterministic seed for the player brains (same seed â†’ identical
+    /// Deterministic seed for the player brains (same seed ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ identical
     /// command stream, comparable across worker counts).
     seed: u64,
     /// Print a machine-readable SCORECARD CSV line after the results.
@@ -112,7 +112,7 @@ struct Args {
 
 fn parse_args() -> Args {
     // workers = 0 means "auto": resolved in boot() to
-    // min(available_parallelism, lobbies Ã— partitions) â€” a production
+    // min(available_parallelism, lobbies ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â partitions) ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â a production
     // deployment ticks independent lobbies in parallel (Phase 18), so the
     // harness must too, or it measures a serial strawman. More workers than
     // worlds is pure idle overhead.
@@ -327,13 +327,13 @@ fn step_server_timed(server: &mut GameServer, t: &mut PhaseTimers) {
     // Split the game-server step into its public halves: the authoritative
     // runtime tick (parallel worlds) and the gateway fan-out (TickUpdate
     // broadcast + subscription pumps + reducer-result routing).
-    let results = server.step_authoritative().expect("runtime tick");
+    let results = server.runtime_mut().step_detailed().expect("runtime tick");
     let t2 = Instant::now();
     let _ = server.gateway_mut().fan_out_results(&results);
     // pump_subscriptions is NOT called here: fan_out_results already drains
     // every subscriber's buffer during the per-world pump pass. A separate
     // pump_subscriptions call would re-iterate all connections finding empty
-    // buffers â€” pure overhead.
+    // buffers ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â pure overhead.
     let t3 = Instant::now();
     server
         .gateway_mut()
@@ -363,37 +363,45 @@ fn step_server_timed(server: &mut GameServer, t: &mut PhaseTimers) {
         .push((inbound, tick, fanout, pump, flush, 0, 0));
 }
 
-/// Client-side half: drain every client's inbound frames.
-fn step_clients(clients: &mut [SimClient]) {
+/// Client-side half: pump every client's inbound frames on the CLIENT pool
+/// (Phase 26: demoted to the non-server processor range so simulated clients
+/// never steal P-cores from authoritative workers).
+fn step_clients(clients: &mut [SimClient], client_pool: &rayon::ThreadPool) {
     use rayon::prelude::*;
     // Parallel pump: each chunk is processed sequentially, chunks in
     // parallel. At 20K clients this eliminates the O(CCU) serial pump
     // bottleneck (was 72ms at 20K). Chunk size 256 balances work per
     // thread with scheduling overhead.
-    clients.par_chunks_mut(256).for_each(|chunk| {
-        for sim in chunk.iter_mut() {
-            sim.client.pump().expect("client pump");
-        }
+    client_pool.install(|| {
+        clients.par_chunks_mut(256).for_each(|chunk| {
+            for sim in chunk.iter_mut() {
+                sim.client.pump().expect("client pump");
+            }
+        });
     });
 }
 
 /// A realistic client consumes its event stream every tick (like a render
 /// loop); the harness must drain too, or queues grow over the measured run.
-fn drain_clients(clients: &mut [SimClient]) {
-    // Drain is intentionally sequential: take_events/take_reducer_results
-    // are trivial O(1) swaps. Parallel rayon overhead at 20K clients
-    // exceeds the work, making it 3Ã— slower.
-    for sim in clients.iter_mut() {
-        sim.client.take_events();
-        sim.client.take_reducer_results();
-    }
+/// Phase 26: parallelized on the client pool ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â under saturation the queues
+/// hold real backlog and a sequential drain was spiking to seconds.
+fn drain_clients(clients: &mut [SimClient], client_pool: &rayon::ThreadPool) {
+    use rayon::prelude::*;
+    client_pool.install(|| {
+        clients.par_chunks_mut(256).for_each(|chunk| {
+            for sim in chunk.iter_mut() {
+                sim.client.take_events();
+                sim.client.take_reducer_results();
+            }
+        });
+    });
 }
 
 // ------------------------------------------------------------- battery (P26)
 
 /// Per-tick command probabilities for a workload archetype, in per-mille.
 /// A brain picks at most one player action per tick, then issues its density
-/// unit moves (RTS axis) on top â€” entity work is *in addition to* player ops.
+/// unit moves (RTS axis) on top ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â entity work is *in addition to* player ops.
 struct Mix {
     move_p: u16,
     fire_p: u16,
@@ -619,24 +627,27 @@ fn drive_profile(profile: char, tick: u64, clients: &mut [SimClient], hz: u64) {
         }
         'E' => {
             // Extreme real gameplay (Phase 21.5): every client moves every
-            // tick, fires every 10 ticks (â‰ˆ2/s at 20 Hz), and reloads every
-            // 25 ticks â€” the full hot path (native move + WASM fire +
+            // tick, fires every 10 ticks (~2/s at 20 Hz), and reloads every
+            // 25 ticks ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â the full hot path (native move + WASM fire +
             // native reload) with subscription deltas, TickUpdate decode,
             // and drain active every tick.
+            //
+            // Phase 26: fire/reload schedules are STAGGERED per client
+            // ((tick + i) % k) so bursts spread evenly across ticks ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â a
+            // synchronized burst every 10th tick is an artifact of naive
+            // benchmark design, not of real player behavior, and it
+            // manufactured bimodal p99s.
             for (i, sim) in clients.iter_mut().enumerate() {
+                let idx = i as u64;
                 let dx = if i % 2 == 0 { 1 } else { -1 };
                 let dy = if i % 3 == 0 { 1 } else { 0 };
                 let _ = sim.client.call_reducer("move_player", move_args(dx, dy));
-            }
-            if tick.is_multiple_of(10) {
-                for sim in clients.iter_mut() {
+                if (tick + idx).is_multiple_of(10) {
                     let _ = sim
                         .client
                         .call_reducer("fire_weapon", nexum_reducer::ReducerArgs::new());
                 }
-            }
-            if tick.is_multiple_of(25) {
-                for sim in clients.iter_mut() {
+                if (tick + idx * 2).is_multiple_of(25) {
                     let _ = sim
                         .client
                         .call_reducer("reload_weapon", nexum_reducer::ReducerArgs::new());
@@ -942,64 +953,90 @@ fn wasm_stage_breakdown() {
 ///   each pool thread to one logical processor (round-robin), cutting
 ///   cross-core migration and cache bouncing. On Intel hybrid CPUs Windows
 ///   enumerates P-cores at lower processor numbers, so round-robin packs
-///   the first workers onto P-cores.
+// Phase 26 OS tuning: reduce kernel-side latency noise so the measured
+// percentiles reflect the engine, not the scheduler. Timer resolution
+// (`timeBeginPeriod(1)`) removes Windows' 15.6 ms granularity from sleeps
+// and scheduler quanta; HIGH_PRIORITY_CLASS keeps workers from being
+// preempted by background work under load.
 #[cfg(windows)]
 fn os_tune() {
     use windows_sys::Win32::Media::timeBeginPeriod;
     use windows_sys::Win32::System::Threading::{
-        GetCurrentProcess, GetCurrentThread, HIGH_PRIORITY_CLASS, SetPriorityClass,
-        SetThreadAffinityMask,
+        GetCurrentProcess, HIGH_PRIORITY_CLASS, SetPriorityClass,
     };
-    // SAFETY: these are plain Win32 configuration calls with no memory
-    // ownership implications.
+    // SAFETY: plain Win32 configuration calls, no memory ownership.
     unsafe {
         timeBeginPeriod(1);
         SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS);
     }
-    let procs = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
-    let _ = rayon::ThreadPoolBuilder::new()
-        .num_threads(procs)
+}
+
+#[cfg(not(windows))]
+fn os_tune() {}
+
+/// Builds the CLIENT simulation pool: `threads` workers, optionally pinned
+/// (Windows) to the complement processor range starting at `first_proc` so
+/// simulated clients never run on the server's P-cores.
+fn build_client_pool(
+    threads: usize,
+    #[allow(unused_variables)] first_proc: Option<usize>,
+    procs: usize,
+) -> rayon::ThreadPool {
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(threads)
+        .thread_name(move |i| format!("nexum-client-{i}"))
         .spawn_handler(move |thread| {
             let index = thread.index();
             std::thread::Builder::new()
-                .name(format!("nexum-worker-{index}"))
+                .name(format!("nexum-client-{index}"))
                 .spawn(move || {
-                    // Round-robin over logical processors (see doc comment).
-                    #[allow(clippy::useless_conversion)]
-                    let mask: usize = 1usize << (index % procs);
-                    unsafe {
-                        SetThreadAffinityMask(GetCurrentThread(), mask);
+                    #[cfg(windows)]
+                    if let Some(first) = first_proc {
+                        use windows_sys::Win32::System::Threading::{
+                            GetCurrentThread, SetThreadAffinityMask,
+                        };
+                        // SAFETY: plain Win32 affinity configuration. Whole
+                        // complement-range mask (see os_tune rationale).
+                        #[allow(clippy::useless_conversion)]
+                        let client_mask: usize = if first >= procs {
+                            usize::MAX
+                        } else {
+                            !((1usize << first) - 1) & ((1usize << procs) - 1)
+                        };
+                        unsafe {
+                            SetThreadAffinityMask(GetCurrentThread(), client_mask);
+                        }
                     }
                     thread.run();
                 })
-                .expect("spawn rayon pool thread");
+                .expect("spawn client pool thread");
             Ok(())
         })
-        .build_global();
+        .build()
+        .expect("client pool")
 }
-
-/// Non-Windows fallback: nothing to do yet (Linux equivalent would be
-/// SCHED_FIFO / pthread_setaffinity_np).
-#[cfg(not(windows))]
-fn os_tune() {}
 
 /// Runs the harness and classifies the result honestly.
 fn main() {
     let mut args = parse_args();
+    let procs = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
+    // Resolve the auto worker default (workers == 0) up front: the runtime
+    // tick scope needs at least this many pool threads, or worlds run in
+    // waves and the tick phase loses its parallelism.
+    if args.workers == 0 {
+        args.workers = procs.min(args.lobbies * args.partitions).max(1);
+    }
     if args.os_tune {
         os_tune();
     }
-    // Resolve the auto worker default (workers == 0) up front so the config
-    // echo reports what actually runs: min(available_parallelism,
-    // lobbies Ã— partitions). More workers than worlds is idle overhead.
-    if args.workers == 0 {
-        let cores = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
-        args.workers = cores.min(args.lobbies * args.partitions).max(1);
-    }
+    // The simulated client fleet pumps/drains on its own full-width,
+    // unpinned pool so its cost is measurable separately from the server.
+    let client_pool = build_client_pool(procs.max(2), None, procs);
     if args.wasm_stages {
         wasm_stage_breakdown();
         return;
     }
+
     println!(
         "CCU harness: clients={} profile={} ticks={} hz={} partitions={} workers={} window={} lobbies={}",
         args.clients,
@@ -1035,13 +1072,13 @@ fn main() {
     step(&mut server, &mut clients);
 
     // Warmup: a few ticks to populate caches before measuring. Clients are
-    // drained too â€” otherwise the first measured tick pays the accumulated
+    // drained too ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â otherwise the first measured tick pays the accumulated
     // warmup backlog as an artificial p99.9 spike (Phase 21.5 spike
     // investigation).
     for tick in 0..100 {
         drive_profile(args.profile, tick, &mut clients, args.hz);
         step(&mut server, &mut clients);
-        drain_clients(&mut clients);
+        drain_clients(&mut clients, &client_pool);
     }
 
     // Measured phase.
@@ -1120,15 +1157,14 @@ fn main() {
                 }
             }
         }
-        drive_profile(args.profile, tick, &mut clients, args.hz);
         let tick_started = Instant::now();
         step_server_timed(&mut server, &mut phase_timers);
         let t_server_end = Instant::now();
         let t_mid1 = t_server_end;
         server_samples.push(t_server_end.duration_since(tick_started));
-        step_clients(&mut clients);
+        step_clients(&mut clients, &client_pool);
         let t_mid2 = Instant::now();
-        drain_clients(&mut clients);
+        drain_clients(&mut clients, &client_pool);
         let t_end = Instant::now();
         tick_samples.push(t_end.duration_since(tick_started));
         // Pace the loop to the configured tick rate. A production server
@@ -1269,12 +1305,12 @@ fn main() {
         game_metrics.players_active, game_metrics.games_active, game_metrics.reducer_calls
     );
     // Calibrated to measured steady-state RSS (Phase 18 follow-up): the
-    // full stack (server + in-process SDK clients) needs â‰ˆ 24.7 KB private
-    // per connection with a ~6 MB base â€” linear fit over 5K/10K/15K/20K
+    // full stack (server + in-process SDK clients) needs ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â°ÃƒÆ’Ã¢â‚¬Â¹ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â  24.7 KB private
+    // per connection with a ~6 MB base ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â linear fit over 5K/10K/15K/20K
     // measured samples. A mass-join storm without client consumption spikes
-    // severalÃ— higher (un-drained SDK event buffers).
+    // severalÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â higher (un-drained SDK event buffers).
     println!(
-        "mem:   est.~{}MB (steady-state fit: ~24.7KB/conn + 6MB base, incl. in-process SDK clients; join storm spikes severalÃ—)",
+        "mem:   est.~{}MB (steady-state fit: ~24.7KB/conn + 6MB base, incl. in-process SDK clients; join storm spikes severalÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â)",
         (args.clients as u64).saturating_mul(25 * 1024) / (1024 * 1024) + 6
     );
 
@@ -1366,19 +1402,19 @@ fn main() {
     let rejected_heavily = rejected_delta as f64 / (accepted_delta.max(1)) as f64 > 0.5;
 
     let class = if silently_lost {
-        "FAILED â€” accepted work was dropped"
+        "FAILED ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â accepted work was dropped"
     } else if any_failure {
-        "FAILED â€” tick failures observed"
+        "FAILED ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â tick failures observed"
     } else if p99_over_budget {
         if p99 > tick_budget.saturating_mul(2) {
-            "SATURATED â€” p99 exceeds 2Ã— tick budget (the ceiling)"
+            "SATURATED ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â p99 exceeds 2ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â tick budget (the ceiling)"
         } else {
-            "DEGRADED â€” p99 approaches/ exceeds the tick budget"
+            "DEGRADED ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â p99 approaches/ exceeds the tick budget"
         }
     } else if rejected_heavily {
-        "DEGRADED â€” heavy explicit rejections (rate limits / queues)"
+        "DEGRADED ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â heavy explicit rejections (rate limits / queues)"
     } else {
-        "PASS â€” p99 within budget, no silent loss, no failures"
+        "PASS ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â p99 within budget, no silent loss, no failures"
     };
     println!("\nCLASSIFICATION: {class}");
     println!(
