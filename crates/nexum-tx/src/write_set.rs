@@ -401,14 +401,19 @@ impl WriteSet {
     /// exists): the own-layer case removes the entry, the inherited-layer
     /// case leaves a `Delete` tombstone that the next absorb resolves.
     pub fn absorb(&mut self, child: WriteSet) {
-        // Destructure: extract child's own entries and drop base (which may
-        // reference our own map via Arc). This brings our own Arc refcount
-        // down to 1 so make_mut is O(1).
+        // Destructure and EXPLICITLY drop the child's inherited layer before
+        // touching `self.own`: that layer is an `Arc` handle on our own map,
+        // and it must be released so `make_mut` below sees refcount 1.
+        // A `_` pattern binding here does NOT release it in time — measured
+        // (Phase 26 investigation): with `base: _`, `make_mut` observed
+        // refcount 2 and deep-cloned the entire accumulated parent map per
+        // call (~50-100 µs at 5K entries, growing O(parent-writes)); with an
+        // explicit drop, absorb is ~O(child-writes · log parent).
         let WriteSet {
-            base: _,
+            base,
             own: child_own,
-            ..
         } = child;
+        drop(base);
         // Fast path: if no Delete entries in child, no coalescing needed.
         let has_delete = child_own.values().any(|e| matches!(e, WriteEntry::Delete));
         if !has_delete {
