@@ -39,6 +39,14 @@ pub const OP_LOOKUP_UNIQUE: u32 = 4;
 /// `LOOKUP_INDEX` owners of a key in a non-unique secondary index (epoch
 /// observation). Same wire format as `OP_LOOKUP_UNIQUE`.
 pub const OP_LOOKUP_INDEX: u32 = 9;
+/// Composite (Phase 27c-a): unique-index lookup + row fetch in **one**
+/// crossing. Args identical to `OP_LOOKUP_UNIQUE`; result is
+/// `[found u8][rid u64][GET-result body]` (`present/nvalues/values`).
+pub const OP_LOOKUP_GET_UNIQUE: u32 = 10;
+/// Composite (Phase 27c-a): non-unique-index lookup + all matching rows in
+/// **one** crossing. Args identical to `OP_LOOKUP_INDEX`; result is
+/// `[count u64]` followed by `count × [rid u64][row]`.
+pub const OP_INDEX_SCAN_GET: u32 = 11;
 /// `INSERT` a row; returns the provisional row id.
 pub const OP_INSERT: u32 = 5;
 /// `UPDATE` a row.
@@ -54,7 +62,7 @@ pub const RET_REJECT: u32 = u32::MAX;
 
 /// Returns the opcode for a numeric code, or `InvalidArgument`.
 pub fn opcode(code: u32) -> Result<u32> {
-    if (OP_GET..=OP_LOOKUP_INDEX).contains(&code) {
+    if (OP_GET..=OP_INDEX_SCAN_GET).contains(&code) {
         Ok(code)
     } else {
         Err(Error::invalid_argument(format!(
@@ -258,6 +266,35 @@ pub fn encode_lookup_result(owners: &[RowId]) -> Vec<u8> {
     out
 }
 
+/// Encodes a `LOOKUP_GET_UNIQUE` result: `[found u8]`, then on hit
+/// `[rid u64]` plus the `GET` result body (`put_row`). The guest parses the
+/// row at a fixed offset past the found/rid header.
+pub fn encode_lookup_get_result(rid: RowId, row: Option<&Row>) -> Vec<u8> {
+    let mut out = Vec::new();
+    match row {
+        Some(row) => {
+            put_bool(&mut out, true);
+            put_u64(&mut out, rid.as_u64());
+            put_row(&mut out, row);
+        }
+        None => put_bool(&mut out, false),
+    }
+    out
+}
+
+/// Encodes an `INDEX_SCAN_GET` result: entry count, then per owner
+/// `[rid u64][row]`. Fixed-stride when the table's columns are fixed-width
+/// (the arena tables), so guests can iterate without re-parsing headers.
+pub fn encode_index_scan_get_result(entries: &[(RowId, Row)]) -> Vec<u8> {
+    let mut out = Vec::new();
+    put_u64(&mut out, entries.len() as u64);
+    for (rid, row) in entries {
+        put_u64(&mut out, rid.as_u64());
+        put_row(&mut out, row);
+    }
+    out
+}
+
 // --------------------------------------------------------------- arguments
 
 /// Encodes reducer arguments deterministically: `u64 count`, then each entry
@@ -404,9 +441,11 @@ mod tests {
     #[test]
     fn unknown_opcode_is_rejected() {
         assert!(opcode(0).is_err());
-        assert!(opcode(10).is_err());
+        assert!(opcode(12).is_err());
         assert_eq!(opcode(OP_GET).unwrap(), OP_GET);
         assert_eq!(opcode(OP_EMIT).unwrap(), OP_EMIT);
         assert_eq!(opcode(OP_LOOKUP_INDEX).unwrap(), OP_LOOKUP_INDEX);
+        assert_eq!(opcode(OP_LOOKUP_GET_UNIQUE).unwrap(), OP_LOOKUP_GET_UNIQUE);
+        assert_eq!(opcode(OP_INDEX_SCAN_GET).unwrap(), OP_INDEX_SCAN_GET);
     }
 }

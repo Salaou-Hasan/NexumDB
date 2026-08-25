@@ -15,16 +15,17 @@
 //! - Memory growth is arbitrated by [`MemoryLimiter`] against the configured
 //!   ceiling; fuel and the host-call budget bound execution.
 
-use nexum_core::{Error, RowId, binary::put_value};
+use nexum_core::{Error, Row, RowId, binary::put_value};
 use nexum_reducer::ReducerContext;
 use wasmi::errors::{MemoryError, TableError};
 use wasmi::{Caller, Error as WasmError, Linker, Memory, ResourceLimiter};
 
 use crate::abi::{
-    OP_CONTAINS, OP_DELETE, OP_EMIT, OP_GET, OP_INSERT, OP_LOOKUP_INDEX, OP_LOOKUP_UNIQUE, OP_SCAN,
-    OP_UPDATE, decode_emit, decode_insert, decode_lookup, decode_table, decode_table_row,
-    decode_update, encode_get_result, encode_insert_result, encode_lookup_result,
-    encode_scan_result, envelope_err, envelope_ok, opcode,
+    OP_CONTAINS, OP_DELETE, OP_EMIT, OP_GET, OP_INDEX_SCAN_GET, OP_INSERT, OP_LOOKUP_GET_UNIQUE,
+    OP_LOOKUP_INDEX, OP_LOOKUP_UNIQUE, OP_SCAN, OP_UPDATE, decode_emit, decode_insert,
+    decode_lookup, decode_table, decode_table_row, decode_update, encode_get_result,
+    encode_index_scan_get_result, encode_insert_result, encode_lookup_get_result,
+    encode_lookup_result, encode_scan_result, envelope_err, envelope_ok, opcode,
 };
 use crate::limits::WasmLimits;
 
@@ -252,6 +253,8 @@ fn handle_op(state: &mut HostState<'_, '_>, op: u32, args: &[u8]) -> Vec<u8> {
         Ok(OP_SCAN) => op_scan(ctx, args, max_scan_bytes),
         Ok(OP_LOOKUP_UNIQUE) => op_lookup_unique(ctx, args, max_scan_bytes),
         Ok(OP_LOOKUP_INDEX) => op_lookup_index(ctx, args, max_scan_bytes),
+        Ok(OP_LOOKUP_GET_UNIQUE) => op_lookup_get_unique(ctx, args, max_scan_bytes),
+        Ok(OP_INDEX_SCAN_GET) => op_index_scan_get(ctx, args, max_scan_bytes),
         Ok(OP_INSERT) => op_insert(ctx, args),
         Ok(OP_UPDATE) => op_update(ctx, args),
         Ok(OP_DELETE) => op_delete(ctx, args),
@@ -363,6 +366,61 @@ fn op_lookup_index(
     if bytes.len() > max_scan_bytes {
         return Err(Error::capacity(format!(
             "index lookup on table '{table}' exceeds the configured result limit"
+        )));
+    }
+    Ok(bytes)
+}
+
+/// Phase 27c-a composite: unique-index lookup + row fetch in one crossing.
+fn op_lookup_get_unique(
+    ctx: &mut ReducerContext<'_>,
+    args: &[u8],
+    max_scan_bytes: usize,
+) -> Result<Vec<u8>, Error> {
+    let (table, index, key) = decode(decode_lookup(&mut &*args))?;
+    let owners = ctx.lookup_unique(&table, &index, &key)?;
+    let Some(rid) = owners.first().copied() else {
+        // Miss: single found=false byte; the guest checks it first.
+        return Ok(vec![0]);
+    };
+    let row = ctx.get(&table, rid)?;
+    let bytes = encode_lookup_get_result(rid, row.as_ref());
+    if bytes.len() > max_scan_bytes {
+        return Err(Error::capacity(format!(
+            "lookup-get on table '{table}' exceeds the configured result limit"
+        )));
+    }
+    Ok(bytes)
+}
+
+/// Phase 27c-a composite: non-unique-index lookup + all owner rows in one
+/// crossing (bounded by the scan budget — this is an N-row read).
+fn op_index_scan_get(
+    ctx: &mut ReducerContext<'_>,
+    args: &[u8],
+    max_scan_bytes: usize,
+) -> Result<Vec<u8>, Error> {
+    let (table, index, key) = decode(decode_lookup(&mut &*args))?;
+    let owners = ctx.lookup_index(&table, &index, &key)?;
+    // Fast reject before fetching: each entry carries at least a row id.
+    if owners.len() > max_scan_bytes / 8 {
+        return Err(Error::capacity(format!(
+            "index scan-get on table '{table}' exceeds the configured result limit"
+        )));
+    }
+    let mut entries: Vec<(RowId, Row)> = Vec::with_capacity(owners.len());
+    for rid in owners {
+        let Some(row) = ctx.get(&table, rid)? else {
+            return Err(Error::internal(
+                "index scan-get: indexed row missing from the transaction view",
+            ));
+        };
+        entries.push((rid, row));
+    }
+    let bytes = encode_index_scan_get_result(&entries);
+    if bytes.len() > max_scan_bytes {
+        return Err(Error::capacity(format!(
+            "index scan-get on table '{table}' exceeds the configured result limit"
         )));
     }
     Ok(bytes)

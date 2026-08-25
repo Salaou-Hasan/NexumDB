@@ -1114,26 +1114,22 @@ impl Runtime {
         // Phase 27a: merge every queued frame stamped for THIS tick into
         // one, preserving FIFO command order — 1,000 clients of one world
         // each submitting a frame per tick must apply in the same tick, not
-        // trickle across 1,000 ticks. Whole frames are merged only while
-        // they fit the per-frame command budget; overflow stays queued for
-        // the next tick and is never silently dropped. Frames stamped for
-        // later ticks stay queued too. Arrival order is the deterministic
-        // merge order.
+        // trickle across 1,000 ticks. Same-tick frames are merged
+        // UNCONDITIONALLY: a leftover frame stamped for a completed tick
+        // would fail the deterministic frame gate next tick and permanently
+        // fail the world. Resource bounding happens at submit time
+        // (per-frame command cap, max_queued_inputs depth), never here.
+        // Later-ticked frames stay queued. Arrival order is the
+        // deterministic merge order.
         let this_tick = entry.world.tick_number();
         if frame.tick() == this_tick {
-            let budget = entry.world.config().max_commands_per_frame();
-            while frame.commands().len() < budget {
-                match entry.inputs.front() {
-                    Some(next)
-                        if next.tick() == this_tick
-                            && frame.commands().len() + next.commands().len() <= budget =>
-                    {
-                        let next = entry.inputs.pop_front().expect("front checked");
-                        for command in next.commands() {
-                            frame.push(command.clone());
-                        }
-                    }
-                    _ => break,
+            while let Some(next) = entry.inputs.front() {
+                if next.tick() != this_tick {
+                    break;
+                }
+                let next = entry.inputs.pop_front().expect("front checked");
+                for command in next.commands() {
+                    frame.push(command.clone());
                 }
             }
         }

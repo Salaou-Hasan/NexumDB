@@ -149,6 +149,7 @@ const WAT: &str = r#"(module
     (local $i i32)          ;; candidate cursor
     (local $n i32)          ;; candidate count
     (local $id i64)         ;; current candidate row id
+    (local $e i32)          ;; current candidate entry base (scan-get)
 
     ;; ---- parse args: exactly one [u64 name_len][name][u8 tag][u64 payload] ----
     (local.set $p (i32.const 0))
@@ -162,40 +163,32 @@ const WAT: &str = r#"(module
     (local.set $p (i32.add (local.get $p) (i32.const 1)))
     (local.set $caller (i64.load align=1 (local.get $p)))
 
-    ;; ---- lookup_unique("players", "primary", [caller]) -> shooter row id ----
+    ;; ---- Phase 27c-a: unique lookup + row get in ONE crossing ----
     (local.set $p (call $put_str (i32.const 0) (i32.const 90000) (i32.const 7)))
     (local.set $p (call $put_str (local.get $p) (i32.const 90100) (i32.const 7)))
     (local.set $p (call $put_u64 (local.get $p) (i64.const 1)))
     (local.set $p (call $put_value_u64 (local.get $p) (local.get $caller)))
-    (drop (call $call_op (i32.const 4) (local.get $p)))
+    (drop (call $call_op (i32.const 10) (local.get $p)))
     (if (i32.ne (i32.load align=1 (i32.const 16384)) (i32.const 0))
       (then (return (call $reject (i32.const 91200) (i32.const 14)))))
-    (if (i64.eq (i64.load align=1 (i32.const 16392)) (i64.const 0))
+    ;; found u8 @16392; rid u64 @16393; then put_row: nvalues u64 @16401;
+    ;; value k tag @16409+k*9 and payload @16410+k*9 (all columns 8-byte)
+    (if (i32.eqz (i32.load8_u align=1 (i32.const 16392)))
       (then (return (call $reject (i32.const 90600) (i32.const 11)))))
-    (local.set $self_rid (i64.load align=1 (i32.const 16400)))
-
-    ;; ---- get the shooter row ----
-    (local.set $p (call $put_str (i32.const 0) (i32.const 90000) (i32.const 7)))
-    (local.set $p (call $put_u64 (local.get $p) (local.get $self_rid)))
-    (drop (call $call_op (i32.const 1) (local.get $p)))
-    (if (i32.ne (i32.load align=1 (i32.const 16384)) (i32.const 0))
-      (then (return (call $reject (i32.const 91200) (i32.const 14)))))
-    (if (i32.eq (i32.load8_u align=1 (i32.const 16392)) (i32.const 0))
-      (then (return (call $reject (i32.const 90600) (i32.const 11)))))
-    (if (i64.ne (i64.load align=1 (i32.const 16393)) (i64.const 11))
+    (local.set $self_rid (i64.load align=1 (i32.const 16393)))
+    (if (i64.ne (i64.load align=1 (i32.const 16401)) (i64.const 11))
       (then (return (call $reject (i32.const 91100) (i32.const 15)))))
-    ;; values at 16401; value k payload at 16402 + k*9
-    (local.set $s0 (i64.load align=1 (i32.const 16402)))
-    (local.set $s1 (i64.load align=1 (i32.const 16411)))
-    (local.set $s2 (i64.load align=1 (i32.const 16420)))
-    (local.set $s3 (i64.load align=1 (i32.const 16429)))
-    (local.set $s4 (i64.load align=1 (i32.const 16438)))
-    (local.set $s5 (i64.load align=1 (i32.const 16447)))
-    (local.set $s6 (i64.load align=1 (i32.const 16456)))
-    (local.set $s7 (i64.load align=1 (i32.const 16465)))
-    (local.set $s8 (i64.load align=1 (i32.const 16474)))
-    (local.set $s9 (i64.load align=1 (i32.const 16483)))
-    (local.set $s10 (i64.load align=1 (i32.const 16492)))
+    (local.set $s0 (i64.load align=1 (i32.const 16410)))
+    (local.set $s1 (i64.load align=1 (i32.const 16419)))
+    (local.set $s2 (i64.load align=1 (i32.const 16428)))
+    (local.set $s3 (i64.load align=1 (i32.const 16437)))
+    (local.set $s4 (i64.load align=1 (i32.const 16446)))
+    (local.set $s5 (i64.load align=1 (i32.const 16455)))
+    (local.set $s6 (i64.load align=1 (i32.const 16464)))
+    (local.set $s7 (i64.load align=1 (i32.const 16473)))
+    (local.set $s8 (i64.load align=1 (i32.const 16482)))
+    (local.set $s9 (i64.load align=1 (i32.const 16491)))
+    (local.set $s10 (i64.load align=1 (i32.const 16500)))
 
     ;; ---- validate the shooter ----
     (if (i64.eq (local.get $s5) (i64.const 0))
@@ -219,45 +212,56 @@ const WAT: &str = r#"(module
     (if (i64.eq (local.get $s8) (i64.const 3))
       (then (local.set $aimx (i64.sub (local.get $s1) (i64.const 1)))))
 
-    ;; ---- lookup_index("players", "pos", [aimx, aimy]) -> candidate ids ----
+    ;; ---- Phase 27c-a: index lookup + all candidate rows in ONE crossing ----
     (local.set $p (call $put_str (i32.const 0) (i32.const 90000) (i32.const 7)))
     (local.set $p (call $put_str (local.get $p) (i32.const 90200) (i32.const 3)))
     (local.set $p (call $put_u64 (local.get $p) (i64.const 2)))
     (local.set $p (call $put_value_i64 (local.get $p) (local.get $aimx)))
     (local.set $p (call $put_value_i64 (local.get $p) (local.get $aimy)))
-    (drop (call $call_op (i32.const 9) (local.get $p)))
+    (drop (call $call_op (i32.const 11) (local.get $p)))
     (if (i32.ne (i32.load align=1 (i32.const 16384)) (i32.const 0))
       (then (return (call $reject (i32.const 91200) (i32.const 14)))))
     (local.set $n (i32.wrap_i64 (i64.load align=1 (i32.const 16392))))
     (local.set $i (i32.const 0))
 
-    ;; ---- candidate loop: pick the first alive non-self row at the cell ----
+    ;; ---- candidate loop over in-memory entries (stride 115 bytes) ----
+    ;; entry i base E = 16400 + i*115: rid u64 @E; row: nvalues @E+8;
+    ;; value k tag @E+16+k*9 and payload @E+17+k*9. alive = value 5 ->
+    ;; payload @E+62.
     (block $cand_done
       (loop $cand
         (br_if $cand_done (i32.ge_u (local.get $i) (local.get $n)))
-        (local.set $id
-          (i64.load align=1 (i32.add (i32.const 16400) (i32.mul (local.get $i) (i32.const 8)))))
+        (local.set $e (i32.add (i32.const 16400) (i32.mul (local.get $i) (i32.const 115))))
+        (local.set $id (i64.load align=1 (local.get $e)))
         (if (i32.eqz (local.get $t_found))
           (then
             (if (i64.ne (local.get $id) (local.get $self_rid))
               (then
-                (if (call $is_alive_row (local.get $id))
+                (if (i64.ne (i64.load align=1 (i32.add (local.get $e) (i32.const 62))) (i64.const 0))
                   (then
                     (local.set $t_found (i32.const 1))
                     (local.set $t_rid (local.get $id))
-                    (local.set $t0 (i64.load align=1 (i32.const 16402)))
-                    (local.set $t1 (i64.load align=1 (i32.const 16411)))
-                    (local.set $t2 (i64.load align=1 (i32.const 16420)))
-                    (local.set $t3 (i64.load align=1 (i32.const 16429)))
-                    (local.set $t4 (i64.load align=1 (i32.const 16438)))
-                    (local.set $t5 (i64.load align=1 (i32.const 16447)))
-                    (local.set $t6 (i64.load align=1 (i32.const 16456)))
-                    (local.set $t7 (i64.load align=1 (i32.const 16465)))
-                    (local.set $t8 (i64.load align=1 (i32.const 16474)))
-                    (local.set $t9 (i64.load align=1 (i32.const 16483)))
-                    (local.set $t10 (i64.load align=1 (i32.const 16492)))))))))
+                    (local.set $t0 (i64.load align=1 (i32.add (local.get $e) (i32.const 17))))
+                    (local.set $t1 (i64.load align=1 (i32.add (local.get $e) (i32.const 26))))
+                    (local.set $t2 (i64.load align=1 (i32.add (local.get $e) (i32.const 35))))
+                    (local.set $t3 (i64.load align=1 (i32.add (local.get $e) (i32.const 44))))
+                    (local.set $t4 (i64.load align=1 (i32.add (local.get $e) (i32.const 53))))
+                    (local.set $t5 (i64.load align=1 (i32.add (local.get $e) (i32.const 62))))
+                    (local.set $t6 (i64.load align=1 (i32.add (local.get $e) (i32.const 71))))
+                    (local.set $t7 (i64.load align=1 (i32.add (local.get $e) (i32.const 80))))
+                    (local.set $t8 (i64.load align=1 (i32.add (local.get $e) (i32.const 89))))
+                    (local.set $t9 (i64.load align=1 (i32.add (local.get $e) (i32.const 98))))
+                    (local.set $t10 (i64.load align=1 (i32.add (local.get $e) (i32.const 107))))
+                  )
+                )
+              )
+            )
+          )
+        )
         (local.set $i (i32.add (local.get $i) (i32.const 1)))
-        (br $cand)))
+        (br $cand)
+      )
+    )
 
     ;; ---- consume the shot: update the shooter row (cooldown, ammo) ----
     (local.set $p (call $put_str (i32.const 0) (i32.const 90000) (i32.const 7)))
