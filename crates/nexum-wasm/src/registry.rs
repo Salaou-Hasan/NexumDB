@@ -25,10 +25,10 @@ use nexum_reducer::{ReducerArgs, ReducerContext, ReducerEvent, ReducerResult, fi
 use nexum_table::TableStore;
 use nexum_tx::Transaction;
 use wasmi::core::TrapCode;
-use wasmi::{Config, EnforcedLimits, Engine, Linker, StackLimits, Store};
+use wasmi::{Config, EnforcedLimits, Engine, StackLimits, Store};
 
 use crate::abi::{RET_REJECT, encode_args};
-use crate::host::{HostState, define_host};
+use crate::host::HostState;
 use crate::limits::WasmLimits;
 use crate::module::{ENTRY_NAME, WasmReducerModule};
 
@@ -262,9 +262,12 @@ fn run_module(
         t.store_setup_ns = stage_start.elapsed().as_nanos() as u64;
     }
     let instantiate_start = std::time::Instant::now();
-    let mut linker = Linker::new(engine);
-    define_host(&mut linker)
-        .map_err(|e| Error::internal(format!("cannot define host functions: {e}")))?;
+    // Phase 22.5: reuse a pre-configured Linker per thread. The host ABI
+    // definition ("nexum","op") is identical across all invocations and the
+    // closure captures nothing — it is Send + Sync + 'static regardless of
+    // HostState lifetimes (see host.rs docs). Caching eliminates Linker::new
+    // + define_host (~2-3µs) per WASM call; the clone is ~200ns.
+    let linker = crate::linker_cache::clone_cached_linker(engine);
     let instance = linker
         .instantiate(&mut store, module.compiled())
         .and_then(|pre| pre.start(&mut store))

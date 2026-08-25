@@ -74,6 +74,7 @@
 mod abi;
 mod host;
 mod limits;
+pub(crate) mod linker_cache;
 mod module;
 mod registry;
 
