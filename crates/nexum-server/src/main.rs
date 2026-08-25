@@ -161,6 +161,8 @@ fn demo_factory() -> WorldFactory {
                 .unwrap();
             let mut wasm = WasmModuleRegistry::new(WasmLimits::default()).unwrap();
             wasm.register("ping_wasm", 1, ping_module()).unwrap();
+            // Stateless scratch-memory module: safe for instance pooling.
+            wasm.set_poolable("ping_wasm", true).unwrap();
             world.set_wasm(wasm);
             Ok(world)
         },

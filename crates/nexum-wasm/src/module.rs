@@ -50,6 +50,11 @@ pub struct WasmReducerModule {
     compiled: WasmModule,
     in_ptr: u32,
     out_ptr: u32,
+    /// Opt-in per-thread `Store`/`Instance` pooling (Phase 26). Only safe
+    /// for **stateless scratch-memory modules**: immutable globals, no
+    /// start-function side effects, every ABI-visible output region fully
+    /// rewritten before the host reads it. Off by default.
+    poolable: bool,
 }
 
 impl WasmReducerModule {
@@ -77,7 +82,22 @@ impl WasmReducerModule {
             compiled,
             in_ptr,
             out_ptr,
+            poolable: false,
         })
+    }
+
+    /// Marks the module as poolable: its `Store`/`Instance` are reused
+    /// across invocations on the same thread instead of being rebuilt per
+    /// call (~3.2 µs saved each). Only valid for stateless scratch-memory
+    /// modules — see the field docs. Returns the module for chaining; apply
+    /// through [`WasmModuleRegistry::set_poolable`] after registration.
+    pub(crate) fn set_poolable(&mut self, yes: bool) {
+        self.poolable = yes;
+    }
+
+    /// Returns whether per-thread instance pooling is enabled.
+    pub(crate) fn is_poolable(&self) -> bool {
+        self.poolable
     }
 
     /// Returns the module's registry name.

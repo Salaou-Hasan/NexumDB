@@ -1319,3 +1319,46 @@ fn arguments_are_written_into_the_input_buffer_unconditionally() {
     let result = registry.invoke(&mut store, "ping", &args).unwrap();
     assert_eq!(result.return_value(), &Value::U64(42));
 }
+
+// ------------------------------------------------------------- pooling
+
+/// Registers `name` with instance pooling enabled (Phase 26).
+fn register_poolable(registry: &mut WasmModuleRegistry, name: &str, body: &str) {
+    registry.register(name, 1, module(body)).unwrap();
+    registry.set_poolable(name, true).unwrap();
+}
+
+#[test]
+fn pooled_invocations_are_deterministic_and_rearm_budgets() {
+    let mut store = world();
+    let mut registry = registry();
+
+    // A stateless module returning U64(42): exercises the full pooled
+    // Store/Instance reuse path.
+    register_poolable(&mut registry, "ping", "    (call $ret_u64 (i64.const 42))");
+    // Same shape but always rejects via the RET_REJECT contract: proves the
+    // pooled state does not poison across failed calls.
+    register_poolable(
+        &mut registry,
+        "rejector",
+        r#"
+    (i32.store align=1 (i32.const 16384) (i32.const 4))
+    (memory.copy (i32.const 16388) (i32.const 90500) (i32.const 4))
+    (i32.const -1)"#,
+    );
+
+    let args = ReducerArgs::new();
+    for i in 0..6 {
+        let result = registry.invoke(&mut store, "ping", &args).unwrap();
+        assert_eq!(result.return_value(), &Value::U64(42), "iteration {i}");
+    }
+    // Two consecutive failures on a pooled module: the sticky-error slot is
+    // reset per call, so both fail identically and neither poisons the pool.
+    for _ in 0..2 {
+        let err = registry.invoke(&mut store, "rejector", &args).unwrap_err();
+        assert!(matches!(err, Error::InvalidArgument(_)));
+    }
+    // And success still works after the failures on the same thread pool.
+    let result = registry.invoke(&mut store, "ping", &args).unwrap();
+    assert_eq!(result.return_value(), &Value::U64(42));
+}

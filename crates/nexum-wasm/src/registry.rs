@@ -1,5 +1,5 @@
 //! The WASM module registry ([`WasmModuleRegistry`]) and the `invoke` entry
-//! point (design doc §9, ADR-007 D6).
+//! point (design doc Â§9, ADR-007 D6).
 //!
 //! The registry owns the fuel-enabled engine, the resource limits, and a
 //! deterministic map of validated, compiled modules. `invoke` is the **only**
@@ -7,16 +7,16 @@
 //!
 //! ```text
 //! begin one transaction
-//!   → build a ReducerContext (the host owns it; the guest never sees it)
-//!   → instantiate the module with fresh host state and run the entry point
-//!   → sticky ABI errors / traps / fuel exhaustion / malformed returns fail
-//!   → finish_invocation: commit on success, abort otherwise
+//!   â†’ build a ReducerContext (the host owns it; the guest never sees it)
+//!   â†’ instantiate the module with fresh host state and run the entry point
+//!   â†’ sticky ABI errors / traps / fuel exhaustion / malformed returns fail
+//!   â†’ finish_invocation: commit on success, abort otherwise
 //! ```
 //!
 //! `finish_invocation` is the same shared decision point the native registry
 //! uses (ADR-006 D1 / ADR-007 D6), so both paths have identical transaction
 //! semantics. The caller appends `result.changes` to the WAL with
-//! `result.tx_id` — the Phase 5 boundary is untouched.
+//! `result.tx_id` â€” the Phase 5 boundary is untouched.
 
 use std::collections::BTreeMap;
 
@@ -87,6 +87,18 @@ impl WasmModuleRegistry {
         self.modules.get(name)
     }
 
+    /// Opts a registered module into per-thread `Store`/`Instance` pooling
+    /// (Phase 26). Only valid for stateless scratch-memory modules:
+    /// immutable globals, no start-function side effects, every ABI output
+    /// region rewritten before the host reads it.
+    pub fn set_poolable(&mut self, name: &str, yes: bool) -> Result<()> {
+        self.modules
+            .get_mut(name)
+            .ok_or_else(|| Error::not_found(format!("wasm module '{name}' is not registered")))?
+            .set_poolable(yes);
+        Ok(())
+    }
+
     /// Returns `true` if a module with the given name is registered.
     pub fn contains(&self, name: &str) -> bool {
         self.modules.contains_key(name)
@@ -116,9 +128,9 @@ impl WasmModuleRegistry {
     /// transaction** (ADR-007 D6).
     ///
     /// On success the result carries the committed changes, the emitted
-    /// events, and the encoded return value. On any failure — reducer
+    /// events, and the encoded return value. On any failure â€” reducer
     /// rejection, sticky ABI error, trap, fuel exhaustion, malformed return,
-    /// OCC conflict — the transaction is aborted through the shared
+    /// OCC conflict â€” the transaction is aborted through the shared
     /// `finish_invocation` path: zero authoritative mutations, zero events,
     /// zero committed changes.
     pub fn invoke(
@@ -181,15 +193,15 @@ impl WasmModuleRegistry {
     /// This is the simulation tick's orchestration hook: a WASM reducer
     /// invoked during a tick runs inside the tick's transaction so the whole
     /// tick commits atomically (or aborts completely). The sandbox is the
-    /// same — the same host ABI, fuel/memory/host-call budgets, sticky
-    /// error, and trap handling — only the transaction ownership differs:
+    /// same â€” the same host ABI, fuel/memory/host-call budgets, sticky
+    /// error, and trap handling â€” only the transaction ownership differs:
     /// the caller owns the transaction and the commit/abort decision. On
     /// success the encoded return value and the emitted events (in `emit`
     /// order) are returned; on any failure the error propagates and the
     /// events are dropped.
     ///
-    /// Standalone [`invoke`](Self::invoke) — one invocation = one
-    /// transaction — is unchanged and remains the external entry point.
+    /// Standalone [`invoke`](Self::invoke) â€” one invocation = one
+    /// transaction â€” is unchanged and remains the external entry point.
     pub fn invoke_in_tx(
         &self,
         store: &TableStore,
@@ -241,7 +253,232 @@ pub struct WasmStageTimes {
 /// any guest code runs, and the entry point is the only guest function ever
 /// called. `args` are encoded deterministically into the guest input buffer.
 /// When `times` is `Some`, each stage is timed (Phase 22 instrumentation).
+///
+/// Phase 26: modules flagged **poolable** reuse a per-thread
+/// `Store`/`Instance` across invocations instead of rebuilding them per call
+/// (~3.3 Âµs saved each). Pooling is gated behind an explicit opt-in because
+/// it requires a stateless scratch-memory module (immutable globals, every
+/// ABI output region rewritten before the host reads it); between calls the
+/// pooled state always holds `ctx: None`, so no reference outlives its
+/// referent.
 fn run_module(
+    engine: &Engine,
+    module: &WasmReducerModule,
+    ctx: &mut ReducerContext<'_>,
+    limits: &WasmLimits,
+    args: &ReducerArgs,
+    mut times: Option<&mut WasmStageTimes>,
+) -> Result<Value> {
+    if module.is_poolable() {
+        run_module_pooled(engine, module, ctx, limits, args, times.as_deref_mut())
+    } else {
+        run_module_fresh(engine, module, ctx, limits, args, times)
+    }
+}
+
+/// A per-thread pooled WASM invocation: everything expensive about an
+/// invocation (`Store` + host state, instantiation, export lookup) built
+/// once and reused while the engine and module stay the same.
+struct PooledInvocation {
+    engine: Engine,
+    /// Identity of the originating module (its registry address).
+    module_key: usize,
+    /// Stashed with `ctx: None`; see `HostState::reset_for_call`.
+    store: Store<HostState<'static, 'static>>,
+    /// Kept for the lifetime of the pooled unit; exports resolve through it.
+    #[allow(dead_code)]
+    instance: wasmi::Instance,
+    memory: wasmi::Memory,
+    run: wasmi::TypedFunc<(), i32>,
+}
+
+impl PooledInvocation {
+    fn matches(&self, engine: &Engine, module_key: usize) -> bool {
+        Engine::same(&self.engine, engine) && self.module_key == module_key
+    }
+}
+
+thread_local! {
+    static POOL: std::cell::RefCell<Option<PooledInvocation>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The pooled invocation path (Phase 26).
+fn run_module_pooled(
+    engine: &Engine,
+    module: &WasmReducerModule,
+    ctx: &mut ReducerContext<'_>,
+    limits: &WasmLimits,
+    args: &ReducerArgs,
+    mut times: Option<&mut WasmStageTimes>,
+) -> Result<Value> {
+    let module_key = module as *const WasmReducerModule as usize;
+    let total_start = std::time::Instant::now();
+
+    // Take the per-thread slot out for the duration of the call (avoids
+    // holding the RefCell borrow across guest execution).
+    let mut pooled = match POOL.with(|cell| cell.borrow_mut().take()) {
+        Some(p) if p.matches(engine, module_key) => p,
+        stale_or_none => {
+            let _ = stale_or_none; // mismatched engine/module: dropped here
+            let stage_start = std::time::Instant::now();
+            let mut store = Store::new(engine, HostState::new(None, limits));
+            store.limiter(|state: &mut HostState<'_, '_>| &mut state.memory_limiter);
+            store
+                .set_fuel(limits.max_fuel)
+                .map_err(|e| Error::internal(format!("cannot arm fuel: {e}")))?;
+            let instantiate_start = std::time::Instant::now();
+            let linker = crate::linker_cache::clone_cached_linker(engine);
+            let instance = linker
+                .instantiate(&mut store, module.compiled())
+                .and_then(|pre| pre.start(&mut store))
+                .map_err(|e| Error::internal(format!("cannot instantiate module: {e}")))?;
+            let memory = instance
+                .get_export(&store, "memory")
+                .and_then(|export| export.into_memory())
+                .ok_or_else(|| Error::internal("validated module has no memory export"))?;
+            let run = instance
+                .get_typed_func::<(), i32>(&store, ENTRY_NAME)
+                .map_err(|e| {
+                    Error::internal(format!("cannot access the reducer entry point: {e}"))
+                })?;
+            if let Some(ref mut t) = times {
+                t.store_setup_ns = (instantiate_start - stage_start).as_nanos() as u64;
+                t.instantiate_ns = instantiate_start.elapsed().as_nanos() as u64;
+            }
+            // SAFETY: the stashed state holds `ctx: None` and a limits
+            // reference that is overwritten by `reset_for_call` before any
+            // use, so no borrowed data outlives its referent (same argument
+            // as the per-thread Linker cache).
+            let store: Store<HostState<'static, 'static>> = unsafe { std::mem::transmute(store) };
+            PooledInvocation {
+                engine: engine.clone(),
+                module_key,
+                store,
+                instance,
+                memory,
+                run,
+            }
+        }
+    };
+
+    let outcome = (|| -> Result<Value> {
+        // SAFETY: reinstate this invocation's real borrows through
+        // `reset_for_call`; released unconditionally below.
+        let store: &mut Store<HostState<'_, '_>> = unsafe {
+            &mut *(&mut pooled.store as *mut Store<HostState<'static, 'static>> as *mut _)
+        };
+        store.data_mut().reset_for_call(Some(ctx), limits);
+        store
+            .set_fuel(limits.max_fuel)
+            .map_err(|e| Error::internal(format!("cannot arm fuel: {e}")))?;
+
+        let encode_start = std::time::Instant::now();
+        let mut args_bytes = Vec::new();
+        encode_args(&mut args_bytes, args);
+        if args_bytes.len() > limits.max_args_bytes {
+            return Err(Error::capacity(format!(
+                "reducer arguments exceed the configured limit of {} bytes",
+                limits.max_args_bytes
+            )));
+        }
+        pooled
+            .memory
+            .write(&mut *store, module.in_ptr() as usize, &args_bytes)
+            .map_err(|e| {
+                Error::internal(format!(
+                    "cannot write reducer arguments into guest memory: {e}"
+                ))
+            })?;
+        if let Some(ref mut t) = times {
+            t.encode_ns = encode_start.elapsed().as_nanos() as u64;
+        }
+
+        let exec_start = std::time::Instant::now();
+        let returned = match pooled.run.call(&mut *store, ()) {
+            Ok(returned) => returned,
+            Err(error) if error.as_trap_code() == Some(TrapCode::OutOfFuel) => {
+                return Err(Error::capacity(
+                    "wasm reducer exhausted its fuel budget (max_fuel exceeded)",
+                ));
+            }
+            Err(error) => {
+                return Err(Error::invalid_argument(format!(
+                    "wasm reducer trapped during execution: {error}"
+                )));
+            }
+        };
+        if let Some(ref mut t) = times {
+            t.exec_ns = exec_start.elapsed().as_nanos() as u64;
+        }
+
+        if let Some(error) = store.data().abi_error() {
+            return Err(error.clone());
+        }
+
+        if returned == RET_REJECT as i32 {
+            let mut len_bytes = [0u8; 4];
+            pooled
+                .memory
+                .read(&mut *store, module.out_ptr() as usize, &mut len_bytes)
+                .map_err(|e| {
+                    Error::internal(format!("cannot read rejection message length: {e}"))
+                })?;
+            let msg_len = u32::from_le_bytes(len_bytes) as usize;
+            if msg_len > limits.max_result_bytes.saturating_sub(4) {
+                return Err(Error::capacity(
+                    "rejection message exceeds the configured result limit",
+                ));
+            }
+            let mut msg = vec![0u8; msg_len];
+            pooled
+                .memory
+                .read(&mut *store, module.out_ptr() as usize + 4, &mut msg)
+                .map_err(|e| Error::internal(format!("cannot read rejection message: {e}")))?;
+            let msg = String::from_utf8(msg)
+                .map_err(|_| Error::invalid_argument("rejection message is not valid UTF-8"))?;
+            return Err(Error::invalid_argument(msg));
+        }
+
+        let result_start = std::time::Instant::now();
+        let n = returned as usize;
+        if n > limits.max_result_bytes {
+            return Err(Error::capacity(format!(
+                "reducer return value exceeds the configured limit of {} bytes",
+                limits.max_result_bytes
+            )));
+        }
+        let mut buf = vec![0u8; n];
+        pooled
+            .memory
+            .read(&mut *store, module.out_ptr() as usize, &mut buf)
+            .map_err(|e| Error::internal(format!("cannot read reducer return value: {e}")))?;
+        let mut cursor: &[u8] = &buf;
+        let value = get_value(&mut cursor)
+            .map_err(|_| Error::invalid_argument("reducer return value is malformed"))?;
+        if let Some(ref mut t) = times {
+            t.result_ns = result_start.elapsed().as_nanos() as u64;
+        }
+        Ok(value)
+    })();
+
+    // Unconditional cleanup on every exit path: drop the invocation's
+    // borrows, then return the pooled state to the thread slot.
+    {
+        let store_ptr: *mut Store<HostState<'static, 'static>> = &mut pooled.store;
+        // SAFETY: pointer derived from the same value; no other reference
+        // is live here (the closure above has ended).
+        unsafe { (*store_ptr).data_mut().release_ctx() };
+    }
+    POOL.with(|cell| *cell.borrow_mut() = Some(pooled));
+    if let Some(ref mut t) = times {
+        t.total_ns = total_start.elapsed().as_nanos() as u64;
+    }
+    outcome
+}
+
+/// The legacy fresh-instantiation path (unchanged semantics): every call
+/// builds a new `Store`/`Instance` and drops them afterwards.
+fn run_module_fresh(
     engine: &Engine,
     module: &WasmReducerModule,
     ctx: &mut ReducerContext<'_>,
@@ -264,9 +501,9 @@ fn run_module(
     let instantiate_start = std::time::Instant::now();
     // Phase 22.5: reuse a pre-configured Linker per thread. The host ABI
     // definition ("nexum","op") is identical across all invocations and the
-    // closure captures nothing — it is Send + Sync + 'static regardless of
+    // closure captures nothing â€” it is Send + Sync + 'static regardless of
     // HostState lifetimes (see host.rs docs). Caching eliminates Linker::new
-    // + define_host (~2-3µs) per WASM call; the clone is ~200ns.
+    // + define_host (~2-3Âµs) per WASM call; the clone is ~200ns.
     let linker = crate::linker_cache::clone_cached_linker(engine);
     let instance = linker
         .instantiate(&mut store, module.compiled())

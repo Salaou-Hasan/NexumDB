@@ -64,6 +64,31 @@ impl<'a, 'b> HostState<'a, 'b> {
     pub(crate) fn abi_error(&self) -> Option<&Error> {
         self.abi_error.as_ref()
     }
+
+    /// Re-arms the host state for one pooled invocation (Phase 26): swaps in
+    /// the current call's context and limits, and resets every per-call
+    /// budget/flag so a reused `Store` behaves exactly like a fresh one.
+    ///
+    /// # Safety contract
+    /// Callers must clear `ctx` back to `None` before the invocation's
+    /// borrows end; while stashed between calls the pooled state always
+    /// holds `ctx: None`, so no reference outlives its referent.
+    pub(crate) fn reset_for_call(
+        &mut self,
+        ctx: Option<&'a mut ReducerContext<'b>>,
+        limits: &'a WasmLimits,
+    ) {
+        self.ctx = ctx;
+        self.limits = limits;
+        self.host_calls_remaining = limits.max_host_calls;
+        self.abi_error = None;
+    }
+
+    /// Releases the invocation context (`ctx: None`). Called on every exit
+    /// path of a pooled invocation, including errors and traps.
+    pub(crate) fn release_ctx(&mut self) {
+        self.ctx = None;
+    }
 }
 
 /// The memory ceiling applied to every `memory.grow`.

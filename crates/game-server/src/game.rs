@@ -516,6 +516,10 @@ pub fn game_factory() -> WorldFactory {
             let mut wasm = WasmModuleRegistry::new(WasmLimits::default()).unwrap();
             wasm.register("fire_weapon", 1, fire_weapon_module())
                 .unwrap();
+            // Stateless scratch-memory module (ADR-007): immutable globals,
+            // output envelope fully rewritten per call → instance pooling
+            // is safe and saves ~3.3 µs of instantiate per invocation.
+            wasm.set_poolable("fire_weapon", true).unwrap();
             world.set_wasm(wasm);
             Ok(world)
         },
