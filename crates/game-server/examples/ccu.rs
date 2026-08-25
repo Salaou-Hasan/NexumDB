@@ -1479,10 +1479,6 @@ fn main() {
     let class = if silently_lost {
         "FAILED  accepted work was dropped"
     } else if any_failure {
-        let evs_diag = server.drain_events();
-        for ev in evs_diag.iter().take(8) {
-            println!("EVT {ev:?}");
-        }
         "FAILED - tick failures observed"
     } else if p99_over_budget {
         if p99 > tick_budget.saturating_mul(2) {
