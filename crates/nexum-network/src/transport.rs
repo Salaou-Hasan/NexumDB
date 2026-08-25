@@ -71,6 +71,14 @@ pub trait Connection: Send + Sync {
     /// closes the connection).
     fn try_recv_frame(&mut self) -> Result<Option<Arc<[u8]>>, TransportError>;
 
+    /// Whether any inbound data is pending on this connection's receiving
+    /// side. When `false`, callers can skip `try_recv_frame` entirely —
+    /// implementations should make this a single atomic load. Defaults to
+    /// `true` so transports without a pending-data flag stay correct.
+    fn has_pending_data(&self) -> bool {
+        true
+    }
+
     /// Buffers one outbound frame for delivery.  Returns
     /// [`TransportError::Full`] when the peer's queue is at capacity (never
     /// blocks).
@@ -227,6 +235,15 @@ impl MemoryTransport {
 impl Connection for MemoryConnection {
     fn peer(&self) -> &str {
         &self.peer
+    }
+
+    fn has_pending_data(&self) -> bool {
+        // Single relaxed atomic load — O(1), no lock, no ring access.
+        if self.server_side {
+            self.has_inbound.load(Ordering::Relaxed)
+        } else {
+            self.has_outbound.load(Ordering::Relaxed)
+        }
     }
 
     fn try_recv_frame(&mut self) -> Result<Option<Arc<[u8]>>, TransportError> {
@@ -415,6 +432,12 @@ impl TcpConnection {
     ) -> Result<Self, NetworkError> {
         let stream = TcpStream::connect(addr)
             .map_err(|error| NetworkError::Internal(format!("tcp connect failed: {error}")))?;
+        // Phase 26: disable Nagle. The protocol sends many small frames at
+        // tick rate; Nagle would coalesce/delay them for up to ~40 ms on
+        // real networks, dominating the latency budget.
+        stream
+            .set_nodelay(true)
+            .map_err(|error| NetworkError::Internal(format!("tcp set_nodelay failed: {error}")))?;
         stream.set_nonblocking(true).map_err(|error| {
             NetworkError::Internal(format!("tcp set_nonblocking failed: {error}"))
         })?;
@@ -562,6 +585,11 @@ impl TcpTransport {
     ) -> Result<Option<TcpConnection>, NetworkError> {
         match self.listener.accept() {
             Ok((stream, _addr)) => {
+                // Phase 26: NODELAY on server-accepted sockets too — same
+                // Nagle rationale as `TcpConnection::connect`.
+                stream.set_nodelay(true).map_err(|error| {
+                    NetworkError::Internal(format!("tcp set_nodelay failed: {error}"))
+                })?;
                 stream.set_nonblocking(true).map_err(|error| {
                     NetworkError::Internal(format!("tcp set_nonblocking failed: {error}"))
                 })?;

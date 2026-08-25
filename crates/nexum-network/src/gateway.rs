@@ -359,6 +359,14 @@ impl NetworkGateway {
                 continue;
             }
             let connection = ConnectionId::from_u64(idx as u64);
+            // O(1) skip: connections with no pending inbound data (single
+            // relaxed atomic load) never touch the slab borrow or ring.
+            if !self
+                .conn_get(connection)
+                .is_some_and(|e| e.connection.has_pending_data())
+            {
+                continue;
+            }
             loop {
                 let frame_result = {
                     match self.conn_get_mut(connection) {
@@ -385,6 +393,11 @@ impl NetworkGateway {
         // Phase 2: Decode and dispatch — process the contiguous frame
         // buffer. All frames are already collected, so decode operates
         // on sequential memory with no slab lookups between frames.
+        //
+        // Note: parallelizing this decode pass with rayon was measured
+        // net-negative (p50 +100 µs, p99 +0.7 ms at E@1K) — dispatch, not
+        // decode, dominates the inbound phase, and pool scheduling overhead
+        // is not repaid. Keep it serial.
         for (connection, frame) in frames {
             match protocol::decode_client(&frame, max_payload) {
                 Ok(message) => {
@@ -781,29 +794,28 @@ impl NetworkGateway {
         }
         // O(log n) per-connection pending-call bookkeeping (Phase 18
         // finding): the previous `pending_calls.values()` scans were O(pending)
-        // per call, i.e. O(clients²) on a movement tick.
-        let pending_for_connection = self
-            .pending_by_connection
-            .get(&connection)
-            .map_or(0, BTreeSet::len);
-        if pending_for_connection >= self.config.max_pending_calls_per_connection() {
-            let _ =
-                self.send_reducer_error(connection, request_id, "too many pending reducer calls");
-            self.metrics.reducer_calls_rejected += 1;
-            return;
-        }
-        // A client reusing the same request id while one of its own calls is
-        // still pending would be ambiguous *to that client* (it correlates
-        // by its own id); reject defensively. Cross-client ids never collide
-        // here because correlation uses the gateway-allocated id below.
-        let client_id_reused = self
-            .pending_by_connection
-            .get(&connection)
-            .is_some_and(|ids| ids.contains(&request_id));
-        if client_id_reused {
-            let _ = self.send_reducer_error(connection, request_id, "request id already pending");
-            self.metrics.reducer_calls_rejected += 1;
-            return;
+        // per call, i.e. O(clients×) on a movement tick. One lookup serves
+        // both the cap check and the duplicate-id check.
+        if let Some(ids) = self.pending_by_connection.get(&connection) {
+            if ids.len() >= self.config.max_pending_calls_per_connection() {
+                let _ = self.send_reducer_error(
+                    connection,
+                    request_id,
+                    "too many pending reducer calls",
+                );
+                self.metrics.reducer_calls_rejected += 1;
+                return;
+            }
+            // A client reusing the same request id while one of its own calls is
+            // still pending would be ambiguous *to that client* (it correlates
+            // by its own id); reject defensively. Cross-client ids never collide
+            // here because correlation uses the gateway-allocated id below.
+            if ids.contains(&request_id) {
+                let _ =
+                    self.send_reducer_error(connection, request_id, "request id already pending");
+                self.metrics.reducer_calls_rejected += 1;
+                return;
+            }
         }
         // Policy check using a borrow — no clone needed.
         {
