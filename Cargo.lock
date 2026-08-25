@@ -250,6 +250,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "nexum-integration-tests"
+version = "0.1.0"
+dependencies = [
+ "nexum-core",
+ "nexum-simulation",
+ "nexum-subscription",
+ "nexum-table",
+ "nexum-tx",
+ "nexum-wal",
+]
+
+[[package]]
 name = "nexum-network"
 version = "0.1.0"
 dependencies = [

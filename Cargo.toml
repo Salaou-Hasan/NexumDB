@@ -16,6 +16,7 @@ members = [
     "crates/nexum-game-server",
     "crates/nexum-server",
     "crates/game-server",
+    "crates/nexum-integration-tests",
     "crates/nexum-alloc-count",
     "benchmarks/nexum-bench",
 ]

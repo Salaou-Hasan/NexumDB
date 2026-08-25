@@ -6,9 +6,9 @@
 //! `ccu-alloc` feature, and counting can be disabled at runtime so timing
 //! runs see only a single relaxed atomic load per allocation.
 //!
-//! It is deliberately the one crate in the workspace that implements
-//! `unsafe impl GlobalAlloc` — every other crate keeps
-//! `unsafe_code = forbid`. The `unsafe` here is the unavoidable contract of
+//! It is one of only three workspace locations containing unsafe code (the
+//! others are the `nexum-network` SPSC ring and the `nexum-wasm` linker
+//! cache). The `unsafe` here is the unavoidable contract of
 //! [`GlobalAlloc`]; the implementation merely forwards to [`System`] and
 //! bumps atomics.
 //!

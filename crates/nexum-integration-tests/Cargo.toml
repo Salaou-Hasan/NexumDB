@@ -1,0 +1,18 @@
+[package]
+name = "nexum-integration-tests"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Nexum: cross-crate integration tests spanning multiple workspace crates."
+
+[dependencies]
+nexum-core.workspace = true
+nexum-table.workspace = true
+nexum-tx.workspace = true
+nexum-wal.workspace = true
+nexum-subscription.workspace = true
+nexum-simulation.workspace = true
+
+[lints]
+workspace = true

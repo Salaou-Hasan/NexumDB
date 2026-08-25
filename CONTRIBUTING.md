@@ -39,7 +39,7 @@ cargo run -p game-server -- client --name alice
 
 ## Code Style
 
-- **No unsafe code** — `unsafe_code = forbid` is enforced across all crates (except `nexum-alloc-count` for profiling).
+- **Contained unsafe** — the workspace lint is `unsafe_code = allow` (since Phase 23–25), but unsafe is confined to three audited modules: `nexum-network/src/spsc.rs`, `nexum-wasm/src/linker_cache.rs`, and `nexum-alloc-count`. Do not add new unsafe without strong justification.
 - **Clippy clean** — All code must pass `cargo clippy --workspace --all-targets --all-features -- -D warnings`.
 - **Rustfmt** — Run `cargo fmt` before committing.
 - **Tests** — Every major feature must include unit tests. Run `cargo test --workspace` before pushing.
