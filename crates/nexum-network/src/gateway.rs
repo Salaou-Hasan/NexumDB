@@ -345,55 +345,66 @@ impl NetworkGateway {
     /// protocol violation closes the offending connection.
     pub fn process_inbound(&mut self) -> ProcessReport {
         let mut report = ProcessReport::default();
-        // Iterate the slab directly — O(1) indexed access, zero allocation.
+        let max_payload = self.config.max_frame_payload();
+
+        // Phase 1: Batch frame collection — iterate the slab, pop all
+        // pending frames into a contiguous Vec. This separates I/O
+        // (slab iteration + ring pops) from protocol decode + dispatch,
+        // giving the CPU better cache locality during the decode pass.
+        // Each connection may have multiple frames queued per tick.
+        let mut frames: Vec<(ConnectionId, Arc<[u8]>)> = Vec::new();
         let len = self.connections.len();
         for idx in 0..len {
-            // Skip empty slots.
             if self.connections[idx].is_none() {
                 continue;
             }
             let connection = ConnectionId::from_u64(idx as u64);
             loop {
-                // Extract frame in a scoped block so conn_get_mut borrow drops
-                // before we call dispatch/send/drop_connection.
                 let frame_result = {
                     match self.conn_get_mut(connection) {
                         Some(entry) => entry.connection.try_recv_frame(),
                         None => break,
                     }
                 };
-                let frame = match frame_result {
-                    Ok(Some(frame)) => frame,
+                match frame_result {
+                    Ok(Some(frame)) => {
+                        report.frames_received += 1;
+                        self.metrics.frames_received += 1;
+                        frames.push((connection, frame));
+                    }
                     Ok(None) => break,
                     Err(_) => {
                         self.drop_connection(&connection, "transport closed");
                         report.disconnected += 1;
                         break;
                     }
-                };
-                report.frames_received += 1;
-                self.metrics.frames_received += 1;
-                match protocol::decode_client(&frame, self.config.max_frame_payload()) {
-                    Ok(message) => {
-                        report.dispatched += 1;
-                        self.dispatch(connection, message);
-                    }
-                    Err(protocol_error) => {
-                        report.rejected += 1;
-                        self.metrics.frames_rejected += 1;
-                        self.metrics.protocol_errors += 1;
-                        Self::push_event(
-                            &mut self.events,
-                            self.config.event_log_limit(),
-                            NetworkEvent::ProtocolError { connection },
-                        );
-                        let code = protocol_error.code();
-                        let detail = protocol_error.to_string();
-                        let _ = self.send_error(connection, code, &detail);
-                        self.drop_connection(&connection, &format!("protocol violation: {detail}"));
-                        report.disconnected += 1;
-                        break;
-                    }
+                }
+            }
+        }
+
+        // Phase 2: Decode and dispatch — process the contiguous frame
+        // buffer. All frames are already collected, so decode operates
+        // on sequential memory with no slab lookups between frames.
+        for (connection, frame) in frames {
+            match protocol::decode_client(&frame, max_payload) {
+                Ok(message) => {
+                    report.dispatched += 1;
+                    self.dispatch(connection, message);
+                }
+                Err(protocol_error) => {
+                    report.rejected += 1;
+                    self.metrics.frames_rejected += 1;
+                    self.metrics.protocol_errors += 1;
+                    Self::push_event(
+                        &mut self.events,
+                        self.config.event_log_limit(),
+                        NetworkEvent::ProtocolError { connection },
+                    );
+                    let code = protocol_error.code();
+                    let detail = protocol_error.to_string();
+                    let _ = self.send_error(connection, code, &detail);
+                    self.drop_connection(&connection, &format!("protocol violation: {detail}"));
+                    report.disconnected += 1;
                 }
             }
         }
