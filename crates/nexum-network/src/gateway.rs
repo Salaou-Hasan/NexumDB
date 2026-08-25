@@ -130,6 +130,9 @@ pub struct StepReport {
 
 /// The realtime gateway: owns the runtime and adapts it to clients.
 pub struct NetworkGateway {
+    /// Cached batch timestamp for rate limiting (Phase 27c-b): one clock read
+    /// per process_inbound batch instead of one per message (~22K saved at 20K CCU).
+    step_now: std::cell::Cell<Option<std::time::Instant>>,
     runtime: Runtime,
     config: NetworkConfig,
     authenticator: Arc<dyn Authenticator>,
@@ -195,6 +198,7 @@ impl NetworkGateway {
     ) -> Result<Self, NetworkError> {
         config.validate().map_err(NetworkError::Core)?;
         Ok(Self {
+            step_now: std::cell::Cell::new(None),
             runtime,
             config,
             authenticator,
@@ -345,6 +349,7 @@ impl NetworkGateway {
     /// protocol violation closes the offending connection.
     pub fn process_inbound(&mut self) -> ProcessReport {
         let mut report = ProcessReport::default();
+        self.step_now.set(Some(std::time::Instant::now()));
         let max_payload = self.config.max_frame_payload();
         let step_started = std::time::Instant::now();
 
@@ -1725,7 +1730,6 @@ impl NetworkGateway {
     fn check_rate(&mut self, connection: ConnectionId, bucket: RateBucket) -> bool {
         self.check_rate_for(connection, bucket, 0)
     }
-
     /// [`Self::check_rate`] with a `request_id` so the rejection is
     /// correlated to the request that triggered it (used by `Subscribe`).
     fn check_rate_for(
@@ -1734,9 +1738,10 @@ impl NetworkGateway {
         bucket: RateBucket,
         request_id: u64,
     ) -> bool {
+        let now = self.step_now.get().unwrap_or_else(std::time::Instant::now);
         let allowed = self
             .conn_get_mut(connection)
-            .is_some_and(|entry| entry.rate.try_take(bucket, std::time::Instant::now()));
+            .is_some_and(|entry| entry.rate.try_take(bucket, now));
         if !allowed {
             self.metrics.rate_limited += 1;
             let _ = self.send_error_for(connection, 19, "rate limit exceeded", request_id);

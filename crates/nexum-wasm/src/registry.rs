@@ -1,5 +1,5 @@
 //! The WASM module registry ([`WasmModuleRegistry`]) and the `invoke` entry
-//! point (design doc Â§9, ADR-007 D6).
+//! point (design doc 9, ADR-007 D6).
 //!
 //! The registry owns the fuel-enabled engine, the resource limits, and a
 //! deterministic map of validated, compiled modules. `invoke` is the **only**
@@ -7,16 +7,16 @@
 //!
 //! ```text
 //! begin one transaction
-//!   â†’ build a ReducerContext (the host owns it; the guest never sees it)
-//!   â†’ instantiate the module with fresh host state and run the entry point
-//!   â†’ sticky ABI errors / traps / fuel exhaustion / malformed returns fail
-//!   â†’ finish_invocation: commit on success, abort otherwise
+//!    build a ReducerContext (the host owns it; the guest never sees it)
+//!    instantiate the module with fresh host state and run the entry point
+//!    sticky ABI errors / traps / fuel exhaustion / malformed returns fail
+//!    finish_invocation: commit on success, abort otherwise
 //! ```
 //!
 //! `finish_invocation` is the same shared decision point the native registry
 //! uses (ADR-006 D1 / ADR-007 D6), so both paths have identical transaction
 //! semantics. The caller appends `result.changes` to the WAL with
-//! `result.tx_id` â€” the Phase 5 boundary is untouched.
+//! `result.tx_id`  the Phase 5 boundary is untouched.
 
 use std::collections::BTreeMap;
 
@@ -128,9 +128,9 @@ impl WasmModuleRegistry {
     /// transaction** (ADR-007 D6).
     ///
     /// On success the result carries the committed changes, the emitted
-    /// events, and the encoded return value. On any failure â€” reducer
+    /// events, and the encoded return value. On any failure  reducer
     /// rejection, sticky ABI error, trap, fuel exhaustion, malformed return,
-    /// OCC conflict â€” the transaction is aborted through the shared
+    /// OCC conflict  the transaction is aborted through the shared
     /// `finish_invocation` path: zero authoritative mutations, zero events,
     /// zero committed changes.
     pub fn invoke(
@@ -193,15 +193,15 @@ impl WasmModuleRegistry {
     /// This is the simulation tick's orchestration hook: a WASM reducer
     /// invoked during a tick runs inside the tick's transaction so the whole
     /// tick commits atomically (or aborts completely). The sandbox is the
-    /// same â€” the same host ABI, fuel/memory/host-call budgets, sticky
-    /// error, and trap handling â€” only the transaction ownership differs:
+    /// same  the same host ABI, fuel/memory/host-call budgets, sticky
+    /// error, and trap handling  only the transaction ownership differs:
     /// the caller owns the transaction and the commit/abort decision. On
     /// success the encoded return value and the emitted events (in `emit`
     /// order) are returned; on any failure the error propagates and the
     /// events are dropped.
     ///
-    /// Standalone [`invoke`](Self::invoke) â€” one invocation = one
-    /// transaction â€” is unchanged and remains the external entry point.
+    /// Standalone [`invoke`](Self::invoke)  one invocation = one
+    /// transaction  is unchanged and remains the external entry point.
     pub fn invoke_in_tx(
         &self,
         store: &TableStore,
@@ -256,7 +256,7 @@ pub struct WasmStageTimes {
 ///
 /// Phase 26: modules flagged **poolable** reuse a per-thread
 /// `Store`/`Instance` across invocations instead of rebuilding them per call
-/// (~3.3 Âµs saved each). Pooling is gated behind an explicit opt-in because
+/// (~3.3 s saved each). Pooling is gated behind an explicit opt-in because
 /// it requires a stateless scratch-memory module (immutable globals, every
 /// ABI output region rewritten before the host reads it); between calls the
 /// pooled state always holds `ctx: None`, so no reference outlives its
@@ -501,9 +501,9 @@ fn run_module_fresh(
     let instantiate_start = std::time::Instant::now();
     // Phase 22.5: reuse a pre-configured Linker per thread. The host ABI
     // definition ("nexum","op") is identical across all invocations and the
-    // closure captures nothing â€” it is Send + Sync + 'static regardless of
+    // closure captures nothing  it is Send + Sync + 'static regardless of
     // HostState lifetimes (see host.rs docs). Caching eliminates Linker::new
-    // + define_host (~2-3Âµs) per WASM call; the clone is ~200ns.
+    // + define_host (~2-3s) per WASM call; the clone is ~200ns.
     let linker = crate::linker_cache::clone_cached_linker(engine);
     let instance = linker
         .instantiate(&mut store, module.compiled())

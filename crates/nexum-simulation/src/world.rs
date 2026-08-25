@@ -7,15 +7,15 @@
 //!
 //! ```text
 //! Tick N
-//!   â”œâ”€â”€ frame validation           (pre-tick; consumes nothing on error)
-//!   â”œâ”€â”€ scheduled events due at N  (reducer invocations, by (tick, id))
-//!   â”œâ”€â”€ systems in order           (priority asc, SystemId tie-break)
-//!   â”œâ”€â”€ commit â†’ Vec<Change>
-//!   â””â”€â”€ return TickResult { tick, tx_id, changes, events }
+//!    frame validation           (pre-tick; consumes nothing on error)
+//!    scheduled events due at N  (reducer invocations, by (tick, id))
+//!    systems in order           (priority asc, SystemId tie-break)
+//!    commit  Vec<Change>
+//!    return TickResult { tick, tx_id, changes, events }
 //! ```
 //!
-//! Every failure â€” a system error, a reducer rejection, a WASM trap or fuel
-//! exhaustion, a panic, an OCC conflict â€” aborts the tick transaction: zero
+//! Every failure  a system error, a reducer rejection, a WASM trap or fuel
+//! exhaustion, a panic, an OCC conflict  aborts the tick transaction: zero
 //! authoritative mutation, zero committed changes, zero events. The tick
 //! counter advances on both success and failure; failed ticks are
 //! deterministic outcomes (ADR-009 D6).
@@ -68,7 +68,7 @@ use crate::systems::{SystemDefinition, SystemRegistry};
 /// The successful outcome of one tick: the committed transaction and its
 /// changes and events.
 ///
-/// `changes` is the exact committed `Vec<Change>` â€” the same boundary the
+/// `changes` is the exact committed `Vec<Change>`  the same boundary the
 /// WAL and the subscription engine consume. The runtime appends
 /// `result.changes` to the WAL with `result.tx_id` and fans them to the
 /// `SubscriptionRegistry`, in tick order (ADR-009 D8).
@@ -177,7 +177,7 @@ impl std::error::Error for TickError {
 
 /// Phase-level wall-time breakdown of the most recent tick (Phase 27b
 /// instrumentation): reducer calls, systems, and validate+commit. Purely
-/// observational â€” never influences simulation semantics.
+/// observational  never influences simulation semantics.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TickBreakdown {
     /// Phase 0a-0c: message handlers, scheduled events, client calls.
@@ -213,7 +213,7 @@ pub struct World {
     native: ReducerRegistry,
     wasm: Option<WasmModuleRegistry>,
     schedule: Schedule,
-    /// Per-reducer execution profile (Phase 21.5 instrumentation): name â†’
+    /// Per-reducer execution profile (Phase 21.5 instrumentation): name
     /// (calls, cumulative wall ns). Empty unless profiling is enabled in
     /// the simulation config; never influences semantics.
     reducer_profile: BTreeMap<String, (u64, u64)>,
@@ -295,7 +295,7 @@ impl World {
     }
 
     /// Returns the accumulated per-reducer execution profile (Phase 21.5
-    /// instrumentation): reducer name â†’ (calls, cumulative wall ns). Empty
+    /// instrumentation): reducer name  (calls, cumulative wall ns). Empty
     /// unless profiling is enabled in the simulation config.
     pub fn reducer_profile(&self) -> &BTreeMap<String, (u64, u64)> {
         &self.reducer_profile
@@ -421,7 +421,7 @@ impl World {
     /// calls.
     ///
     /// Delegates to [`tick_with_calls`](Self::tick_with_calls) with an empty
-    /// call batch, so every Phase 9â€“12 call site is unchanged.
+    /// call batch, so every Phase 912 call site is unchanged.
     pub fn tick_messages(
         &mut self,
         inputs: &InputFrame,
@@ -440,13 +440,13 @@ impl World {
     /// configured bounds. Execution order is fixed and deterministic:
     ///
     /// ```text
-    /// Phase 0a â€” delivered messages' handler reducers (batch order)
-    /// Phase 0b â€” scheduled events due now ((at_tick, id) order)
-    /// Phase 0c â€” client reducer calls (call order): each runs against a
+    /// Phase 0a  delivered messages' handler reducers (batch order)
+    /// Phase 0b  scheduled events due now ((at_tick, id) order)
+    /// Phase 0c  client reducer calls (call order): each runs against a
     ///            branch of the tick transaction; success absorbs into the
     ///            tick tx, failure discards the branch and records a typed
     ///            per-call error while the tick continues (ADR-013 D3)
-    /// Phase 1  â€” systems, in deterministic (priority, id) order
+    /// Phase 1   systems, in deterministic (priority, id) order
     /// ```
     ///
     /// All phases run inside **one transaction** and commit atomically. On
@@ -482,7 +482,7 @@ impl World {
             ));
         }
         // Delivery gate: the batch must be bounded and targeted at this
-        // partition. A rejected batch is consumed (never requeued) â€” it can
+        // partition. A rejected batch is consumed (never requeued)  it can
         // only be produced by an internal inconsistency.
         if delivered.len() > self.config.max_messages_per_tick() {
             return Err(TickError::new(
@@ -508,7 +508,7 @@ impl World {
         }
         // Call gate (ADR-013 D3): the batch is bounded and every call name
         // and argument set is within the configured limits. A rejected batch
-        // is consumed (never requeued) â€” it can only be produced by a gateway
+        // is consumed (never requeued)  it can only be produced by a gateway
         // that failed to enforce its own bounds.
         if calls.len() > self.config.max_reducer_calls_per_tick() {
             return Err(TickError::new(
@@ -582,7 +582,7 @@ impl World {
         let mut calls_ns = 0u64;
         let mut systems_ns = 0u64;
         let result = (|| -> Result<()> {
-            // Phase 0a â€” delivered cross-partition messages, in the
+            // Phase 0a  delivered cross-partition messages, in the
             // deterministic batch order. Each invokes the handler reducer
             // named by its kind against the tick tx (native first, WASM
             // fallback).
@@ -598,7 +598,7 @@ impl World {
                 append_events(&mut tick_events, events, max_events)?;
             }
 
-            // Phase 0b â€” scheduled events due this tick, in (at_tick, id)
+            // Phase 0b  scheduled events due this tick, in (at_tick, id)
             // order. Each is a reducer invocation against the tick tx.
             for event in &due {
                 let started = std::time::Instant::now();
@@ -613,10 +613,10 @@ impl World {
                 append_events(&mut tick_events, events, max_events)?;
             }
 
-            // Phase 0c â€” client reducer calls, in call order (ADR-013 D3).
+            // Phase 0c  client reducer calls, in call order (ADR-013 D3).
             // Phase 22.5: execute directly against the tick transaction
             // with snapshot/rollback instead of branch/absorb. This
-            // eliminates the ~100 Âµs absorb overhead per call by keeping
+            // eliminates the ~100 s absorb overhead per call by keeping
             // writes in the parent tx and only rolling back on failure.
             // Resolution is native first, WASM fallback, then `NotFound`.
             let calls_started = std::time::Instant::now();
@@ -643,7 +643,7 @@ impl World {
                 }
             }
 
-            // Phase 1 â€” systems, in deterministic (priority, id) order.
+            // Phase 1  systems, in deterministic (priority, id) order.
             // ExecutionMode::Serial is the Phase 9 reference loop; Parallel
             // uses the ADR-011 planner. Both produce identical results.
             calls_ns = calls_started.elapsed().as_nanos() as u64;
@@ -677,7 +677,7 @@ impl World {
                     for group in plan.groups() {
                         if group.systems().len() == 1 {
                             // Singleton groups run on the serial path against
-                            // the tick transaction â€” the Phase 9 semantics
+                            // the tick transaction  the Phase 9 semantics
                             // for opaque or conflicting systems.
                             let definition = &systems.ordered()[group.systems()[0]];
                             parallel::run_system(
@@ -778,7 +778,7 @@ fn record_reducer(profile: &mut BTreeMap<String, (u64, u64)>, enabled: bool, nam
 /// against the tick transaction (ADR-012 D4).
 ///
 /// Resolution is native-first, then WASM (when a registry is configured),
-/// then `NotFound` â€” an unhandled kind fails the destination tick
+/// then `NotFound`  an unhandled kind fails the destination tick
 /// deterministically with zero mutation.
 fn invoke_handler(
     store: &TableStore,
@@ -802,8 +802,8 @@ fn invoke_handler(
 /// Invokes a named reducer against a transaction (ADR-013 D3).
 ///
 /// Lookup-first resolution: native, then WASM (when a registry is
-/// configured), then `NotFound`. The reducer's own errors â€” including a
-/// `NotFound` from a missing argument â€” propagate unchanged once the reducer
+/// configured), then `NotFound`. The reducer's own errors  including a
+/// `NotFound` from a missing argument  propagate unchanged once the reducer
 /// is found.
 fn invoke_reducer(
     store: &TableStore,
