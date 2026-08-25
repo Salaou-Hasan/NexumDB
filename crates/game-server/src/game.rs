@@ -93,7 +93,20 @@ pub const CLIENT_REDUCERS: &[&str] = &[
     "fire_weapon",
     "reload_weapon",
     "respawn_player",
+    // Phase 26 simulation battery: density (RTS-style entity ownership),
+    // resource gathering (read-modify-write economy), and presence (cheap
+    // social RPC).
+    "unit_move",
+    "gather",
+    "presence",
 ];
+
+/// The `units` table: RTS-density entities owned by players
+/// `[id, owner, x, y]`. One player commands many units — the battery's
+/// simulation-density axis (entities ≠ connections).
+pub const UNITS_TABLE: &str = "units";
+/// The `inventory` table: gathered resources `[id, owner, kind]`.
+pub const INVENTORY_TABLE: &str = "inventory";
 
 // ------------------------------------------------------------- helpers
 
@@ -351,6 +364,76 @@ pub fn set_position(ctx: &mut ReducerContext, args: &ReducerArgs) -> Result<Valu
     Ok(Value::U64(1))
 }
 
+// ------------------------------------------------- battery reducers (P26)
+
+/// Fetches a battery unit row by its primary key (`units.id`).
+fn unit_by_id(ctx: &mut ReducerContext, unit_id: u64) -> Result<Option<(RowId, Row)>> {
+    let owners = ctx.lookup_unique(UNITS_TABLE, PK, &[Value::U64(unit_id)])?;
+    let Some(&row_id) = owners.first() else {
+        return Ok(None);
+    };
+    match ctx.get(UNITS_TABLE, row_id)? {
+        Some(row) => Ok(Some((row_id, row))),
+        None => Ok(None),
+    }
+}
+
+/// `unit_move` — RTS-density entity movement. The caller owns units; an
+/// unknown id is lazily claimed by its first mover at a deterministic spot
+/// so the density workload needs no separate spawn phase. O(log N):
+/// primary-key lookup plus a bounded position update.
+pub fn unit_move(ctx: &mut ReducerContext, args: &ReducerArgs) -> Result<Value> {
+    let caller = args.require_u64(CALLER_SOURCE_ARG)?;
+    let unit_id = args.require_u64("unit_id")?;
+    let dx = args.get("dx").and_then(Value::as_i64).unwrap_or(0);
+    let dy = args.get("dy").and_then(Value::as_i64).unwrap_or(0);
+    match unit_by_id(ctx, unit_id)? {
+        Some((row_id, row)) => {
+            if get(&row, 1) != caller as i64 {
+                return Err(Error::invalid_argument("unit belongs to another player"));
+            }
+            let x = (get(&row, 2) + dx).clamp(0, ARENA_WIDTH - 1);
+            let y = (get(&row, 3) + dy).clamp(0, ARENA_HEIGHT - 1);
+            ctx.update(UNITS_TABLE, row_id, row![unit_id, caller, x, y])?;
+        }
+        None => {
+            let (x, y) = spawn(unit_id);
+            ctx.insert(UNITS_TABLE, row![unit_id, caller, x, y])?;
+        }
+    }
+    Ok(Value::U64(unit_id))
+}
+
+/// `gather` — survival/crafting economy: a read-modify-write on the player's
+/// score plus one inventory insert. Exercises OCC read sets and multi-row
+/// transactions per call.
+pub fn gather(ctx: &mut ReducerContext, args: &ReducerArgs) -> Result<Value> {
+    let caller = args.require_u64(CALLER_SOURCE_ARG)?;
+    let kind = args.get("kind").and_then(Value::as_u64).unwrap_or(1);
+    let (row_id, player) = player_by_id(ctx, caller)?.ok_or_else(|| Error::not_found("player"))?;
+    let score = get(&player, COL_SCORE);
+    ctx.update(
+        TABLE,
+        row_id,
+        with(player, COL_SCORE, Value::I64(score + 1)),
+    )?;
+    // Unique per owner while a player gathers fewer than ~1M resources.
+    let inv_id = caller
+        .wrapping_mul(1_048_576)
+        .wrapping_add(score as u64 % 1_048_576);
+    ctx.insert(INVENTORY_TABLE, row![inv_id, caller, kind])?;
+    ctx.emit("gathered", Value::U64(kind))?;
+    Ok(Value::I64(score + 1))
+}
+
+/// `presence` — social/idle RPC: a cheap call that still crosses the full
+/// gateway → runtime → transaction path. Anchors the light workload.
+pub fn presence(ctx: &mut ReducerContext, args: &ReducerArgs) -> Result<Value> {
+    let caller = args.require_u64(CALLER_SOURCE_ARG)?;
+    ctx.emit("present", Value::U64(caller))?;
+    Ok(Value::U64(caller))
+}
+
 // -------------------------------------------------------------- systems
 
 // Per-thread cooldown tracking map. Each world runs on its own thread
@@ -475,6 +558,27 @@ fn ensure_schema(store: &mut TableStore) {
             .add_index(TABLE, def)
             .expect("pos index added over existing rows");
     }
+    if store.table(UNITS_TABLE).is_none() {
+        let schema = TableSchema::builder(UNITS_TABLE)
+            .column("id", nexum_core::ColumnType::U64)
+            .column("owner", nexum_core::ColumnType::U64)
+            .column("x", nexum_core::ColumnType::I64)
+            .column("y", nexum_core::ColumnType::I64)
+            .primary_key(&["id"])
+            .build()
+            .expect("valid units schema");
+        store.create_table(schema).expect("units table created");
+    }
+    if store.table(INVENTORY_TABLE).is_none() {
+        let schema = TableSchema::builder(INVENTORY_TABLE)
+            .column("id", nexum_core::ColumnType::U64)
+            .column("owner", nexum_core::ColumnType::U64)
+            .column("kind", nexum_core::ColumnType::U64)
+            .primary_key(&["id"])
+            .build()
+            .expect("valid inventory schema");
+        store.create_table(schema).expect("inventory table created");
+    }
 }
 
 /// The game world factory: registers the native reducers, the cooldown
@@ -499,6 +603,9 @@ pub fn game_factory() -> WorldFactory {
                 ("respawn_player", respawn_player),
                 ("take_damage", take_damage),
                 ("set_position", set_position),
+                ("unit_move", unit_move),
+                ("gather", gather),
+                ("presence", presence),
             ];
             for (index, (name, function)) in reducers.iter().enumerate() {
                 world

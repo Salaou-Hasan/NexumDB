@@ -1,19 +1,19 @@
 //! Phase 16 CCU (concurrent users) load harness (ADR-016 D4).
 //!
-//! Boots the **real stack** — GameServer → Runtime → World with the arena
-//! game — and drives N simulated clients through the **real gateway + real
+//! Boots the **real stack** â€” GameServer â†’ Runtime â†’ World with the arena
+//! game â€” and drives N simulated clients through the **real gateway + real
 //! protocol codec + real SDK client objects** over in-process transport
 //! (honest scope: the socket layer is in-process; the protocol, gateway,
 //! runtime, world, subscriptions, and SDK views are all real).
 //!
 //! Profiles:
 //!
-//! - `A` — connection only: connect + authenticate + attach + subscribe, then
+//! - `A` â€” connection only: connect + authenticate + attach + subscribe, then
 //!   stay connected.
-//! - `B` — light input: each client sends movement at a realistic rate.
-//! - `C` — realistic game: movement + received subscription updates +
+//! - `B` â€” light input: each client sends movement at a realistic rate.
+//! - `C` â€” realistic game: movement + received subscription updates +
 //!   occasional `fire_weapon` reducer calls.
-//! - `D` — stress: high input + reducer pressure until saturation.
+//! - `D` â€” stress: high input + reducer pressure until saturation.
 //!
 //! Every client is a real [`nexum_sdk::Client`] over a memory transport pair,
 //! so the measured cost includes the real SDK encode/decode and view
@@ -27,7 +27,7 @@
 //! ```
 //!
 //! Results are classified PASS / DEGRADED / SATURATED / FAILED against the
-//! tick budget (p99 tick ≤ budget) and the no-silent-loss rule.
+//! tick budget (p99 tick â‰¤ budget) and the no-silent-loss rule.
 
 use std::time::{Duration, Instant};
 
@@ -61,7 +61,7 @@ struct Args {
     hz: u64,
     partitions: usize,
     workers: usize,
-    /// Subscription window per client (realistic interest management —
+    /// Subscription window per client (realistic interest management â€”
     /// clients never hold the whole table; Phase 15 measured full-table
     /// snapshots as O(N) per subscriber).
     window: u32,
@@ -89,11 +89,23 @@ struct Args {
     /// HIGH_PRIORITY_CLASS, rayon-pool worker affinity. On by default;
     /// `--no-os-tune` restores raw scheduler behavior for A/B comparison.
     os_tune: bool,
+    /// Phase 26 battery workload archetype: SOCIAL | FPS | MMO | RTS |
+    /// SURVIVAL | EXTREME. When set, command generation is driven by
+    /// deterministic seeded player brains instead of the legacy fixed-
+    /// schedule profiles.
+    workload: Option<String>,
+    /// RTS density: units per player commanded every tick (`unit_move`).
+    density: usize,
+    /// Deterministic seed for the player brains (same seed â†’ identical
+    /// command stream, comparable across worker counts).
+    seed: u64,
+    /// Print a machine-readable SCORECARD CSV line after the results.
+    csv: bool,
 }
 
 fn parse_args() -> Args {
     // workers = 0 means "auto": resolved in boot() to
-    // min(available_parallelism, lobbies × partitions) — a production
+    // min(available_parallelism, lobbies Ã— partitions) â€” a production
     // deployment ticks independent lobbies in parallel (Phase 18), so the
     // harness must too, or it measures a serial strawman. More workers than
     // worlds is pure idle overhead.
@@ -112,6 +124,10 @@ fn parse_args() -> Args {
         lobbies: 1,
         wasm_stages: false,
         os_tune: true,
+        workload: None,
+        density: 0,
+        seed: 12_345,
+        csv: false,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -132,6 +148,10 @@ fn parse_args() -> Args {
             "--wasm-stages" => args.wasm_stages = true,
             "--os-tune" => args.os_tune = true,
             "--no-os-tune" => args.os_tune = false,
+            "--workload" => args.workload = Some(value().to_uppercase()),
+            "--density" => args.density = value().parse().unwrap(),
+            "--seed" => args.seed = value().parse().unwrap(),
+            "--csv" => args.csv = true,
             "--help" | "-h" => {
                 println!(
                     "usage: ccu [--clients N] [--profile A|B|C|D|E] [--ticks N] \
@@ -296,7 +316,7 @@ fn step_server_timed(server: &mut GameServer, t: &mut PhaseTimers) {
     // pump_subscriptions is NOT called here: fan_out_results already drains
     // every subscriber's buffer during the per-world pump pass. A separate
     // pump_subscriptions call would re-iterate all connections finding empty
-    // buffers — pure overhead.
+    // buffers â€” pure overhead.
     let t3 = Instant::now();
     server
         .gateway_mut()
@@ -345,10 +365,190 @@ fn step_clients(clients: &mut [SimClient]) {
 fn drain_clients(clients: &mut [SimClient]) {
     // Drain is intentionally sequential: take_events/take_reducer_results
     // are trivial O(1) swaps. Parallel rayon overhead at 20K clients
-    // exceeds the work, making it 3× slower.
+    // exceeds the work, making it 3Ã— slower.
     for sim in clients.iter_mut() {
         sim.client.take_events();
         sim.client.take_reducer_results();
+    }
+}
+
+// ------------------------------------------------------------- battery (P26)
+
+/// Per-tick command probabilities for a workload archetype, in per-mille.
+/// A brain picks at most one player action per tick, then issues its density
+/// unit moves (RTS axis) on top â€” entity work is *in addition to* player ops.
+struct Mix {
+    move_p: u16,
+    fire_p: u16,
+    reload_p: u16,
+    presence_p: u16,
+    gather_p: u16,
+    /// Guaranteed `unit_move` calls per player per tick.
+    units: usize,
+}
+
+/// The Phase 26 workload archetypes. Each targets a fundamentally different
+/// operation pattern so "supported" is never measured against a single game:
+///
+/// | archetype  | pattern exercised                                   |
+/// |------------|-----------------------------------------------------|
+/// | SOCIAL     | idle connections, cheap RPC, sparse writes          |
+/// | FPS        | latency-critical: dense movement + WASM combat      |
+/// | MMO        | mixed movement/combat/economy/social                |
+/// | RTS        | simulation density: `--density` entities per player |
+/// | SURVIVAL   | read-modify-write economy + persistence writes      |
+/// | EXTREME    | legacy profile E: everyone moves every tick         |
+fn mix_of(workload: &str, density: usize) -> Option<Mix> {
+    let m = match workload {
+        "SOCIAL" => Mix {
+            move_p: 50,
+            fire_p: 0,
+            reload_p: 0,
+            presence_p: 20,
+            gather_p: 0,
+            units: 0,
+        },
+        "FPS" => Mix {
+            move_p: 700,
+            fire_p: 60,
+            reload_p: 25,
+            presence_p: 10,
+            gather_p: 0,
+            units: 0,
+        },
+        "MMO" => Mix {
+            move_p: 450,
+            fire_p: 50,
+            reload_p: 25,
+            presence_p: 40,
+            gather_p: 35,
+            units: 0,
+        },
+        "RTS" => Mix {
+            move_p: 20,
+            fire_p: 0,
+            reload_p: 0,
+            presence_p: 10,
+            gather_p: 0,
+            units: density.max(1),
+        },
+        "SURVIVAL" => Mix {
+            move_p: 250,
+            fire_p: 12,
+            reload_p: 8,
+            presence_p: 15,
+            gather_p: 80,
+            units: 0,
+        },
+        "EXTREME" => Mix {
+            move_p: 1000,
+            fire_p: 100,
+            reload_p: 40,
+            presence_p: 0,
+            gather_p: 0,
+            units: 0,
+        },
+        _ => return None,
+    };
+    Some(m)
+}
+
+/// Deterministic per-client AI: splitmix64 seeded by (--seed, client index).
+/// The same seed produces the identical command stream on every run and at
+/// every worker count, so authoritative results are directly comparable.
+struct Brain {
+    rng: u64,
+}
+
+impl Brain {
+    fn new(seed: u64, idx: usize) -> Self {
+        Self {
+            rng: seed ^ (idx as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15),
+        }
+    }
+    fn next(&mut self) -> u64 {
+        self.rng = self.rng.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.rng;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+}
+
+/// One-round splitmix64 hash: turns (seed, tick, index) tuples into
+/// well-distributed deterministic draws without carrying mutable state.
+fn sm64(x: u64) -> u64 {
+    let mut z = x.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
+fn dir(rng: u64) -> i64 {
+    match rng % 3 {
+        0 => -1,
+        1 => 0,
+        _ => 1,
+    }
+}
+
+/// Drives one tick of a brain-driven battery workload across all clients.
+fn drive_workload(
+    mix: &Mix,
+    tick: u64,
+    clients: &mut [SimClient],
+    brains: &mut [Brain],
+    seed: u64,
+    density: usize,
+) {
+    for (i, sim) in clients.iter_mut().enumerate() {
+        // Density axis first: every unit move is a full authoritative op.
+        if mix.units > 0 {
+            let base = (i as u64) * density as u64;
+            for d in 0..density as u64 {
+                let r = sm64(seed ^ 0xBEEF ^ (tick << 24) ^ ((base + d) << 8));
+                let _ = sim.client.call_reducer(
+                    "unit_move",
+                    nexum_reducer::ReducerArgs::new()
+                        .insert("unit_id", base + d + 1)
+                        .insert("dx", dir(r))
+                        .insert("dy", dir(r >> 8)),
+                );
+            }
+        }
+        let roll = brains[i].next() % 1000;
+        let r2 = brains[i].next();
+        let dx = dir(r2);
+        let dy = dir(r2 >> 7);
+        let (m, f, r, pr) = (
+            mix.move_p as u64,
+            mix.fire_p as u64,
+            mix.reload_p as u64,
+            mix.presence_p as u64,
+        );
+        let g = m + f + r + pr;
+        if roll < m {
+            if dx != 0 || dy != 0 {
+                let _ = sim.client.call_reducer("move_player", move_args(dx, dy));
+            }
+        } else if roll < m + f {
+            let _ = sim
+                .client
+                .call_reducer("fire_weapon", nexum_reducer::ReducerArgs::new());
+        } else if roll < m + f + r {
+            let _ = sim
+                .client
+                .call_reducer("reload_weapon", nexum_reducer::ReducerArgs::new());
+        } else if roll < g {
+            let _ = sim
+                .client
+                .call_reducer("presence", nexum_reducer::ReducerArgs::new());
+        } else if roll < g + mix.gather_p as u64 {
+            let _ = sim.client.call_reducer(
+                "gather",
+                nexum_reducer::ReducerArgs::new().insert("kind", (r2 % 4) + 1),
+            );
+        }
     }
 }
 
@@ -402,8 +602,8 @@ fn drive_profile(profile: char, tick: u64, clients: &mut [SimClient], hz: u64) {
         }
         'E' => {
             // Extreme real gameplay (Phase 21.5): every client moves every
-            // tick, fires every 10 ticks (≈2/s at 20 Hz), and reloads every
-            // 25 ticks — the full hot path (native move + WASM fire +
+            // tick, fires every 10 ticks (â‰ˆ2/s at 20 Hz), and reloads every
+            // 25 ticks â€” the full hot path (native move + WASM fire +
             // native reload) with subscription deltas, TickUpdate decode,
             // and drain active every tick.
             for (i, sim) in clients.iter_mut().enumerate() {
@@ -774,7 +974,7 @@ fn main() {
     }
     // Resolve the auto worker default (workers == 0) up front so the config
     // echo reports what actually runs: min(available_parallelism,
-    // lobbies × partitions). More workers than worlds is idle overhead.
+    // lobbies Ã— partitions). More workers than worlds is idle overhead.
     if args.workers == 0 {
         let cores = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
         args.workers = cores.min(args.lobbies * args.partitions).max(1);
@@ -818,7 +1018,7 @@ fn main() {
     step(&mut server, &mut clients);
 
     // Warmup: a few ticks to populate caches before measuring. Clients are
-    // drained too — otherwise the first measured tick pays the accumulated
+    // drained too â€” otherwise the first measured tick pays the accumulated
     // warmup backlog as an artificial p99.9 spike (Phase 21.5 spike
     // investigation).
     for tick in 0..100 {
@@ -865,7 +1065,28 @@ fn main() {
     // On a dedicated deployment the client pump/drain below runs on client
     // machines, so this is the honest server latency series.
     let mut server_samples: Vec<Duration> = Vec::with_capacity(args.ticks as usize);
+    let battery_mix = match args.workload.as_deref() {
+        Some(name) => Some(mix_of(name, args.density).unwrap_or_else(|| {
+            panic!("unknown workload '{name}' (expected SOCIAL|FPS|MMO|RTS|SURVIVAL|EXTREME)")
+        })),
+        None => None,
+    };
+    let mut brains: Vec<Brain> = (0..args.clients)
+        .map(|i| Brain::new(args.seed, i))
+        .collect();
     for tick in 0..args.ticks {
+        if let Some(mix) = &battery_mix {
+            drive_workload(
+                mix,
+                tick,
+                &mut clients,
+                &mut brains,
+                args.seed,
+                args.density,
+            );
+        } else {
+            drive_profile(args.profile, tick, &mut clients, args.hz);
+        }
         drive_profile(args.profile, tick, &mut clients, args.hz);
         let tick_started = Instant::now();
         step_server_timed(&mut server, &mut phase_timers);
@@ -1015,12 +1236,12 @@ fn main() {
         game_metrics.players_active, game_metrics.games_active, game_metrics.reducer_calls
     );
     // Calibrated to measured steady-state RSS (Phase 18 follow-up): the
-    // full stack (server + in-process SDK clients) needs ≈ 24.7 KB private
-    // per connection with a ~6 MB base — linear fit over 5K/10K/15K/20K
+    // full stack (server + in-process SDK clients) needs â‰ˆ 24.7 KB private
+    // per connection with a ~6 MB base â€” linear fit over 5K/10K/15K/20K
     // measured samples. A mass-join storm without client consumption spikes
-    // several× higher (un-drained SDK event buffers).
+    // severalÃ— higher (un-drained SDK event buffers).
     println!(
-        "mem:   est.~{}MB (steady-state fit: ~24.7KB/conn + 6MB base, incl. in-process SDK clients; join storm spikes several×)",
+        "mem:   est.~{}MB (steady-state fit: ~24.7KB/conn + 6MB base, incl. in-process SDK clients; join storm spikes severalÃ—)",
         (args.clients as u64).saturating_mul(25 * 1024) / (1024 * 1024) + 6
     );
 
@@ -1112,25 +1333,52 @@ fn main() {
     let rejected_heavily = rejected_delta as f64 / (accepted_delta.max(1)) as f64 > 0.5;
 
     let class = if silently_lost {
-        "FAILED — accepted work was dropped"
+        "FAILED â€” accepted work was dropped"
     } else if any_failure {
-        "FAILED — tick failures observed"
+        "FAILED â€” tick failures observed"
     } else if p99_over_budget {
         if p99 > tick_budget.saturating_mul(2) {
-            "SATURATED — p99 exceeds 2× tick budget (the ceiling)"
+            "SATURATED â€” p99 exceeds 2Ã— tick budget (the ceiling)"
         } else {
-            "DEGRADED — p99 approaches/ exceeds the tick budget"
+            "DEGRADED â€” p99 approaches/ exceeds the tick budget"
         }
     } else if rejected_heavily {
-        "DEGRADED — heavy explicit rejections (rate limits / queues)"
+        "DEGRADED â€” heavy explicit rejections (rate limits / queues)"
     } else {
-        "PASS — p99 within budget, no silent loss, no failures"
+        "PASS â€” p99 within budget, no silent loss, no failures"
     };
     println!("\nCLASSIFICATION: {class}");
     println!(
         "note: in-process transport; protocol/gateway/runtime/world/subscriptions/SDK are real."
     );
     println!("arena size: {ARENA_WIDTH}x{ARENA_HEIGHT}; movement validation is authoritative.");
+
+    // Phase 26 battery: machine-readable scorecard line for matrix runs.
+    if args.csv {
+        let wl = args
+            .workload
+            .clone()
+            .unwrap_or_else(|| format!("PROFILE_{}", args.profile));
+        let n = phase_timers.count.max(1) as f64;
+        let wt = phase_timers.world_tick_ns as f64 / n / 1e6;
+        let ib = phase_timers.inbound_ns as f64 / n / 1e6;
+        let fo = phase_timers.fanout_ns as f64 / n / 1e6;
+        let verdict = class.split(' ').next().unwrap_or("?");
+        println!(
+            "SCORECARD,workload={wl},ccu={},lobbies={},density={},seed={},ticks={},hz={},server_p50_us={},server_p95_us={},server_p99_us={},server_p999_us={},world_tick_ms={wt:.2},inbound_ms={ib:.2},fanout_ms={fo:.2},ticks_failed={},rejected={rejected_delta},dropped={dropped_delta},verdict={verdict}",
+            args.clients,
+            args.lobbies,
+            args.density,
+            args.seed,
+            args.ticks,
+            args.hz,
+            sp50.as_micros(),
+            sp95.as_micros(),
+            sp99.as_micros(),
+            sp999.as_micros(),
+            runtime_metrics.ticks_failed,
+        );
+    }
 
     if phase_timers.count > 0 {
         let n = phase_timers.count as f64;
