@@ -49,15 +49,45 @@ New gameplay surface (all native, O(log N) discipline): `units` table +
 
 ## Battery stages
 
-- **v1 (this phase)**: archetypes, brains, density, scorecard, OS tune,
-  pooling, absorb fix.
-- **v2**: AOI sweep (window ∈ {10..1000} vs fan-out cost), cross-partition
-  traffic injection at controlled rates through the deterministic message
-  bus (Phase 12 machinery), WAL-enabled endurance run with mid-run kill →
-  recovery → state comparison against the deterministic reference.
-- **v3**: real network path (TCP transport now sets NODELAY; add latency/
-  loss/jitter injection), thin third-party-engine clients (connect/auth/
-  spawn/command/render/reconnect) to prove engine independence.
+- **v1**: archetypes, brains, density, scorecard, OS tune, pooling, absorb fix.
+- **v2 (this phase)**:
+  - **Cross-partition injection** (`--xpart P`): P‰ of clients per tick
+    submit a `relay` host command; the `relay_station` system forwards each
+    across the Phase 12 deterministic bus to the next partition, where the
+    registered `relay_recv` handler reducer executes in Phase 0a. Requires
+    `--partitions > 1`. Harness fix required: the timed path now goes
+    through `GameServer::step_authoritative` so buffered host commands are
+    actually flushed into the tick (the previous direct-runtime call
+    silently skipped them).
+  - **AOI sweep**: `--window W` is the interest-management knob; swept on
+    MMO@5K (20×250p):
+    | window | server p50 | server p95 | sub_deltas |
+    |---|---|---|---|
+    | 10   | 9.7 ms  | 31.9 ms | 559 K |
+    | 25   | 10.2 ms | 32.5 ms | 598 K |
+    | 50   | 10.6 ms | 33.2 ms | 600 K |
+    | 100  | 11.7 ms | 35.9 ms | 600 K |
+    | 250  | 14.0 ms | 40.3 ms | 600 K |
+    | 1000 | 14.1 ms | 42.5 ms | 600 K |
+    Tighter AOI genuinely buys latency: −45% p50 from window 1000→10;
+    deltas cap once the window covers all reachable changes.
+  - **Persistence plumbing** (`--persist DIR`): per-world WALs under load
+    verified (Flush policy). Automated mid-run kill → `recover_world` →
+    state-hash comparison is v3.
+- **v3**: kill/recovery automation; network impairment (latency/loss/jitter)
+  on the TCP path; thin third-party-engine clients.
+
+## v2 results — cross-partition ladder (MMO@5K, 5 lobbies × 4 partitions)
+
+| rate | sent | delivered | dropped | server p99 | verdict |
+|---|---|---|---|---|---|
+| 0‰   | 0 | 0 | 0 | 37.3 ms | PASS |
+| 10‰  | 5,916 | 5,862 | 0 | 36.7 ms | PASS |
+| 30‰  | 17,929 | 17,772 | 0 | 38.5 ms | PASS |
+| 50‰  | 30,000 | 29,745 | 0 | 51.3 ms | DEGRADED |
+
+The bus carries ~250 msgs/tick at 50% injection with zero drops; the tail
+cost of cross-partition fan-in is real but modest at these rates.
 
 ## v1 results (i7-14650HX, release, paced 20 Hz, server-only)
 

@@ -434,7 +434,45 @@ pub fn presence(ctx: &mut ReducerContext, args: &ReducerArgs) -> Result<Value> {
     Ok(Value::U64(caller))
 }
 
+/// `relay_recv` — cross-partition message handler (Phase 26 battery). The
+/// Phase 12 bus executes the handler reducer named by the message `kind` on
+/// the destination partition; this one just emits, so the delivered counter
+/// is observable without extra state.
+pub fn relay_recv(ctx: &mut ReducerContext, args: &ReducerArgs) -> Result<Value> {
+    let n = args.get("n").and_then(Value::as_u64).unwrap_or(0);
+    ctx.emit("relayed", Value::U64(n))?;
+    Ok(Value::U64(n))
+}
+
 // -------------------------------------------------------------- systems
+
+/// `relay_station` — Phase 26 battery: forwards every host-submitted
+/// `relay` command as a cross-partition message to the next partition in
+/// the topology, exercising the deterministic Phase 12 message bus at a
+/// controlled rate. A no-op in single-partition worlds.
+fn relay_station(ctx: &mut SimulationContext, frame: &InputFrame) -> Result<()> {
+    let known = ctx.known_partitions();
+    if std::env::var_os("NEXUM_RELAY_DEBUG").is_some() {
+        eprintln!(
+            "[relay] p={:?} known={:?} cmds={}",
+            ctx.partition(),
+            known,
+            frame.commands().len()
+        );
+    }
+    if known.len() < 2 {
+        return Ok(());
+    }
+    let from = ctx.partition();
+    let idx = known.iter().position(|p| *p == from).unwrap_or(0);
+    let to = known[(idx + 1) % known.len()];
+    for command in frame.commands() {
+        if command.kind() == "relay" {
+            ctx.send_to(to, "relay_recv", ReducerArgs::new())?;
+        }
+    }
+    Ok(())
+}
 
 // Per-thread cooldown tracking map. Each world runs on its own thread
 // (parallel via `std::thread::scope`, serial by definition), so a
@@ -594,6 +632,17 @@ pub fn game_factory() -> WorldFactory {
                         .unwrap(),
                 )
                 .unwrap();
+            world
+                .add_system(
+                    SystemDefinition::new(
+                        SystemId::from_u64(1),
+                        "relay_station",
+                        10,
+                        relay_station,
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
             type NativeReducer = fn(&mut ReducerContext, &ReducerArgs) -> Result<Value>;
             let reducers: &[(&str, NativeReducer)] = &[
                 ("player_join", player_join),
@@ -606,6 +655,7 @@ pub fn game_factory() -> WorldFactory {
                 ("unit_move", unit_move),
                 ("gather", gather),
                 ("presence", presence),
+                ("relay_recv", relay_recv),
             ];
             for (index, (name, function)) in reducers.iter().enumerate() {
                 world

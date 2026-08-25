@@ -277,6 +277,12 @@ impl<'a> SimulationContext<'a> {
         self.partition
     }
 
+    /// Returns the partition topology known to this world, ascending
+    /// (Phase 26 battery: cross-partition senders pick peers from here).
+    pub fn known_partitions(&self) -> &'a [PartitionId] {
+        self.known_partitions
+    }
+
     /// Returns the current tick.
     pub fn tick(&self) -> TickId {
         self.tick

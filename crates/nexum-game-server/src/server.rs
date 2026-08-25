@@ -1124,6 +1124,21 @@ impl GameServer {
         Ok(results)
     }
 
+    /// The authoritative half of [`step`](Self::step) — command flush,
+    /// runtime tick, event observation — **without** gateway fan-out, so
+    /// latency-sensitive callers (the CCU battery) can time the
+    /// authoritative phases separately from delivery. Fan-out still must
+    /// happen afterwards (`gateway.fan_out_results`).
+    pub fn step_authoritative(&mut self) -> Result<Vec<(WorldId, TickResult)>, GameServerError> {
+        self.flush_pending_commands();
+        let results = self
+            .runtime_mut()
+            .step_detailed()
+            .map_err(GameServerError::Runtime)?;
+        self.observe_runtime_events();
+        Ok(results)
+    }
+
     /// Observes runtime events (ADR-014 D6): a `WorldFailed` marks its
     /// game's partition `Failed` (and the game `Failed` when all partitions
     /// fail); `WorldRecovered` marks the partition `Recovered`; `TickFailed`

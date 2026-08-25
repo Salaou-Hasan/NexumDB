@@ -37,7 +37,7 @@ use game_server::{
 };
 use nexum_game_server::{GameInstanceConfig, GameServer, GameServerConfig, JoinOutcome};
 use nexum_network::{NetworkConfig, Principal, TokenAuthenticator};
-use nexum_runtime::{Runtime, RuntimeConfig};
+use nexum_runtime::{PersistencePolicy, Runtime, RuntimeConfig};
 use nexum_sdk::{Client, SdkConfig, transport::ClientTransport};
 use nexum_subscription::Query;
 
@@ -101,6 +101,13 @@ struct Args {
     seed: u64,
     /// Print a machine-readable SCORECARD CSV line after the results.
     csv: bool,
+    /// Phase 26 battery v2: cross-partition injection rate, in per-mille of
+    /// clients per tick that submit a `relay` command (requires partitions
+    /// > 1 within a lobby). Exercises the deterministic message bus.
+    xpart: usize,
+    /// Enable WAL persistence for every world into this directory
+    /// (durability under load; recovery is a separate explicit step).
+    persist: Option<std::path::PathBuf>,
 }
 
 fn parse_args() -> Args {
@@ -128,6 +135,8 @@ fn parse_args() -> Args {
         density: 0,
         seed: 12_345,
         csv: false,
+        xpart: 0,
+        persist: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -152,6 +161,8 @@ fn parse_args() -> Args {
             "--density" => args.density = value().parse().unwrap(),
             "--seed" => args.seed = value().parse().unwrap(),
             "--csv" => args.csv = true,
+            "--xpart" => args.xpart = value().parse().unwrap(),
+            "--persist" => args.persist = Some(std::path::PathBuf::from(value())),
             "--help" | "-h" => {
                 println!(
                     "usage: ccu [--clients N] [--profile A|B|C|D|E] [--ticks N] \
@@ -186,9 +197,15 @@ struct SimClient {
 /// Boots the real stack with arena games (lobbies) running and reducers exposed.
 /// Returns the server and a list of game ids (one per lobby).
 fn boot(args: &Args) -> (GameServer, Vec<nexum_core::GameInstanceId>) {
-    let runtime_config = RuntimeConfig::new(game_factory())
+    let mut runtime_config = RuntimeConfig::new(game_factory())
         .with_worker_count(args.workers)
         .with_max_queued_reducer_calls(args.queue);
+    // Battery v2: WAL durability under load. Recovery from the same
+    // directory is an explicit later step (Runtime::recover_world).
+    if let Some(dir) = &args.persist {
+        let _ = std::fs::create_dir_all(dir);
+        runtime_config = runtime_config.with_persistence(PersistencePolicy::Flush, dir.clone());
+    }
     let runtime = Runtime::new(runtime_config).expect("runtime");
     let network = NetworkConfig::new()
         .with_max_connections(args.clients.saturating_add(16))
@@ -310,7 +327,7 @@ fn step_server_timed(server: &mut GameServer, t: &mut PhaseTimers) {
     // Split the game-server step into its public halves: the authoritative
     // runtime tick (parallel worlds) and the gateway fan-out (TickUpdate
     // broadcast + subscription pumps + reducer-result routing).
-    let results = server.runtime_mut().step_detailed().expect("runtime tick");
+    let results = server.step_authoritative().expect("runtime tick");
     let t2 = Instant::now();
     let _ = server.gateway_mut().fan_out_results(&results);
     // pump_subscriptions is NOT called here: fan_out_results already drains
@@ -1086,6 +1103,22 @@ fn main() {
             );
         } else {
             drive_profile(args.profile, tick, &mut clients, args.hz);
+        }
+        // Battery v2: deterministic cross-partition injection. A per-mille
+        // of clients submits a `relay` host command; the relay_station
+        // system forwards each across the Phase 12 message bus.
+        if args.xpart > 0 {
+            for i in 0..args.clients {
+                if sm64(args.seed ^ 0xC0FFEE ^ (tick << 24) ^ ((i as u64) << 4)) % 1000
+                    < args.xpart as u64
+                {
+                    let _ = server.submit_command(
+                        nexum_core::PlayerId::from_u64(i as u64 + 1),
+                        "relay",
+                        None,
+                    );
+                }
+            }
         }
         drive_profile(args.profile, tick, &mut clients, args.hz);
         let tick_started = Instant::now();
