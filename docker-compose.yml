@@ -1,0 +1,11 @@
+services:
+  nexum:
+    build: .
+    ports:
+      - "9337:9337"
+    volumes:
+      - nexum-data:/data
+    restart: unless-stopped
+
+volumes:
+  nexum-data:

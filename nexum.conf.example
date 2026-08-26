@@ -1,0 +1,26 @@
+# Nexum production config template
+# Copy to /data/nexum.conf and customise.
+# All values have sensible defaults; uncomment to override.
+
+# ── network ──────────────────────────────────────────────────────────────
+port = 9337
+
+# ── simulation ───────────────────────────────────────────────────────────
+tick_rate_hz = 20
+seed = 42
+partitions = 1
+
+# ── limits ───────────────────────────────────────────────────────────────
+max_connections = 20000
+max_players = 1000
+
+# ── workers ──────────────────────────────────────────────────────────────
+# workers = 0 means auto (min(cores, lobbies x partitions))
+workers = 0
+
+# ── persistence ──────────────────────────────────────────────────────────
+# Set to a directory path to enable WAL durability.
+persist = "/data/wal"
+
+# ── logging ──────────────────────────────────────────────────────────────
+quiet = false

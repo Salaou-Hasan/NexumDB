@@ -1,4 +1,4 @@
-//! `nexum` — the unified CLI for the Nexum authoritative state engine.
+//! `nexum` â€” the unified CLI for the Nexum authoritative state engine.
 //!
 //! ```text
 //! nexum init [name]     Scaffold a new project
@@ -9,6 +9,8 @@
 
 use std::path::Path;
 use std::process;
+
+use game_server::{ServerArgs, run_server};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -43,6 +45,7 @@ COMMANDS:\n\
 \n\
     init [name]     Scaffold a new Nexum project in ./<name>/\n\
     start           Start an authoritative game server\n\
+    version         Print version\n\
 \n\
 FLAGS:\n\
 \n\
@@ -51,10 +54,17 @@ FLAGS:\n\
 \n\
 START OPTIONS:\n\
 \n\
-    --config FILE    Server configuration file (key = value)\n\
-    --port PORT      Listen port (default 9337)\n\
-    --ticks N        Run N ticks then exit (0 = infinite)\n\
-    --lobbies N      Number of concurrent lobbies (default 1)\n"
+    --config FILE    Production config file (key = value, # comments)\n\
+    --port N         TCP listen port (default 9337)\n\
+    --partitions N   Arena partitions (default 1)\n\
+    --hz N           Ticks per second (default 20)\n\
+    --seed N         Deterministic world seed\n\
+    --players N      Max players per lobby\n\
+    --workers N      Parallel tick workers\n\
+    --lobbies N      Number of lobbies (default 20)\n\
+    --persist DIR    Enable WAL durability into DIR\n\
+    --stop-after N   Shut down after N server-loop iterations\n\
+    --quiet          Suppress per-event log lines\n"
     );
 }
 
@@ -124,20 +134,66 @@ fn write_file(path: &Path, contents: &str) {
 // ----------------------------------------------------------------- start
 
 fn cmd_start(args: &[String]) {
-    let mut config_path: Option<String> = None;
-    let mut port: Option<u16> = None;
+    let mut server = ServerArgs::default();
 
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--config" => {
                 i += 1;
-                config_path = args.get(i).cloned();
+                server.config = args.get(i).cloned().map(Into::into);
             }
             "--port" => {
                 i += 1;
-                port = args.get(i).and_then(|v| v.parse().ok());
+                if let Some(v) = args.get(i) {
+                    server.port = v.parse().ok();
+                }
             }
+            "--partitions" => {
+                i += 1;
+                if let Some(v) = args.get(i) {
+                    server.partitions = v.parse().ok();
+                }
+            }
+            "--hz" => {
+                i += 1;
+                if let Some(v) = args.get(i) {
+                    server.hz = v.parse().ok();
+                }
+            }
+            "--seed" => {
+                i += 1;
+                if let Some(v) = args.get(i) {
+                    server.seed = v.parse().ok();
+                }
+            }
+            "--players" => {
+                i += 1;
+                if let Some(v) = args.get(i) {
+                    server.max_players = v.parse().ok();
+                }
+            }
+            "--workers" => {
+                i += 1;
+                if let Some(v) = args.get(i) {
+                    server.workers = v.parse().ok();
+                }
+            }
+            "--persist" => {
+                i += 1;
+                server.persist = args.get(i).cloned().map(Into::into);
+            }
+            "--stop-after" => {
+                i += 1;
+                if let Some(v) = args.get(i) {
+                    server.stop_after = v.parse().ok();
+                }
+            }
+            "--stop-file" => {
+                i += 1;
+                server.stop_file = args.get(i).cloned().map(Into::into);
+            }
+            "--quiet" => server.quiet = true,
             other => {
                 eprintln!("error: unknown start option '{other}'");
                 process::exit(1);
@@ -147,16 +203,5 @@ fn cmd_start(args: &[String]) {
     }
 
     println!("starting Nexum server...");
-    if let Some(p) = port {
-        println!("  port: {p}");
-    }
-    if let Some(cfg) = &config_path {
-        println!("  config: {cfg}");
-    }
-    println!();
-    println!("NOTE: full server delegation arrives with Phase 28.");
-    println!("For now, use:");
-    println!();
-    println!("  cargo run --release -p game-server -- server");
-    println!();
+    let _ = run_server(server);
 }

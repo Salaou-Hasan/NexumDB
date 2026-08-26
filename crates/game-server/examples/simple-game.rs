@@ -1,11 +1,12 @@
 //! Dead-simple game authoring example.
 //!
-//! First field is the primary key. `#[table]` generates schema + CRUD.
+//! `#[derive(NexumTable)]` generates schema + full CRUD from struct fields.
+//! First field is the primary key.
 
-use nexum_macros::table;
+use nexum_macros::NexumTable;
 
 #[allow(dead_code)]
-#[table]
+#[derive(NexumTable)]
 struct Player {
     id: u64,
     x: i64,
@@ -18,7 +19,7 @@ struct Player {
 fn main() {
     println!("=== Simple game example ===");
     println!();
-    println!("#[table] auto-generates:");
+    println!("#[derive(NexumTable)] auto-generates:");
     println!("  Player::schema()          -> TableSchema");
     println!("  Player::get(ctx, id)      -> Option<Player>");
     println!("  player.save(ctx)          -> Result<()>");
