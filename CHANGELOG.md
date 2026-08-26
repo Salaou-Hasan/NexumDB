@@ -1,8 +1,64 @@
-# Changelog
+﻿# Changelog
 
 All notable changes to Nexum will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
+
+## [0.2.0] - 2026-08-26
+
+### Phase 26 — Simulation Battery
+
+- **Battery infrastructure**: six game-genre workloads (SOCIAL, FPS, MMO,
+  RTS, SURVIVAL, EXTREME) driven by deterministic seeded player brains.
+- **New gameplay reducers**: unit_move (RTS density), gather (RMW economy),
+  presence (social RPC), relay_recv (cross-partition handler).
+- **Gateway stage profiler**: collect/decode/dispatch/tick_update/deltas/
+  results per-step timing.
+- **Tick-phase breakdown**: calls/systems/commit wall times per world.
+- **Server-only latency series**: excludes in-process client simulation.
+
+### Phase 27 — Performance Campaign
+
+#### Fixed
+- WriteSet::absorb released child base Arc after make_mut, causing an
+  O(parent-writes) deep clone per call (188x regression from Phase 22).
+- Runtime input-frame merge: worlds now consume all queued same-tick
+  frames in one tick instead of one frame per tick.
+- GameServer::step_authoritative exposed the authoritative half of step()
+  so host commands are flushed before the runtime tick.
+- Benchmark double-drive bug: stray duplicate drive_profile call measured
+  2x load, invalidating earlier 20K results.
+
+#### Changed
+- WASM engine fuel/epoch trap classification via structured Trap downcast.
+- fire_weapon schedules staggered per client ((tick + i) % k) to eliminate
+  manufactured burst bimodality in p99.
+- Client pump/drain moved to dedicated pool; drain parallelized.
+- Instant::now() hoisted out of per-message rate-limit path (one read per
+  process_inbound batch).
+- Unresolved-pending sweep skipped when all worlds are Running.
+- Composite host ops LOOKUP_GET_UNIQUE and INDEX_SCAN_GET added (fire
+  crossings reduced from 6-9 to 4-6).
+- Movement stream system processes moves as batched InputFrames with
+  O(1) HashSet occupancy checks (was O(log N) BTreeMap + row clones).
+- TCP_NODELAY set on connect and accept (Nagle adds ~40ms on real nets).
+
+#### Performance (E workload @ 20K CCU, server-only)
+- server p50: ~60ms -> 31.3ms (-48%)
+- server p99: ~96ms -> 46.2ms (-52%)
+- calls phase: 50.5 -> 10.5-15.9ms (-69%)
+- Result frames/tick: 22,800 -> 2,800 (-88%)
+
+#### Battery results (all genres, server p99 ms)
+
+| Workload | 1K | 5K | 10K | 20K |
+|---|---|---|---|---|
+| SOCIAL | 1.4 | 4.6 | 5.3 | 10.0 |
+| FPS | 3.9 | 14.4 | 12.1 | 32.9 |
+| MMO | 3.7 | 16.0 | 14.6 | 44.9 |
+| SURVIVAL | 3.3 | 14.1 | 12.7 | 31.1 |
+
+All runs: zero failed ticks, zero rejected, zero dropped, deterministic.
 
 ## [0.1.0] - 2026-08-19
 
