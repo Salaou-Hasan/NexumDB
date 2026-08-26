@@ -96,3 +96,37 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo install cargo-audit --locked || echo "audit install skipped"
       - run: cargo audit || echo "audit findings are advisory"
+
+  benchmark:
+    name: Benchmark (${{ matrix.workload }}@${{ matrix.ccu }})
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [fmt, clippy, test, doc, build-release]
+    strategy:
+      fail-fast: false
+      matrix:
+        workload: [SOCIAL, FPS, MMO, RTS, SURVIVAL, EXTREME]
+        ccu: [20000]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: bench-${{ matrix.workload }}-${{ matrix.ccu }}
+      - name: Run benchmark
+        run: |
+          cargo run --release -p game-server --example ccu -- \
+            --clients ${{ matrix.ccu }} \
+            --workload ${{ matrix.workload }} \
+            --ticks 120 --lobbies 20 --input-moves --csv 2>&1 | tee bench-${{ matrix.workload }}-${{ matrix.ccu }}.log
+      - name: Extract scorecard
+        if: always()
+        run: |
+          grep "SCORECARD" bench-${{ matrix.workload }}-${{ matrix.ccu }}.log || echo "no scorecard"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bench-${{ matrix.workload }}-${{ matrix.ccu }}
+          path: bench-${{ matrix.workload }}-${{ matrix.ccu }}.log
+          retention-days: 90
