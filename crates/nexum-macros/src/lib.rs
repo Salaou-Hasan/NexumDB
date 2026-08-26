@@ -121,9 +121,10 @@ pub fn derive_nexum_table(input: TokenStream) -> TokenStream {
     let struct_name = &input.ident;
     let table_name = get_table_name(&input);
 
+    // Collect field metadata
     let mut primary_keys: Vec<String> = Vec::new();
-    let mut column_defs = Vec::new();
-    let mut index_defs: Vec<(String, Vec<String>)> = Vec::new();
+    let mut fields_meta: Vec<(String, String)> = Vec::new(); // (name, col_type_str)
+    let mut pk_field_index: Option<usize> = None;
 
     let syn::Data::Struct(data_struct) = &input.data else {
         return quote! {}.into();
@@ -131,26 +132,20 @@ pub fn derive_nexum_table(input: TokenStream) -> TokenStream {
     let syn::Fields::Named(fields) = &data_struct.fields else {
         return quote! {}.into();
     };
-    for field in fields.named.iter() {
+
+    for (col_idx, field) in fields.named.iter().enumerate() {
         let field_name = field.ident.as_ref().unwrap().to_string();
         let col_type = match rust_type_to_column_type(&field.ty) {
             Some(ct) => ct,
-            None => continue, // skip non-primitive fields
+            None => continue,
         };
 
         let mut is_pk = false;
-        let mut index_name: Option<String> = None;
-
         for attr in &field.attrs {
             if attr.path().is_ident("nexum") {
                 let _ = attr.parse_nested_meta(|meta| {
                     if meta.path.is_ident("primary_key") {
                         is_pk = true;
-                    }
-                    if meta.path.is_ident("index") {
-                        let value = meta.value()?;
-                        let index_label: syn::LitStr = value.parse()?;
-                        index_name = Some(index_label.value());
                     }
                     Ok(())
                 });
@@ -159,16 +154,22 @@ pub fn derive_nexum_table(input: TokenStream) -> TokenStream {
 
         if is_pk {
             primary_keys.push(field_name.clone());
+            pk_field_index = Some(col_idx);
         }
-        if let Some(ref idx_name) = index_name {
-            index_defs.push((idx_name.clone(), vec![field_name.clone()]));
-        }
-
-        let type_ident = syn::Ident::new(col_type, proc_macro2::Span::call_site());
-        column_defs.push(quote! {
-            .column(#field_name, nexum_core::ColumnType::#type_ident)
-        });
+        fields_meta.push((field_name, col_type.to_string()));
     }
+
+    let pk_field_name = primary_keys.first().cloned().unwrap_or_default();
+    let pk_col_idx = pk_field_index.unwrap_or(0);
+
+    // Build column definitions chain
+    let column_defs: Vec<_> = fields_meta
+        .iter()
+        .map(|(name, ct)| {
+            let type_ident = syn::Ident::new(ct, proc_macro2::Span::call_site());
+            quote! { .column(#name, ::nexum_core::ColumnType::#type_ident) }
+        })
+        .collect();
 
     let pk_expr = if primary_keys.is_empty() {
         quote! {}
@@ -177,22 +178,185 @@ pub fn derive_nexum_table(input: TokenStream) -> TokenStream {
         quote! { .primary_key(&[#(#pk_refs),*]) }
     };
 
-    let _ = &index_defs;
+    // Generate per-field from_row extraction expressions
+    let from_row_fields: Vec<_> = fields_meta
+        .iter()
+        .enumerate()
+        .map(|(idx, (name, ct))| {
+            let field_ident = syn::Ident::new(name, proc_macro2::Span::call_site());
+            let idx_lit = syn::LitInt::new(&idx.to_string(), proc_macro2::Span::call_site());
+            let expr = match ct.as_str() {
+                "U64" | "U8" | "U16" | "U32" => quote! {
+                    row.get(#idx_lit).and_then(|v| v.as_u64()).unwrap_or(0)
+                },
+                "I64" | "I8" | "I16" | "I32" => quote! {
+                    row.get(#idx_lit).and_then(|v| v.as_i64()).unwrap_or(0)
+                },
+                "F64" | "F32" => quote! {
+                    match row.get(#idx_lit) {
+                        Some(::nexum_core::Value::F64(v)) => *v,
+                        _ => 0.0,
+                    }
+                },
+                "String" => quote! {
+                    row.get(#idx_lit).and_then(|v| v.as_str()).unwrap_or("").to_string()
+                },
+                _ => quote! {
+                    row.get(#idx_lit).and_then(|v| v.as_i64()).unwrap_or(0)
+                },
+            };
+            quote! { #field_ident: #expr }
+        })
+        .collect();
+
+    // Generate per-field to_row value construction expressions
+    let to_row_values: Vec<_> = fields_meta
+        .iter()
+        .enumerate()
+        .map(|(idx, (name, ct))| {
+            let field_ident = syn::Ident::new(name, proc_macro2::Span::call_site());
+            let expr = match ct.as_str() {
+                "U64" | "U8" | "U16" | "U32" => quote! {
+                    ::nexum_core::Value::U64(self.#field_ident as u64)
+                },
+                "I64" | "I8" | "I16" | "I32" => quote! {
+                    ::nexum_core::Value::I64(self.#field_ident as i64)
+                },
+                "F64" | "F32" => quote! {
+                    ::nexum_core::Value::F64(self.#field_ident as f64)
+                },
+                "String" => quote! {
+                    ::nexum_core::Value::String(self.#field_ident.clone())
+                },
+                _ => quote! {
+                    ::nexum_core::Value::I64(self.#field_ident as i64)
+                },
+            };
+            quote! { #expr }
+        })
+        .collect();
+
+    // Determine PK expression for get/delete lookups
+    let pk_lookup_type =
+        pk_field_index.and_then(|idx| fields_meta.get(idx).map(|(_, ct)| ct.clone()));
+    let pk_fn_param = match pk_lookup_type.as_deref() {
+        Some("U64") | Some("U8") | Some("U16") | Some("U32") => quote! { pk_id: u64 },
+        Some("I64") | Some("I8") | Some("I16") | Some("I32") => quote! { pk_id: i64 },
+        Some("String") => quote! { pk_id: String },
+        _ => quote! { pk_id: u64 },
+    };
+    let pk_lookup_expr = match pk_lookup_type.as_deref() {
+        Some("I64") | Some("I8") | Some("I16") | Some("I32") => {
+            quote! { &[::nexum_core::Value::I64(pk_id)] }
+        }
+        Some("String") => {
+            quote! { &[::nexum_core::Value::String(pk_id.clone())] }
+        }
+        _ => quote! { &[::nexum_core::Value::U64(pk_id)] },
+    };
+    // For save: read the PK value from self instead of a parameter.
+    let pk_field_ident = syn::Ident::new(&pk_field_name, proc_macro2::Span::call_site());
+    let pk_self_lookup = match pk_lookup_type.as_deref() {
+        Some("I64") | Some("I8") | Some("I16") | Some("I32") => {
+            quote! { &[::nexum_core::Value::I64(self.#pk_field_ident as i64)] }
+        }
+        Some("String") => {
+            quote! { &[::nexum_core::Value::String(self.#pk_field_ident.clone())] }
+        }
+        _ => quote! { &[::nexum_core::Value::U64(self.#pk_field_ident)] },
+    };
 
     let expanded = quote! {
         impl #struct_name {
-            /// Auto-generated by #[derive(NexumTable)] — returns the table schema.
+            /// Auto-generated table name.
+            pub const NEXUM_TABLE_NAME: &'static str = #table_name;
+
+            /// Auto-generated schema.
             pub fn nexum_table_schema() -> nexum_core::TableSchema {
-                use nexum_core::{ColumnType, TableSchema};
-                TableSchema::builder(#table_name)
+                ::nexum_core::TableSchema::builder(#table_name)
                     #(#column_defs)*
                     #pk_expr
                     .build()
                     .unwrap_or_else(|e| panic!("nexum table schema build error: {e}"))
             }
 
-            /// Returns the auto-generated table name (snake_case of struct).
-            pub const NEXUM_TABLE_NAME: &'static str = #table_name;
+            /// Deserialize from a Row reference.
+            pub fn nexum_from_row(row: &::nexum_core::Row) -> Self {
+                Self {
+                    #(#from_row_fields,)*
+                }
+            }
+
+            /// Serialize to a Row.
+            pub fn nexum_to_row(&self) -> ::nexum_core::Row {
+                ::nexum_core::Row::new(vec![
+                    #(#to_row_values,)*
+                ])
+            }
+
+            /// Get one entity by primary key.
+            pub fn nexum_get(
+                ctx: &mut ::nexum_reducer::ReducerContext,
+                #pk_fn_param,
+            ) -> ::nexum_core::Result<Option<Self>> {
+                let owners = ctx.lookup_unique(
+                    Self::NEXUM_TABLE_NAME, "primary",
+                    #pk_lookup_expr,
+                )?;
+                match owners.first() {
+                    Some(&rid) => {
+                        let row = ctx.get(Self::NEXUM_TABLE_NAME, rid)?;
+                        Ok(row.as_ref().map(Self::nexum_from_row))
+                    }
+                    None => Ok(None),
+                }
+            }
+
+            /// Save (update) this entity by primary key.
+            pub fn nexum_save(&self, ctx: &mut ::nexum_reducer::ReducerContext) -> ::nexum_core::Result<()> {
+                let owners = ctx.lookup_unique(
+                    Self::NEXUM_TABLE_NAME, "primary",
+                    #pk_self_lookup,
+                )?;
+                let Some(&rid) = owners.first() else {
+                    return Err(::nexum_core::Error::not_found(concat!(
+                        "cannot save ", #table_name, ": row not found"
+                    )));
+                };
+                ctx.update(Self::NEXUM_TABLE_NAME, rid, self.nexum_to_row())?;
+                Ok(())
+            }
+
+            /// Create (insert) this entity.
+            pub fn nexum_create(&self, ctx: &mut ::nexum_reducer::ReducerContext) -> ::nexum_core::Result<()> {
+                ctx.insert(Self::NEXUM_TABLE_NAME, self.nexum_to_row())?;
+                Ok(())
+            }
+
+            /// Delete by primary key.
+            pub fn nexum_delete(
+                ctx: &mut ::nexum_reducer::ReducerContext,
+                #pk_fn_param,
+            ) -> ::nexum_core::Result<()> {
+                let owners = ctx.lookup_unique(
+                    Self::NEXUM_TABLE_NAME, "primary",
+                    #pk_lookup_expr,
+                )?;
+                if let Some(&rid) = owners.first() {
+                    ctx.delete(Self::NEXUM_TABLE_NAME, rid)?;
+                }
+                Ok(())
+            }
+
+            /// Scan all rows and deserialize into typed structs.
+            pub fn nexum_all(
+                ctx: &mut ::nexum_reducer::ReducerContext,
+            ) -> ::nexum_core::Result<Vec<Self>> {
+                Ok(ctx.scan(Self::NEXUM_TABLE_NAME)?
+                    .into_iter()
+                    .map(|(_, row)| Self::nexum_from_row(&row))
+                    .collect())
+            }
         }
     };
 
