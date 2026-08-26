@@ -40,6 +40,11 @@ pub const FIRE_COOLDOWN: i64 = 5;
 /// Damage dealt by one hit.
 pub const FIRE_DAMAGE: i64 = 25;
 
+/// The Area of Interest radius (in tiles). Players outside this radius
+/// of any other player are considered "dormant" — their position updates
+/// are not written back, reducing subscription delta volume.
+pub const AOI_RADIUS: i64 = 12;
+
 /// The `players` table (authoritative gameplay state).
 pub const TABLE: &str = "players";
 
@@ -671,8 +676,31 @@ fn movement_stream(ctx: &mut SimulationContext, frame: &InputFrame) -> Result<()
         pending.push(idx);
     }
 
+    // Phase B2: AOI visibility — mark players within AOI_RADIUS of at least
+    // one other player as "active". Dormant players skip the write-back,
+    // reducing subscription delta volume proportional to the radius.
+    let r2 = AOI_RADIUS * AOI_RADIUS;
+    let mut active = vec![false; players.len()];
+    for i in 0..players.len() {
+        for j in 0..players.len() {
+            if i == j {
+                continue;
+            }
+            let dx = players[i].x - players[j].x;
+            let dy = players[i].y - players[j].y;
+            if dx * dx + dy * dy <= r2 {
+                active[i] = true;
+                active[j] = true;
+                break;
+            }
+        }
+    }
+
     // Phase C: write back from struct fields directly — no Row.clone().
     for &idx in &pending {
+        if !active[idx] {
+            continue;
+        }
         let p = &players[idx];
         ctx.update(
             TABLE,

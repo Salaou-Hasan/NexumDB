@@ -35,6 +35,11 @@ pub struct StoredRow {
 }
 
 impl StoredRow {
+    /// Creates a new stored row with the given data and version.
+    pub fn new(row: Row, version: Version) -> Self {
+        Self { row, version }
+    }
+
     /// Returns the row data.
     pub fn row(&self) -> &Row {
         &self.row
@@ -90,6 +95,15 @@ impl StorageTable {
     /// Returns the table schema.
     pub fn schema(&self) -> &TableSchema {
         &self.schema
+    }
+
+    /// Returns the underlying BTreeMap of rows (read-only).
+    ///
+    /// Used by derived infrastructure (e.g. [`ColumnarStore`](crate::columnar::ColumnarStore))
+    /// to build or rebuild from the authoritative row data.
+    #[allow(dead_code)]
+    pub(crate) fn rows(&self) -> &BTreeMap<RowId, StoredRow> {
+        &self.rows
     }
 
     /// Returns the number of rows.

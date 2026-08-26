@@ -30,9 +30,11 @@
 #![warn(missing_docs)]
 
 mod change;
+pub mod columnar;
 pub mod snapshot;
 mod table;
 
 pub use change::Change;
+pub use columnar::{ColumnarStore, RowRef};
 pub use snapshot::TableState;
 pub use table::{StorageTable, StoredRow};

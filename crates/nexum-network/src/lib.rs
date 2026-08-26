@@ -64,7 +64,10 @@ pub use policy::{AllowAllPolicy, GamePolicy};
 pub use protocol::{DeltaKind, PROTOCOL_VERSION};
 pub use rate::RateLimitConfig;
 pub use session::Session;
-pub use transport::{Connection, MemoryConnection, MemoryTransport, TcpConnection, TcpTransport};
+pub use transport::{
+    Connection, MemoryConnection, MemoryTransport, TcpConnection, TcpTransport, WsConnection,
+    WsTransport,
+};
 
 #[cfg(test)]
 mod tests;

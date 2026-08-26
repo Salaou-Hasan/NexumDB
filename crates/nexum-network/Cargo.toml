@@ -15,6 +15,7 @@ nexum-reducer.workspace = true
 nexum-subscription.workspace = true
 nexum-simulation.workspace = true
 nexum-runtime.workspace = true
+tungstenite = { version = "0.24", features = ["handshake"] }
 
 [dev-dependencies]
 nexum-core.workspace = true

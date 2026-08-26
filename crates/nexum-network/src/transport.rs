@@ -543,6 +543,199 @@ impl Connection for TcpConnection {
     }
 }
 
+// ----------------------------------------------------------------- WebSocket
+
+/// A nonblocking WebSocket connection. Each binary message carries one
+/// protocol frame. Outbound frames are queued and flushed in
+/// `flush_outbound`, matching the TCP transport pattern.
+pub struct WsConnection {
+    ws: Option<tungstenite::WebSocket<TcpStream>>,
+    peer: String,
+    outbound: VecDeque<Vec<u8>>,
+    outbound_cap: usize,
+    closed: bool,
+}
+
+impl fmt::Debug for WsConnection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WsConnection")
+            .field("peer", &self.peer)
+            .field("closed", &self.closed)
+            .finish()
+    }
+}
+
+impl WsConnection {
+    /// Completes the WebSocket handshake on an accepted TCP stream and
+    /// switches back to non-blocking mode for the game loop.
+    pub(crate) fn from_accepted(
+        stream: TcpStream,
+        peer: String,
+        outbound_cap: usize,
+    ) -> Result<Self, NetworkError> {
+        stream
+            .set_nodelay(true)
+            .map_err(|error| NetworkError::Internal(format!("ws set_nodelay failed: {error}")))?;
+        stream
+            .set_nonblocking(false)
+            .map_err(|error| NetworkError::Internal(format!("ws set_blocking failed: {error}")))?;
+        let ws = tungstenite::accept(stream)
+            .map_err(|error| NetworkError::Internal(format!("ws accept failed: {error}")))?;
+        ws.get_ref().set_nonblocking(true).map_err(|error| {
+            NetworkError::Internal(format!("ws set_nonblocking failed: {error}"))
+        })?;
+        Ok(Self {
+            ws: Some(ws),
+            peer,
+            outbound: VecDeque::new(),
+            outbound_cap,
+            closed: false,
+        })
+    }
+}
+
+impl Connection for WsConnection {
+    fn peer(&self) -> &str {
+        &self.peer
+    }
+
+    fn try_recv_frame(&mut self) -> Result<Option<Arc<[u8]>>, TransportError> {
+        if self.closed {
+            return Err(TransportError::Closed);
+        }
+        let ws = self.ws.as_mut().ok_or(TransportError::Closed)?;
+        loop {
+            match ws.read() {
+                Ok(tungstenite::Message::Binary(data)) => {
+                    return Ok(Some(Arc::from(data)));
+                }
+                Ok(tungstenite::Message::Close(_)) => {
+                    self.closed = true;
+                    return Err(TransportError::Closed);
+                }
+                Ok(tungstenite::Message::Ping(data)) => {
+                    let _ = ws.write(tungstenite::Message::Pong(data));
+                    continue;
+                }
+                Ok(_) => continue,
+                Err(tungstenite::Error::Io(ref e))
+                    if e.kind() == std::io::ErrorKind::WouldBlock =>
+                {
+                    return Ok(None);
+                }
+                Err(_) => {
+                    self.closed = true;
+                    return Err(TransportError::Io);
+                }
+            }
+        }
+    }
+
+    fn try_send_frame(&mut self, frame: Arc<[u8]>) -> Result<(), TransportError> {
+        if self.closed {
+            return Err(TransportError::Closed);
+        }
+        if self.outbound.len() >= self.outbound_cap {
+            return Err(TransportError::Full);
+        }
+        self.outbound.push_back(frame.to_vec());
+        Ok(())
+    }
+
+    fn flush_outbound(&mut self) -> Result<(), TransportError> {
+        if self.closed {
+            return Err(TransportError::Closed);
+        }
+        let ws = self.ws.as_mut().ok_or(TransportError::Closed)?;
+        while let Some(frame) = self.outbound.front() {
+            match ws.write(tungstenite::Message::Binary(frame.clone())) {
+                Ok(()) => {
+                    self.outbound.pop_front();
+                }
+                Err(tungstenite::Error::Io(ref e))
+                    if e.kind() == std::io::ErrorKind::WouldBlock =>
+                {
+                    break;
+                }
+                Err(_) => {
+                    self.closed = true;
+                    return Err(TransportError::Io);
+                }
+            }
+        }
+        ws.flush().map_err(|_| {
+            self.closed = true;
+            TransportError::Io
+        })
+    }
+
+    fn close(&mut self) {
+        if let Some(ws) = self.ws.as_mut() {
+            let _ = ws.write(tungstenite::Message::Close(None));
+            let _ = ws.flush();
+        }
+        self.closed = true;
+    }
+}
+
+// ----------------------------------------------------------------- WebSocket transport
+
+/// A nonblocking WebSocket transport: one [`TcpListener`] accepts inbound
+/// connections, completes the HTTP upgrade handshake, and creates
+/// [`WsConnection`] pairs for the gateway.
+pub struct WsTransport {
+    listener: TcpListener,
+    #[allow(dead_code)]
+    outbound_cap: usize,
+    #[allow(dead_code)]
+    max_payload: u32,
+}
+
+impl WsTransport {
+    /// Binds a nonblocking listener on `addr`.
+    pub fn listen(addr: impl ToSocketAddrs) -> Result<Self, NetworkError> {
+        let listener = TcpListener::bind(addr)
+            .map_err(|error| NetworkError::Internal(format!("ws bind failed: {error}")))?;
+        listener.set_nonblocking(true).map_err(|error| {
+            NetworkError::Internal(format!("ws set_nonblocking failed: {error}"))
+        })?;
+        Ok(Self {
+            listener,
+            outbound_cap: 256,
+            max_payload: 64 * 1024,
+        })
+    }
+
+    /// The local address the listener is bound to.
+    pub fn local_addr(&self) -> Result<SocketAddr, NetworkError> {
+        self.listener
+            .local_addr()
+            .map_err(|error| NetworkError::Internal(format!("ws local_addr failed: {error}")))
+    }
+
+    /// Accepts a new inbound WebSocket connection (non-blocking).
+    ///
+    /// The HTTP upgrade handshake is performed inline (blocking but fast —
+    /// the client sends the upgrade request immediately after TCP connect).
+    pub fn accept(
+        &self,
+        _inbound_cap: usize,
+        outbound_cap: usize,
+    ) -> Result<Option<WsConnection>, NetworkError> {
+        match self.listener.accept() {
+            Ok((stream, _addr)) => {
+                let peer = stream
+                    .peer_addr()
+                    .map(|addr| addr.to_string())
+                    .unwrap_or_else(|_| "ws:unknown".to_string());
+                WsConnection::from_accepted(stream, peer, outbound_cap).map(Some)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
+            Err(error) => Err(NetworkError::Internal(format!("ws accept failed: {error}"))),
+        }
+    }
+}
+
 // ----------------------------------------------------------------- TCP transport
 
 /// A nonblocking TCP transport: one [`TcpListener`] accepts inbound

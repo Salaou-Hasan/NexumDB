@@ -358,7 +358,12 @@ impl NetworkGateway {
         // (slab iteration + ring pops) from protocol decode + dispatch,
         // giving the CPU better cache locality during the decode pass.
         // Each connection may have multiple frames queued per tick.
+        //
+        // Phase 28: transport errors are collected into `deferred_drops`
+        // and applied after the loop — avoids mutating shared gateway
+        // state (runtime, subscriptions, pending_calls) during iteration.
         let mut frames: Vec<(ConnectionId, Arc<[u8]>)> = Vec::new();
+        let mut deferred_drops: Vec<(ConnectionId, &'static str)> = Vec::new();
         let len = self.connections.len();
         for idx in 0..len {
             if self.connections[idx].is_none() {
@@ -388,12 +393,18 @@ impl NetworkGateway {
                     }
                     Ok(None) => break,
                     Err(_) => {
-                        self.drop_connection(&connection, "transport closed");
+                        // Defer the drop — avoids mutating gateway state
+                        // (runtime, subscriptions) during slab iteration.
+                        deferred_drops.push((connection, "transport closed"));
                         report.disconnected += 1;
                         break;
                     }
                 }
             }
+        }
+        // Apply deferred drops sequentially (Phase 28).
+        for (connection, reason) in deferred_drops {
+            self.drop_connection(&connection, reason);
         }
 
         // Phase 2: Decode and dispatch — process the contiguous frame
