@@ -104,6 +104,9 @@ struct Args {
     /// Phase 27a: send player moves as batched InputFrames instead of
     /// correlated reducer calls (no result frames, no pending tracking).
     input_moves: bool,
+    /// Phase 27 aggressive: use native fire_weapon_native instead of the
+    /// WASM module (bypasses interpreter overhead for the hottest reducer).
+    native_fire: bool,
     /// Phase 26 battery v2: cross-partition injection rate, in per-mille of
     /// clients per tick that submit a `relay` command (requires partitions
     /// > 1 within a lobby). Exercises the deterministic message bus.
@@ -139,6 +142,7 @@ fn parse_args() -> Args {
         seed: 12_345,
         csv: false,
         input_moves: false,
+        native_fire: false,
         xpart: 0,
         persist: None,
     };
@@ -166,7 +170,7 @@ fn parse_args() -> Args {
             "--seed" => args.seed = value().parse().unwrap(),
             "--csv" => args.csv = true,
             "--input-moves" => args.input_moves = true,
-            "--xpart" => args.xpart = value().parse().unwrap(),
+            "--native-fire" => args.native_fire = true,
             "--persist" => args.persist = Some(std::path::PathBuf::from(value())),
             "--help" | "-h" => {
                 println!(
@@ -209,6 +213,7 @@ struct SimClient {
 struct MoveCtx {
     next_tick: std::collections::HashMap<nexum_core::WorldId, nexum_core::TickId>,
     enabled: bool,
+    fire_reducer: &'static str,
 }
 
 /// Boots the real stack with arena games (lobbies) running and reducers exposed.
@@ -611,7 +616,7 @@ fn drive_workload(
         } else if roll < m + f {
             let _ = sim
                 .client
-                .call_reducer("fire_weapon", nexum_reducer::ReducerArgs::new());
+                .call_reducer(mv.fire_reducer, nexum_reducer::ReducerArgs::new());
         } else if roll < m + f + r {
             let _ = sim
                 .client
@@ -659,7 +664,7 @@ fn drive_profile(profile: char, tick: u64, clients: &mut [SimClient], hz: u64, m
                 for sim in clients.iter_mut() {
                     let _ = sim
                         .client
-                        .call_reducer("fire_weapon", nexum_reducer::ReducerArgs::new());
+                        .call_reducer(mv.fire_reducer, nexum_reducer::ReducerArgs::new());
                 }
             }
         }
@@ -673,7 +678,7 @@ fn drive_profile(profile: char, tick: u64, clients: &mut [SimClient], hz: u64, m
                 for sim in clients.iter_mut() {
                     let _ = sim
                         .client
-                        .call_reducer("fire_weapon", nexum_reducer::ReducerArgs::new());
+                        .call_reducer(mv.fire_reducer, nexum_reducer::ReducerArgs::new());
                 }
             }
         }
@@ -697,7 +702,7 @@ fn drive_profile(profile: char, tick: u64, clients: &mut [SimClient], hz: u64, m
                 if (tick + idx).is_multiple_of(10) {
                     let _ = sim
                         .client
-                        .call_reducer("fire_weapon", nexum_reducer::ReducerArgs::new());
+                        .call_reducer(mv.fire_reducer, nexum_reducer::ReducerArgs::new());
                 }
                 if (tick + idx * 2).is_multiple_of(25) {
                     let _ = sim
@@ -1126,6 +1131,11 @@ fn main() {
     let mut move_ctx = MoveCtx {
         next_tick: std::collections::HashMap::new(),
         enabled: args.input_moves,
+        fire_reducer: if args.native_fire {
+            "fire_weapon_native"
+        } else {
+            "fire_weapon"
+        },
     };
     // Let the first join commits land.
     step(&mut server, &mut clients);
