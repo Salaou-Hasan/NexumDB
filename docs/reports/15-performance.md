@@ -1,4 +1,4 @@
-# Phase 15 — Performance & Benchmarking: Report
+﻿# Phase 15 — Performance & Benchmarking: Report
 
 Status: complete. Phase 15 measured Nexum as authoritative state grows from
 100K → 1M → 5M → 10M rows, identified three real bottlenecks from
@@ -154,8 +154,8 @@ around the one key that moved (O(log N) + emitted deltas). A debug-only
 invariant check recomputes the exact top-cap after every sync and asserts
 equality; it runs in all debug test suites.
 
-**Result:** single-row delta 100K: 575 µs → 1.4 µs (**~410×**); deep-row
-delta: 880 µs → 1.7 µs; 10M-row delta: 9.9 µs → 1.4 µs (**~7×**). The
+**Result:** single-row delta 100K: 575 µs → 1.4 µs (**~410x**); deep-row
+delta: 880 µs → 1.7 µs; 10M-row delta: 9.9 µs → 1.4 µs (**~7x**). The
 observable view contract is unchanged (the 55-test subscription suite,
 including the boundary/eviction/backfill/ordering tests, passes; the
 game-server e2e tests caught and validated the boundary case during
@@ -174,7 +174,7 @@ Documented consequence: `lookup` on a non-unique index returns ids in
 ordering that coincides with insertion order wherever RowIds are allocated
 in insertion order, and is *more* deterministic.
 
-**Result:** UPDATE-one-row @10M: 9.17 µs → 0.95 µs (**~9.6×**), now flat
+**Result:** UPDATE-one-row @10M: 9.17 µs → 0.95 µs (**~9.6x**), now flat
 across 100K→10M. Read-side `lookup` output scales with result size
 (~1.3 ns/hit, inherent to returning a membership).
 

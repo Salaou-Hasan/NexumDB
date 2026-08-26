@@ -1,4 +1,4 @@
-# Phase 20 — Interest Management / AOI: Design
+﻿# Phase 20 — Interest Management / AOI: Design
 
 Status: design complete, implementation follows. The subscription
 engine's workload was measured in Phase 19: the dominant cost is the
@@ -15,12 +15,12 @@ game client (`game-server/src/client.rs`) uses
 `Query::builder(TABLE).build()` — so:
 
 - `SubscriptionRegistry::apply_changes` evaluates **every change against
-  every subscription**: 1,000 × 1,000 = **1,000,000 `apply_change`
-  calls per movement tick** — O(changes × subscriptions).
+  every subscription**: 1,000 x 1,000 = **1,000,000 `apply_change`
+  calls per movement tick** — O(changes x subscriptions).
 - All 1,000 subscriptions have **identical windows and identical delta
   streams** (same query, same table, same derivation), yet each is
-  maintained independently: 1,000 identical BTreeMap windows, 1,000× the
-  window maintenance, 1,000× the delta computation.
+  maintained independently: 1,000 identical BTreeMap windows, 1,000x the
+  window maintenance, 1,000x the delta computation.
 - Measured: `sub_apply` = 30.5 ms/tick before Phase 19's Arc sharing,
   11.4 ms/tick after (72% → 65% of tick). The count is the problem.
 
@@ -35,7 +35,7 @@ Every attached client decodes the **full change set** carried by the
 window is 32 rows and its SDK view is driven by windowed
 `SubscriptionDelta` frames. The `TickUpdate.changes` list feeds only a
 diagnostic event (`ServerEvent::Tick`) — the game client reads only the
-tick number. Measured: client decode ≈ 6.6 ms/tick at 1K — O(changes ×
+tick number. Measured: client decode ≈ 6.6 ms/tick at 1K — O(changes x
 clients) redundant work plus bandwidth.
 
 ## 3. Chosen Architecture (smallest justified by measurement)
@@ -78,14 +78,14 @@ bounded). When false, the `TickUpdate` carries `(world, tick, tx_id,
 change_count, events)` but **not** the full decoded change list; clients
 receive windowed `SubscriptionDelta` frames as the delivery path. The
 `ServerEvent::Tick` still fires (diagnostics), with an empty change
-list. This removes the O(changes × clients) decode and the redundant
+list. This removes the O(changes x clients) decode and the redundant
 per-tick bandwidth. Opt in (`true`) for full per-tick change diagnostics.
 
 ### D3 — Counters (the metric this phase is judged by)
 
 `SubscriptionRegistry` exposes cumulative stats:
 
-- `evaluations` — change × distinct-query `apply_change` calls;
+- `evaluations` — change x distinct-query `apply_change` calls;
 - `deltas` — subscription updates produced;
 - `fanouts` — member buffer appends.
 

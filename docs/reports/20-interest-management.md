@@ -1,4 +1,4 @@
-# Phase 20 — Interest Management / AOI: Report
+﻿# Phase 20 — Interest Management / AOI: Report
 
 Status: complete. The subscription fan-out was restructured from
 **evaluate-every-change-against-every-subscription** to
@@ -12,9 +12,9 @@ determinism are untouched.
 Every client subscribed to the same query (the CCU harness uses
 `Query::builder("players").limit(32)`, the arena game client uses
 `Query::builder(TABLE)`), so at 1K clients a movement tick performed
-1,000 changes × 1,000 subscriptions = **1,000,000 identical
-`apply_change` evaluations** — 1,000 identical windows, 1,000× the
-maintenance, 1,000× the delta computation. Measured: `sub_apply`
+1,000 changes x 1,000 subscriptions = **1,000,000 identical
+`apply_change` evaluations** — 1,000 identical windows, 1,000x the
+maintenance, 1,000x the delta computation. Measured: `sub_apply`
 = 11.4 ms/tick (65% of tick) after Phase 19. Separately, every client
 decoded the **full change set** broadcast in `TickUpdate` (1,000
 changes) though its window is 32 rows — 6.6 ms/tick of redundant client
@@ -47,20 +47,20 @@ member's independent buffer:
 `NetworkConfig::tick_update_changes` (default **false**): the `TickUpdate`
 broadcast carries tick metadata + events but **not** the full change
 list — clients receive windowed `SubscriptionDelta` frames as the
-delivery path. Removes the O(changes × clients) decode and the redundant
+delivery path. Removes the O(changes x clients) decode and the redundant
 per-tick bandwidth. Opt in for full-change diagnostics.
 
 ## 3. Measured Before / After (release, in-process, 20 Hz, 1,000 clients unless noted)
 
 | Metric | Phase 19 | Phase 20 | Δ |
 |--------|----------|----------|---|
-| **subscription evaluations per change** | ~1,000 (1M/tick) | **1.00** | **1000× less work** |
-| sub_apply avg/tick (profile C) | 11.4 ms | **0.2 ms** | **57×** |
+| **subscription evaluations per change** | ~1,000 (1M/tick) | **1.00** | **1000x less work** |
+| sub_apply avg/tick (profile C) | 11.4 ms | **0.2 ms** | **57x** |
 | sub_apply % of tick | 65.4% | 3.5% | |
-| clients decode avg/tick (profile C) | 4.0 ms | **1.4 ms** | 2.9× |
+| clients decode avg/tick (profile C) | 4.0 ms | **1.4 ms** | 2.9x |
 | p50 tick (profile C) | 0.8 ms | **0.6 ms** | |
-| p95 tick (profile C) | 204 ms | **29 ms** | 7× |
-| avg tick (profile C) | 31 ms | **9.9 ms** | 3.1× |
+| p95 tick (profile C) | 204 ms | **29 ms** | 7x |
+| avg tick (profile C) | 31 ms | **9.9 ms** | 3.1x |
 
 ### CCU ladder
 

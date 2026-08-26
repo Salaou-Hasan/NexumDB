@@ -1,4 +1,4 @@
-# Phase 17 — Gameplay Hot-Path & CCU Scaling: Architecture (ADR-017)
+﻿# Phase 17 — Gameplay Hot-Path & CCU Scaling: Architecture (ADR-017)
 
 Status: complete.
 
@@ -51,7 +51,7 @@ combat target), which requires a non-unique index.
 - No architecture change: ONE authoritative state, ONE transaction path,
   ONE commit → `Vec<Change>`.
 - Expected next bottleneck (measured, not fixed, in Phase 17): subscription
-  fanout O(subscriptions × changes) — the interest-management phase (Phase
+  fanout O(subscriptions x changes) — the interest-management phase (Phase
   20) owns it.
 
 ## Interface changes (all additive)

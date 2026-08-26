@@ -1,4 +1,4 @@
-//! End-to-end multiplayer test for the playable arena game (canonical
+﻿//! End-to-end multiplayer test for the playable arena game (canonical
 //! roadmap: "actual playable game demo"). Two real SDK clients over the real
 //! network boundary:
 //!
@@ -303,7 +303,7 @@ fn two_clients_join_move_fight_die_respawn_and_reconnect() {
         "cooldown armed by the shot"
     );
 
-    // ---- 3. Kill Bob with three more shots (25 × 4 = 100). The cooldown
+    // ---- 3. Kill Bob with three more shots (25 x 4 = 100). The cooldown
     // system decays one per tick; with FIRE_COOLDOWN = 5, firing every 6th
     // tick keeps the weapon ready.
     for shot_number in 0..3 {

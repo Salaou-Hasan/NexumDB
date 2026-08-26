@@ -1,4 +1,4 @@
-//! The [`Runtime`]: the single-process coordinator (ADR-010).
+﻿//! The [`Runtime`]: the single-process coordinator (ADR-010).
 //!
 //! The runtime owns **operational** metadata only — workers, worlds,
 //! ownership, input queues, lifecycle, metrics, events. Authoritative state
@@ -1366,7 +1366,7 @@ impl Runtime {
             // Accumulate across the step's worlds: with N partitions the
             // per-world sub-phase times must be summed to represent the
             // tick (Phase 21.5 instrumentation fix — previously this kept
-            // only the last world's profile, under-reporting by ~N×).
+            // only the last world's profile, under-reporting by ~Nx).
             self.metrics.last_tick_profile.0 += last_tick_profile.0;
             self.metrics.last_tick_profile.1 += last_tick_profile.1;
             self.metrics.last_tick_profile.2 += last_tick_profile.2;

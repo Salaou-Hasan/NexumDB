@@ -1,4 +1,4 @@
-# ADR-021 — Networking & Serialization Hot-Path
+﻿# ADR-021 — Networking & Serialization Hot-Path
 
 Status: accepted (Phase 21).
 
@@ -11,7 +11,7 @@ checksummed frame, so a 10K movement tick emits ~20,300 frames/tick, each
 with its own encode, CRC-32, allocation, mutex lock, and queue push
 (~15.2 ms/tick fan-out; ~5.2 ms even on fully idle ticks). The client pays
 the same per-frame cost to decode. A second, structural cost: the fan-out
-pass scanned **all** connections per world (O(worlds × CCU)) twice per
+pass scanned **all** connections per world (O(worlds x CCU)) twice per
 tick.
 
 ## Decision
@@ -31,7 +31,7 @@ frames convert via `Arc::from` (one allocation, no copy). The SDK decodes
 ### D3 — per-world attached index (gateway) — SHIPPED
 
 The fan-out pass previously scanned all connections for each world twice
-(TickUpdate broadcast + subscribers): O(worlds × CCU) predicate
+(TickUpdate broadcast + subscribers): O(worlds x CCU) predicate
 evaluations per tick. A `BTreeMap<WorldId, BTreeSet<ConnectionId>>`
 index, maintained on attach/detach/disconnect and never authoritative,
 makes both scans O(attached-to-world) — the pass is O(CCU) total. The
@@ -53,7 +53,7 @@ dispatch, tests). The protocol gains no new wire kind this phase.
 
 - The idle TickUpdate broadcast is zero-copy end to end (one encode, one
   allocation, shared `Arc`), and fan-out scans scale with CCU rather than
-  worlds × CCU.
+  worlds x CCU.
 - No wire-protocol change; server and SDK stay on the same `PROTOCOL_VERSION`.
 - Fan-out and client-decode cost remain O(CCU) per tick — the movement
   p99 improved (72.9 → 64.7 ms @ 10K) but the movement tick is still bound

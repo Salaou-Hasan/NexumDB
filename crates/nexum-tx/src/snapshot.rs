@@ -1,4 +1,4 @@
-//! Lightweight transaction snapshot for fast reducer execution.
+﻿//! Lightweight transaction snapshot for fast reducer execution.
 //!
 //! Instead of the expensive `branch → invoke → absorb` cycle (which costs
 //! ~100 µs per call due to WriteSet merge), we snapshot the parent
@@ -10,7 +10,7 @@
 //! - Current:  branch (115 ns) + invoke (24.8 µs) + absorb (100 µs) ≈ 125 µs/call
 //! - New:      snapshot (0.3 µs) + invoke (24.8 µs) + (no absorb) ≈ 25.1 µs/call
 //!
-//! This eliminates ~100 µs × 2000 = 200 ms of aggregate absorb CPU per tick.
+//! This eliminates ~100 µs x 2000 = 200 ms of aggregate absorb CPU per tick.
 
 use std::collections::BTreeMap;
 

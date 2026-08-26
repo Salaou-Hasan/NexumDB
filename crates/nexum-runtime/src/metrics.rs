@@ -1,4 +1,4 @@
-//! Runtime metrics ([`RuntimeMetrics`]).
+﻿//! Runtime metrics ([`RuntimeMetrics`]).
 //!
 //! Simple monotonically-counted operational metrics, snapshotted via
 //! [`Runtime::metrics`](crate::Runtime::metrics). These are instrumentation
@@ -48,7 +48,7 @@ pub struct RuntimeMetrics {
     pub snapshots: u64,
     /// Subscriptions currently registered across all worlds.
     pub subscriptions: usize,
-    /// Subscription `apply_change` evaluations (one per change × distinct
+    /// Subscription `apply_change` evaluations (one per change x distinct
     /// query) — the interest-management workload metric (ADR-020 D3).
     pub subscription_evaluations: u64,
     /// Subscription updates produced by the shared views.

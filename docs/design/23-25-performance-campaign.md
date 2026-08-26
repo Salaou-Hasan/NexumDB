@@ -1,4 +1,4 @@
-# Phase 23–25 — Full-System Performance Campaign Design
+﻿# Phase 23–25 — Full-System Performance Campaign Design
 
 ## Objective
 
@@ -48,7 +48,7 @@ pool implementation.
 
 The in-process transport previously locked a Mutex on every `try_recv_frame`
 and `try_recv_any_combined` call, even when no data was pending. At 20K idle
-connections this added ~20K Mutex acquisitions × 50 ns = 1 ms per phase.
+connections this added ~20K Mutex acquisitions x 50 ns = 1 ms per phase.
 
 The `has_inbound` and `has_outbound` atomic flags provide a ~5 ns fast-path.
 The flags use `Ordering::Relaxed` because they are purely advisory — a stale
@@ -91,17 +91,17 @@ No subsystem is bypassed, mocked, or measured in isolation.
 
 | Component | Complexity | Bottleneck |
 |-----------|-----------|------------|
-| inbound | O(CCU × frames/tick) | Per-connection Mutex lock |
+| inbound | O(CCU x frames/tick) | Per-connection Mutex lock |
 | tick_worlds | O(partitions) parallel | Subscription evaluation |
-| subscription eval | O(changes × views) | CPU-bound per change |
+| subscription eval | O(changes x views) | CPU-bound per change |
 | fan-out | O(subscribers_with_data) | Per-subscription send |
-| client pump | O(CCU × frames/tick) | Per-client Mutex lock |
+| client pump | O(CCU x frames/tick) | Per-client Mutex lock |
 | drain | O(CCU) | Negligible |
 
 ## Future Optimization Targets
 
 1. **Subscription evaluation batching** — evaluate all changes against views in
-   a single pass, reducing the O(changes × views) to O(changes + views).
+   a single pass, reducing the O(changes x views) to O(changes + views).
 
 2. **Lock-free per-connection queues** — SPSC rings for in-process transport
    eliminate all Mutex overhead.

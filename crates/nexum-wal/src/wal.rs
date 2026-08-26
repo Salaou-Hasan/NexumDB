@@ -1,11 +1,11 @@
-//! The write-ahead log ([`Wal`]).
+﻿//! The write-ahead log ([`Wal`]).
 //!
 //! The WAL attaches at the committed-change boundary: callers append the
 //! exact `Vec<Change>` returned by `Transaction::commit`, framed as a
 //! transaction group:
 //!
 //! ```text
-//! BEGIN_TX (tx_id) → CHANGE × n → COMMIT_TX (tx_id, n)
+//! BEGIN_TX (tx_id) → CHANGE x n → COMMIT_TX (tx_id, n)
 //! ```
 //!
 //! Every record is checksummed (CRC-32) and length-framed, so an incomplete
@@ -238,7 +238,7 @@ impl Wal {
 
     /// Appends a committed transaction and applies the durability policy.
     ///
-    /// The transaction is framed as `BEGIN_TX → CHANGE×n → COMMIT_TX` and
+    /// The transaction is framed as `BEGIN_TX → CHANGExn → COMMIT_TX` and
     /// written in one syscall, then flushed (and fsynced under
     /// `[DurabilityPolicy::Sync]`). Returns the LSN of the `COMMIT_TX`
     /// record — the point at which the transaction became durable.

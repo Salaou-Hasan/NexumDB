@@ -1,4 +1,4 @@
-# Phase 5 Design — WAL + Snapshots + Recovery
+﻿# Phase 5 Design — WAL + Snapshots + Recovery
 
 **Status:** Accepted — to be implemented as specified here
 **Phase:** 5 (durability)
@@ -127,7 +127,7 @@ A transaction is framed as:
 
 ```text
 BEGIN_TX (tx_id)
-  CHANGE × n          (the exact Vec<Change> from commit(), in commit order)
+  CHANGE x n          (the exact Vec<Change> from commit(), in commit order)
 COMMIT_TX (tx_id, n)
 ```
 

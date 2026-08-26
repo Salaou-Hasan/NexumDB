@@ -1,4 +1,4 @@
-//! Observability (Phase 16, ADR-016): a tiny leveled logger and an
+﻿//! Observability (Phase 16, ADR-016): a tiny leveled logger and an
 //! aggregate metrics snapshot.
 //!
 //! The logger is dependency-free: `timestamp level module message` lines on
@@ -86,7 +86,7 @@ pub struct ServerMetricsSnapshot {
     pub network: NetworkMetrics,
     /// Game-server metrics (games, players, reducer calls).
     pub game: GameServerMetrics,
-    /// Coarse live-memory estimate in bytes (rows × per-row + connections ×
+    /// Coarse live-memory estimate in bytes (rows x per-row + connections x
     /// per-client + base), intended for trend detection, not accounting.
     pub memory_estimate_bytes: u64,
 }

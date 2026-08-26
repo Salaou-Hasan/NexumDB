@@ -1,4 +1,4 @@
-//! Dependency-free timing benchmark for the transaction engine (Phase 4
+﻿//! Dependency-free timing benchmark for the transaction engine (Phase 4
 //! completion criterion).
 //!
 //! Measures, on a freshly created store per scenario:
@@ -141,7 +141,7 @@ fn main() {
             )
             .unwrap();
         let mut counter = 0u64;
-        bench("multi-table tx (2 tables × 2 writes)", n, || {
+        bench("multi-table tx (2 tables x 2 writes)", n, || {
             counter += 1;
             let mut tx = Transaction::begin(&mut store);
             let handle = tx

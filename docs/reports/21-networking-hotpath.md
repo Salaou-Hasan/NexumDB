@@ -1,4 +1,4 @@
-# Phase 21 — Networking & Serialization Hot-Path: Report
+﻿# Phase 21 — Networking & Serialization Hot-Path: Report
 
 Status: complete. The gateway/SDK delivery path was profiled with the real
 CCU harness, the dominant costs were measured (not assumed), two
@@ -18,7 +18,7 @@ Commit: `(see git log after push)`
 | Rust | release, LTO on |
 | Transport | in-process memory transport (real protocol/gateway/runtime/world/subscriptions/SDK) |
 | Tick rate | 20 Hz (50 ms budget) |
-| Partition×worker | 8×8 (15K runs also 16×16) |
+| Partitionxworker | 8x8 (15K runs also 16x16) |
 
 Classification: PASS = p99 < 50 ms; DEGRADED = 50 ≤ p99 < 100 ms;
 SATURATED = p99 ≥ 100 ms.
@@ -58,7 +58,7 @@ deltas), each with its own encode, CRC-32, alloc, mutex lock, and push.
 
 | Rank | Component | Cost | Complexity | Why expensive | Fix |
 |------|-----------|------|-----------|---------------|-----|
-| #1 | Gateway fan-out (per-message frames) | 5.2 ms idle / ≈15.2 ms movement | O(CCU) messages/tick | Separate encode+CRC+alloc+lock+push per frame; plus O(worlds×CCU) connection scans per pass | D1 Arc frames; D3 attached index |
+| #1 | Gateway fan-out (per-message frames) | 5.2 ms idle / ≈15.2 ms movement | O(CCU) messages/tick | Separate encode+CRC+alloc+lock+push per frame; plus O(worldsxCCU) connection scans per pass | D1 Arc frames; D3 attached index |
 | #2 | Client-side frame decode | 2.5–3.6 ms | O(CCU) frames | One decode+checksum per frame | D1 (fewer copies); smaller per-client sets (Phase 20) |
 | #3 | SDK event drain | 2.6–2.9 ms | O(CCU) events | Vec alloc per client per tick (API-bound) | out of scope |
 | #4 | Inbound decode+dispatch (movement) | ≈9.3 ms | O(CCU) calls | Sum of small per-call costs; no single hotspot | Phase 23 |
@@ -78,7 +78,7 @@ copy). Regression test asserts two clients receive the **same** allocation
 ### D3 — per-world attached index (SHIPPED)
 
 The fan-out pass previously scanned all connections per world **twice**
-(attached + subscribers) — O(worlds × CCU) predicate evaluations per tick.
+(attached + subscribers) — O(worlds x CCU) predicate evaluations per tick.
 A `BTreeMap<WorldId, BTreeSet<ConnectionId>>` index, maintained on
 attach/detach/disconnect and never authoritative, makes both scans
 O(attached-to-world); the pass is O(CCU) total. Regression test verifies
@@ -121,13 +121,13 @@ off when a client has several payloads per tick.
 
 ### CCU ladder (post-Phase-21, movement)
 
-| CCU | P×W | p50 | p95 | p99 | Class |
+| CCU | PxW | p50 | p95 | p99 | Class |
 |----:|-----|----:|----:|----:|-------|
-| 5K | 8×8 | 4.4 ms | 19.3 ms | 46.9 ms | DEGRADED (borderline) |
-| 10K | 8×8 | 9.4 ms | 38.7 ms | 64.7 ms | DEGRADED |
-| 15K | 16×16 | 16.6 ms | 59.0 ms | 92.4 ms | SATURATED |
+| 5K | 8x8 | 4.4 ms | 19.3 ms | 46.9 ms | DEGRADED (borderline) |
+| 10K | 8x8 | 9.4 ms | 38.7 ms | 64.7 ms | DEGRADED |
+| 15K | 16x16 | 16.6 ms | 59.0 ms | 92.4 ms | SATURATED |
 
-Pre-Phase-21 reference: B@15K 16×16 p95 64.6 / p99 97.6 ms → now 59.0 /
+Pre-Phase-21 reference: B@15K 16x16 p95 64.6 / p99 97.6 ms → now 59.0 /
 92.4 ms.
 
 ## 6. Complexity before/after
@@ -135,7 +135,7 @@ Pre-Phase-21 reference: B@15K 16×16 p95 64.6 / p99 97.6 ms → now 59.0 /
 | Operation | before | after |
 |-----------|--------|-------|
 | Idle TickUpdate broadcast (server) | O(CCU) encodes + O(CCU) copies | O(1) encode + O(CCU) refcount bumps |
-| Fan-out connection scans | O(worlds × CCU) | O(CCU) |
+| Fan-out connection scans | O(worlds x CCU) | O(CCU) |
 | Per-client batch bookkeeping | n/a | removed (D2 reverted) |
 
 ## 7. Correctness validation

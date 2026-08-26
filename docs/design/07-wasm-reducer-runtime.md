@@ -1,4 +1,4 @@
-# Phase 7 Design — WASM Reducer Runtime
+﻿# Phase 7 Design — WASM Reducer Runtime
 
 Status: **design** (implementation follows in this phase)
 Dependencies: Phases 1–6 (tables, storage, OCC transactions, WAL, native reducers).
@@ -107,8 +107,8 @@ ignored error can never lead to a commit.
 |---|---|---|---|
 | `GET` | 1 | table name (str), row_id (u64) | `0x00` absent · `0x01` + row |
 | `CONTAINS` | 2 | table name, row_id | `bool` byte |
-| `SCAN` | 3 | table name | u64 count + (row_id, row)×n |
-| `LOOKUP_UNIQUE` | 4 | table name, index name (str), key (`Vec<Value>`) | u64 count + row_id×n |
+| `SCAN` | 3 | table name | u64 count + (row_id, row)xn |
+| `LOOKUP_UNIQUE` | 4 | table name, index name (str), key (`Vec<Value>`) | u64 count + row_idxn |
 | `INSERT` | 5 | table name, row | u64 (provisional row id) |
 | `UPDATE` | 6 | table name, row_id, row | — |
 | `DELETE` | 7 | table name, row_id | — |

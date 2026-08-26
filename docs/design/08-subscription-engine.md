@@ -1,4 +1,4 @@
-# Subscription Engine — Design Notes (Phase 8)
+﻿# Subscription Engine — Design Notes (Phase 8)
 
 Subscriptions are **reactive views over authoritative table state**, driven
 entirely by the existing commit boundary:
@@ -266,7 +266,7 @@ cannot occur in practice; the total order exists to keep the sort key's
   the future runtime.
 - Schema changes (ALTER) would require recompilation at resync; not needed
   yet because ALTER does not exist.
-- Live delta fan-out is O(subscriptions × changes) per commit, and each
+- Live delta fan-out is O(subscriptions x changes) per commit, and each
   affected change re-synchronizes the window in O(visible rows) (exact
   top-N maintenance) — acceptable and measured (the benchmark shows it
   growing with window size); a differential window and an index-based

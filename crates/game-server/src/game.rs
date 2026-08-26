@@ -1,9 +1,9 @@
-//! The arena game: authoritative gameplay reducers, the cooldown system,
+﻿//! The arena game: authoritative gameplay reducers, the cooldown system,
 //! and the world factory (ADR-009/014 discipline).
 //!
 //! Everything here is **game code** built on the Nexum stack: mutations
-//! happen only through reducers/systems that run inside `World::tick` â†’
-//! Transaction/OCC â†’ one atomic commit â†’ `Vec<Change>` â†’ WAL +
+//! happen only through reducers/systems that run inside `World::tick` ->
+//! Transaction/OCC -> one atomic commit -> `Vec<Change>` -> WAL +
 //! SubscriptionRegistry. There is no second state store and no second
 //! transaction engine. The client never supplies an identity: client-callable
 //! reducers read the caller from the gateway-stamped `__caller` argument
@@ -41,7 +41,7 @@ pub const FIRE_COOLDOWN: i64 = 5;
 pub const FIRE_DAMAGE: i64 = 25;
 
 /// The Area of Interest radius (in tiles). Players outside this radius
-/// of any other player are considered "dormant" — their position updates
+/// of any other player are considered "dormant" -- their position updates
 /// are not written back, reducing subscription delta volume.
 pub const AOI_RADIUS: i64 = 12;
 
@@ -52,7 +52,7 @@ pub const TABLE: &str = "players";
 pub const PK: &str = "primary";
 /// The non-unique secondary index on `(x, y)`: the derived position index
 /// used by the cell-occupancy check and the combat target lookup. Indexes
-/// are derived infrastructure (ADR-002 D5) â€” authoritative position stays in
+/// are derived infrastructure (ADR-002 D5) -- authoritative position stays in
 /// the row columns.
 pub const POS_INDEX: &str = "pos";
 
@@ -108,8 +108,8 @@ pub const CLIENT_REDUCERS: &[&str] = &[
 ];
 
 /// The `units` table: RTS-density entities owned by players
-/// `[id, owner, x, y]`. One player commands many units â€” the battery's
-/// simulation-density axis (entities â‰  connections).
+/// `[id, owner, x, y]`. One player commands many units -- the battery's
+/// simulation-density axis (entities !=  connections).
 pub const UNITS_TABLE: &str = "units";
 /// The `inventory` table: gathered resources `[id, owner, kind]`.
 pub const INVENTORY_TABLE: &str = "inventory";
@@ -127,7 +127,7 @@ fn get(row: &Row, column: usize) -> i64 {
 /// Fetches the row whose primary key equals `player_id` through the
 /// transaction's logical view, returning `(row_id, row)`.
 ///
-/// O(log N): the primary-key index is the proven Phase-15 fast path â€” never
+/// O(log N): the primary-key index is the proven Phase-15 fast path -- never
 /// a table scan (Phase 17 hot-path discipline).
 fn player_by_id(ctx: &mut ReducerContext, player_id: u64) -> Result<Option<(RowId, Row)>> {
     let owners = ctx.lookup_unique(TABLE, PK, &[Value::U64(player_id)])?;
@@ -172,7 +172,7 @@ pub fn move_args(dx: i64, dy: i64) -> ReducerArgs {
     ReducerArgs::new().insert("dx", dx).insert("dy", dy)
 }
 
-/// Builds `fire_weapon` args (empty â€” the gateway stamps the caller).
+/// Builds `fire_weapon` args (empty -- the gateway stamps the caller).
 pub fn fire_args() -> ReducerArgs {
     ReducerArgs::new()
 }
@@ -273,7 +273,7 @@ fn alive(player: &Row) -> bool {
 
 // ------------------------------------------------------------- reducers
 
-/// `player_join` â€” authoritative join/reconnect initialization (server-only;
+/// `player_join` -- authoritative join/reconnect initialization (server-only;
 /// invoked by the game server's `on_player_join` hook and by the demo server
 /// on reconnect). Idempotent: a reconnect keeps position/hp/score and just
 /// marks the player connected; a first join inserts a fresh row at the
@@ -297,7 +297,7 @@ pub fn player_join(ctx: &mut ReducerContext, args: &ReducerArgs) -> Result<Value
     Ok(Value::U64(player_id))
 }
 
-/// `player_leave` â€” authoritative disconnect marking (server-only). The row
+/// `player_leave` -- authoritative disconnect marking (server-only). The row
 /// persists so a reconnect reconstructs the current state.
 pub fn player_leave(ctx: &mut ReducerContext, args: &ReducerArgs) -> Result<Value> {
     let player_id = args.require_u64("player_id")?;
@@ -309,7 +309,7 @@ pub fn player_leave(ctx: &mut ReducerContext, args: &ReducerArgs) -> Result<Valu
     Ok(Value::U64(player_id))
 }
 
-/// `move_player` â€” client-callable. The caller is the gateway-stamped
+/// `move_player` -- client-callable. The caller is the gateway-stamped
 /// `__caller` (never a client-supplied id). The server validates the step,
 /// enforces arena bounds and cell occupancy, and derives the authoritative
 /// new position. `dx`/`dy` must each be -1, 0, or 1 (a one-cell step).
@@ -330,7 +330,7 @@ pub fn move_player(ctx: &mut ReducerContext, args: &ReducerArgs) -> Result<Value
     }
     let (row_id, player) = player_by_id(ctx, caller)?.ok_or_else(|| Error::not_found("player"))?;
     if !alive(&player) {
-        return Err(Error::invalid_argument("player is dead â€” respawn first"));
+        return Err(Error::invalid_argument("player is dead -- respawn first"));
     }
     if get(&player, COL_CONNECTED) != 1 {
         return Err(Error::invalid_argument("player is disconnected"));
@@ -371,7 +371,7 @@ pub fn move_player(ctx: &mut ReducerContext, args: &ReducerArgs) -> Result<Value
     Ok(Value::U64(1))
 }
 
-/// `reload_weapon` â€” client-callable. Refills the caller's ammunition.
+/// `reload_weapon` -- client-callable. Refills the caller's ammunition.
 pub fn reload_weapon(ctx: &mut ReducerContext, args: &ReducerArgs) -> Result<Value> {
     let caller = args.require_u64(CALLER_SOURCE_ARG)?;
     let (row_id, player) = player_by_id(ctx, caller)?.ok_or_else(|| Error::not_found("player"))?;
@@ -384,7 +384,7 @@ pub fn reload_weapon(ctx: &mut ReducerContext, args: &ReducerArgs) -> Result<Val
     Ok(Value::I64(START_AMMO))
 }
 
-/// `respawn_player` â€” client-callable. A dead player may request a respawn;
+/// `respawn_player` -- client-callable. A dead player may request a respawn;
 /// an alive player's request is rejected. Position resets to the spawn
 /// point, hp/cooldown/ammo reset, score is kept.
 pub fn respawn_player(ctx: &mut ReducerContext, args: &ReducerArgs) -> Result<Value> {
@@ -413,7 +413,7 @@ pub fn respawn_player(ctx: &mut ReducerContext, args: &ReducerArgs) -> Result<Va
     Ok(Value::U64(1))
 }
 
-/// `take_damage` â€” server-only (never exposed). Applies `amount` damage to
+/// `take_damage` -- server-only (never exposed). Applies `amount` damage to
 /// `player_id`; a player reaching zero health dies (and emits `kill`).
 pub fn take_damage(ctx: &mut ReducerContext, args: &ReducerArgs) -> Result<Value> {
     let player_id = args.require_u64("player_id")?;
@@ -435,7 +435,7 @@ pub fn take_damage(ctx: &mut ReducerContext, args: &ReducerArgs) -> Result<Value
     Ok(Value::I64(hp))
 }
 
-/// `set_position` â€” server-only (never exposed). Arranges a player for
+/// `set_position` -- server-only (never exposed). Arranges a player for
 /// tests/demo scenarios: clamps into the arena and sets facing.
 pub fn set_position(ctx: &mut ReducerContext, args: &ReducerArgs) -> Result<Value> {
     let player_id = args.require_u64("player_id")?;
@@ -479,7 +479,7 @@ fn unit_by_id(ctx: &mut ReducerContext, unit_id: u64) -> Result<Option<(RowId, R
     }
 }
 
-/// `unit_move` â€” RTS-density entity movement. The caller owns units; an
+/// `unit_move` -- RTS-density entity movement. The caller owns units; an
 /// unknown id is lazily claimed by its first mover at a deterministic spot
 /// so the density workload needs no separate spawn phase. O(log N):
 /// primary-key lookup plus a bounded position update.
@@ -505,7 +505,7 @@ pub fn unit_move(ctx: &mut ReducerContext, args: &ReducerArgs) -> Result<Value> 
     Ok(Value::U64(unit_id))
 }
 
-/// `gather` â€” survival/crafting economy: a read-modify-write on the player's
+/// `gather` -- survival/crafting economy: a read-modify-write on the player's
 /// score plus one inventory insert. Exercises OCC read sets and multi-row
 /// transactions per call.
 pub fn gather(ctx: &mut ReducerContext, args: &ReducerArgs) -> Result<Value> {
@@ -527,15 +527,15 @@ pub fn gather(ctx: &mut ReducerContext, args: &ReducerArgs) -> Result<Value> {
     Ok(Value::I64(score + 1))
 }
 
-/// `presence` â€” social/idle RPC: a cheap call that still crosses the full
-/// gateway â†’ runtime â†’ transaction path. Anchors the light workload.
+/// `presence` -- social/idle RPC: a cheap call that still crosses the full
+/// gateway -> runtime -> transaction path. Anchors the light workload.
 pub fn presence(ctx: &mut ReducerContext, args: &ReducerArgs) -> Result<Value> {
     let caller = args.require_u64(CALLER_SOURCE_ARG)?;
     ctx.emit("present", Value::U64(caller))?;
     Ok(Value::U64(caller))
 }
 
-/// `relay_recv` â€” cross-partition message handler (Phase 26 battery). The
+/// `relay_recv` -- cross-partition message handler (Phase 26 battery). The
 /// Phase 12 bus executes the handler reducer named by the message `kind` on
 /// the destination partition; this one just emits, so the delivered counter
 /// is observable without extra state.
@@ -547,7 +547,7 @@ pub fn relay_recv(ctx: &mut ReducerContext, args: &ReducerArgs) -> Result<Value>
 
 // -------------------------------------------------------------- systems
 
-/// `relay_station` â€” Phase 26 battery: forwards every host-submitted
+/// `relay_station` -- Phase 26 battery: forwards every host-submitted
 /// `relay` command as a cross-partition message to the next partition in
 /// the topology, exercising the deterministic Phase 12 message bus at a
 /// controlled rate. A no-op in single-partition worlds.
@@ -575,7 +575,7 @@ fn relay_station(ctx: &mut SimulationContext, frame: &InputFrame) -> Result<()> 
     Ok(())
 }
 
-/// `movement_stream` â€” Phase 27a battery system: applies client movement
+/// `movement_stream` -- Phase 27a battery system: applies client movement
 /// commands (`mv`, payload `(dx+1)*3+(dy+1)`, source = gateway-stamped
 /// principal) submitted as input frames instead of correlated reducer
 /// calls. Identical authority and semantics to `move_player` (alive check,
@@ -586,7 +586,7 @@ fn relay_station(ctx: &mut SimulationContext, frame: &InputFrame) -> Result<()> 
 /// a single scan loads all connected+alive players, commands are processed
 /// against in-memory arrays with O(1) occupancy checks via HashSet, and
 /// updates are written back in batch. Reduces per-command cost from
-/// ~1.9 Âµs (multiple index traversals + row clones) to ~0.5 Âµs (hash lookup
+/// ~1.9 us (multiple index traversals + row clones) to ~0.5 us (hash lookup
 /// + arithmetic + one write-buffer insert).
 fn movement_stream(ctx: &mut SimulationContext, frame: &InputFrame) -> Result<()> {
     // Phase A: scan all connected+alive players into a typed working set.
@@ -676,10 +676,10 @@ fn movement_stream(ctx: &mut SimulationContext, frame: &InputFrame) -> Result<()
         pending.push(idx);
     }
 
-    // Phase B2: AOI visibility — mark players within AOI_RADIUS of at least
+    // Phase B2: AOI visibility -- mark players within AOI_RADIUS of at least
     // one *moved* player as "active". Dormant players skip the write-back,
     // reducing subscription delta volume proportional to the radius.
-    // Only O(M×N) where M = movers, not O(N²).
+    // Only O(MxN) where M = movers, not O(N²).
     let r2 = AOI_RADIUS * AOI_RADIUS;
     let mut active = vec![false; players.len()];
     // All movers are active by definition
@@ -701,7 +701,7 @@ fn movement_stream(ctx: &mut SimulationContext, frame: &InputFrame) -> Result<()
         }
     }
 
-    // Phase C: write back from struct fields directly — no Row.clone().
+    // Phase C: write back from struct fields directly -- no Row.clone().
     for &idx in &pending {
         if !active[idx] {
             continue;
@@ -750,7 +750,7 @@ fn unit_or_player(ctx: &mut SimulationContext, player_id: u64) -> Result<Option<
 //
 // Using a tracked set avoids the O(N) full-table scan that was the
 // dominant cost at high CCU. With 10K players, only the handful who
-// recently fired are tracked â€” reducing tick cost from O(total_players)
+// recently fired are tracked -- reducing tick cost from O(total_players)
 // to O(active_cooldowns).
 thread_local! {
     static COOLDOWN_MAP: RefCell<BTreeMap<WorldId, BTreeSet<RowId>>> =
@@ -787,7 +787,7 @@ fn cooldown_tick(ctx: &mut SimulationContext, _frame: &InputFrame) -> Result<()>
         });
     }
 
-    // 2. Iterate only tracked players â€” O(active_cooldowns).
+    // 2. Iterate only tracked players -- O(active_cooldowns).
     let to_process: Vec<RowId> = COOLDOWN_MAP.with(|cell| {
         let map = cell.borrow();
         match map.get(&world) {
@@ -835,7 +835,7 @@ fn cooldown_tick(ctx: &mut SimulationContext, _frame: &InputFrame) -> Result<()>
 // -------------------------------------------------------------- factory
 
 /// Builds the `players` table if missing, and ensures the derived position
-/// index exists (idempotent across recovery â€” a table persisted before the
+/// index exists (idempotent across recovery -- a table persisted before the
 /// index was declared gets it added over existing rows).
 fn ensure_schema(store: &mut TableStore) {
     if store.table(TABLE).is_none() {
@@ -955,8 +955,8 @@ pub fn game_factory() -> WorldFactory {
             wasm.register("fire_weapon", 1, fire_weapon_module())
                 .unwrap();
             // Stateless scratch-memory module (ADR-007): immutable globals,
-            // output envelope fully rewritten per call â†’ instance pooling
-            // is safe and saves ~3.3 Âµs of instantiate per invocation.
+            // output envelope fully rewritten per call -> instance pooling
+            // is safe and saves ~3.3 us of instantiate per invocation.
             wasm.set_poolable("fire_weapon", true).unwrap();
             world.set_wasm(wasm);
             Ok(world)

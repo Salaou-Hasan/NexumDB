@@ -1,9 +1,9 @@
-# Phase 26 — Simulation Battery: workload-independent validation
+﻿# Phase 26 — Simulation Battery: workload-independent validation
 
 ## Goal
 
 Replace "Nexum supports N CCU" (a single-workload claim) with a **Pareto
-frontier**: supported CCU × simulation complexity × latency. A backend that
+frontier**: supported CCU x simulation complexity x latency. A backend that
 survives 20K idle connections and fails at 2K intensive simulation is not a
 general-purpose simulation engine; the battery makes that boundary visible
 and continuous.
@@ -31,7 +31,7 @@ New gameplay surface (all native, O(log N) discipline): `units` table +
 `unit_move` (ownership-checked entity movement), `inventory` table + `gather`
 (score RMW + insert + event), `presence` (cheap full-path RPC).
 
-- **Density axis** (`--density`): entities ≠ connections. 20K players × 25
+- **Density axis** (`--density`): entities ≠ connections. 20K players x 25
   units = 500K authoritative entities.
 - **OS tuning** (`--os-tune`, default on): 1 ms timer resolution,
   HIGH_PRIORITY_CLASS, rayon-pool affinity.
@@ -43,7 +43,7 @@ New gameplay surface (all native, O(log N) discipline): `units` table +
 2. Server-only latency series (`server:` line) excludes the in-process
    client pump/drain — on real deployments that work runs on clients.
    Both series printed; never mixed.
-3. Verdicts stay honest: PASS / DEGRADED (p99 ≤ 2× budget) / SATURATED,
+3. Verdicts stay honest: PASS / DEGRADED (p99 ≤ 2x budget) / SATURATED,
    plus explicit zero-silent-loss and zero-failed-tick checks.
 4. Every run emits one `SCORECARD,...` CSV line for matrix aggregation.
 
@@ -60,7 +60,7 @@ New gameplay surface (all native, O(log N) discipline): `units` table +
     actually flushed into the tick (the previous direct-runtime call
     silently skipped them).
   - **AOI sweep**: `--window W` is the interest-management knob; swept on
-    MMO@5K (20×250p):
+    MMO@5K (20x250p):
     | window | server p50 | server p95 | sub_deltas |
     |---|---|---|---|
     | 10   | 9.7 ms  | 31.9 ms | 559 K |
@@ -77,7 +77,7 @@ New gameplay surface (all native, O(log N) discipline): `units` table +
 - **v3**: kill/recovery automation; network impairment (latency/loss/jitter)
   on the TCP path; thin third-party-engine clients.
 
-## v2 results — cross-partition ladder (MMO@5K, 5 lobbies × 4 partitions)
+## v2 results — cross-partition ladder (MMO@5K, 5 lobbies x 4 partitions)
 
 | rate | sent | delivered | dropped | server p99 | verdict |
 |---|---|---|---|---|---|

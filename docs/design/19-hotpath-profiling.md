@@ -1,4 +1,4 @@
-# Phase 19 — Execution Hot-Path Profiling: Design & Measured Findings
+﻿# Phase 19 — Execution Hot-Path Profiling: Design & Measured Findings
 
 Status: analysis + highest-value optimization complete and measured. The
 tick path was instrumented at the phase level (gateway inbound / runtime
@@ -58,19 +58,19 @@ cost is measured, not assumed.
 **1. What operation is expensive?**
 `SubscriptionRegistry::apply_changes` — every committed change is
 evaluated against every subscription whose table it touches. With N
-subscribers and M changes on the same table, this is O(N × M)
+subscribers and M changes on the same table, this is O(N x M)
 evaluations, each performing query matching plus window maintenance
 (remove + key + insert + sync_window).
 
 **2. How much CPU time?** 30.5 ms/tick at 1,000 clients (measured).
 At 500 clients it is ~72% of an 18.3 ms tick.
 
-**3. How many times does it execute?** 1,000 changes × 1,000
+**3. How many times does it execute?** 1,000 changes x 1,000
 subscriptions = 1,000,000 `apply_change` calls per movement tick. Each
 call is O(log window) BTreeMap/BTreeSet work plus a full row clone into
 the subscription's window.
 
-**4. Scaling complexity?** O(changes × subscriptions) per tick —
+**4. Scaling complexity?** O(changes x subscriptions) per tick —
 quadratic in client count when every client subscribes to the same table
 (the arena's all-see-all model).
 
@@ -78,7 +78,7 @@ quadratic in client count when every client subscribes to the same table
 (BTreeMap<Key, Row>), its `row_keys` mirror, `visible_ids`, and
 `visible_keys`. Each update clones the full row into the window.
 
-**6. What allocations/copies?** One `row.clone()` per (change × sub)
+**6. What allocations/copies?** One `row.clone()` per (change x sub)
 pair — 1M clones/tick — plus BTreeMap/BTreeSet node allocations.
 
 **7. Can the amount of work be reduced?** Yes — this is the Phase 20
@@ -102,7 +102,7 @@ membership.
 
 **10. Benchmark that proves it?** CCU profile C at 1K: sub_apply should
 drop from 30.5 ms to single-digit ms; p99 tick should move below the
-2× budget classification. Regression: identical delta stream + window
+2x budget classification. Regression: identical delta stream + window
 contents before/after for the same workload.
 
 ### #2 — Client-side TickUpdate decode (11.3% + 1.8% of round trip)
@@ -115,9 +115,9 @@ window is only 32 rows.
 clients.
 
 **3. How many times?** 1000 changes decoded per client per tick =
-1M decodes, O(changes × clients).
+1M decodes, O(changes x clients).
 
-**4. Complexity?** O(changes × clients) — quadratic in clients when all
+**4. Complexity?** O(changes x clients) — quadratic in clients when all
 clients receive all changes.
 
 **5. Data touched?** Every change's rows; the SDK view applies each
@@ -180,7 +180,7 @@ Phase 19's mandate (profile, then reduce the dominant cost), the
 > **Share row payloads across consumers via `Arc<Row>` (ADR-019 D4).**
 > `Change` now holds its rows as `Arc<Row>`; the commit path wraps each
 > committed row **once**, and every subscription window retains the same
-> `Arc` via a refcount bump instead of a per-(change × sub) deep clone.
+> `Arc` via a refcount bump instead of a per-(change x sub) deep clone.
 
 This is the cheapest possible reduction of the measured hot path: the
 1,000,000 deep `row.clone()` calls per movement tick at 1K clients
@@ -196,15 +196,15 @@ across subscriptions).
 
 | Metric | Before | After | Δ |
 |--------|--------|-------|---|
-| sub_apply (avg) | 30.5 ms/tick | 11.4 ms/tick | **2.7× faster** |
+| sub_apply (avg) | 30.5 ms/tick | 11.4 ms/tick | **2.7x faster** |
 | sub_apply (% of tick) | 72.0% | 65.4% | |
-| world_tick (avg) | 11.9 ms/tick | 6.0 ms/tick | 2.0× |
-| p95 tick (round trip) | ~365 ms | 204 ms | 1.8× |
+| world_tick (avg) | 11.9 ms/tick | 6.0 ms/tick | 2.0x |
+| p95 tick (round trip) | ~365 ms | 204 ms | 1.8x |
 | p50 tick (idle-dominated) | ~0.9 ms | 0.8 ms | |
 | workspace tests | 641 | 642 | +1 regression test |
 
 Why the remaining cost persists: `apply_changes` is still evaluated
-O(changes × subscriptions) — 1M `apply_change` calls per movement tick,
+O(changes x subscriptions) — 1M `apply_change` calls per movement tick,
 each doing predicate match + BTreeMap window maintenance + sort-value
 clone. The count itself, not the per-unit clone, is now the cost; the
 next reduction must come from **reducing the number of evaluations**

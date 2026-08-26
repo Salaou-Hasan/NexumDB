@@ -1,4 +1,4 @@
-# Implementation Reports
+﻿# Implementation Reports
 
 Phase-by-phase implementation reports for Nexum. The companion design notes
 and architecture decisions (ADRs) live in
@@ -16,17 +16,17 @@ and architecture decisions (ADRs) live in
 | [15-performance.md](15-performance.md) | 15 | Performance & benchmarking: methodology, results, bottlenecks, before/after. |
 | [16-production.md](16-production.md) | 16 | Production hardening & release: config, rate limits, shutdown, observability, CCU load measurements, security findings. |
 | [17-gameplay-hotpath.md](17-gameplay-hotpath.md) | 17 | Gameplay hot-path & CCU scaling: removed O(N) reducer scans, encode-once broadcast, subscription fan-out ceiling. |
-| [19-hotpath-profiling.md](19-hotpath-profiling.md) | 19 | Execution hot-path profiling: measured ranked bottlenecks (subscription fan-out 72% of tick), Arc-shared row payloads — sub_apply 30.5ms → 11.4ms (2.7×). |
-| [20-interest-management.md](20-interest-management.md) | 20 | Interest management / AOI: duplicate-subscription grouping (evaluations/change ~1,000 → 1.00, sub_apply 57×) + bounded TickUpdate; measured ladder A@10K & B@1K PASS. |
-| [18-multi-core.md](18-multi-core.md) | 18 | Multi-core runtime: parallel world/partition ticks (ADR-018, deterministic — exact trace equality vs serial) + gateway inbound O(N²) fix. 8K×8p movement p95 62.3ms → 31.7ms; inbound 25.5ms → 2.3ms. |
-| [21-networking-hotpath.md](21-networking-hotpath.md) | 21 | Networking/serialization hot-path: Arc-shared broadcast frames (zero-copy TU, 10K allocs/tick saved) + per-world attached index (O(worlds×CCU) → O(CCU) scans); D2 batching measured net-negative and reverted. Movement fan-out −23…27%, p99 72.9 → 64.7 ms @ 10K. |
-| [21.5-extreme-profiling.md](21.5-extreme-profiling.md) | 21.5 | Extreme execution profiling: complete measured cost map (per-phase, per-reducer, allocation). WASM fire_weapon 65–69 µs/call ≈ 15× native (Phase 22 target); idle PASS @ 20K; no O(CCU²) remains; p99.9 ≈ p99 (no pathological tail). Two instrumentation bugs fixed. |
-| [22-wasm-hotpath.md](22-wasm-hotpath.md) | 22 | WASM hot-path & transaction overlay optimization: COW WriteSet (branch O(1) via Arc clone, 728× faster), has_any_insert skip (14× faster invoke), absorb fast-path + try_unwrap. Harness loop 411 µs → 119 µs (3.5×). Profile C @ 1K p99 573 ms → 57.5 ms (10×). |
+| [19-hotpath-profiling.md](19-hotpath-profiling.md) | 19 | Execution hot-path profiling: measured ranked bottlenecks (subscription fan-out 72% of tick), Arc-shared row payloads — sub_apply 30.5ms → 11.4ms (2.7x). |
+| [20-interest-management.md](20-interest-management.md) | 20 | Interest management / AOI: duplicate-subscription grouping (evaluations/change ~1,000 → 1.00, sub_apply 57x) + bounded TickUpdate; measured ladder A@10K & B@1K PASS. |
+| [18-multi-core.md](18-multi-core.md) | 18 | Multi-core runtime: parallel world/partition ticks (ADR-018, deterministic — exact trace equality vs serial) + gateway inbound O(N²) fix. 8Kx8p movement p95 62.3ms → 31.7ms; inbound 25.5ms → 2.3ms. |
+| [21-networking-hotpath.md](21-networking-hotpath.md) | 21 | Networking/serialization hot-path: Arc-shared broadcast frames (zero-copy TU, 10K allocs/tick saved) + per-world attached index (O(worldsxCCU) → O(CCU) scans); D2 batching measured net-negative and reverted. Movement fan-out −23…27%, p99 72.9 → 64.7 ms @ 10K. |
+| [21.5-extreme-profiling.md](21.5-extreme-profiling.md) | 21.5 | Extreme execution profiling: complete measured cost map (per-phase, per-reducer, allocation). WASM fire_weapon 65–69 µs/call ≈ 15x native (Phase 22 target); idle PASS @ 20K; no O(CCU²) remains; p99.9 ≈ p99 (no pathological tail). Two instrumentation bugs fixed. |
+| [22-wasm-hotpath.md](22-wasm-hotpath.md) | 22 | WASM hot-path & transaction overlay optimization: COW WriteSet (branch O(1) via Arc clone, 728x faster), has_any_insert skip (14x faster invoke), absorb fast-path + try_unwrap. Harness loop 411 µs → 119 µs (3.5x). Profile C @ 1K p99 573 ms → 57.5 ms (10x). |
 | [23-25-performance-campaign.md](23-25-performance-campaign.md) | 23–25 | Full-system performance campaign: rayon thread pool (tick −52%), atomic fast-paths (client pump −20%), subscription pump skip (fanout −100% idle), zero-copy Arc<DeliveredRow> (clients −58%, world_tick −49%). 20K idle p50=2.5ms PASS; 10K gameplay p50=1.4ms PASS; 20K gameplay p50=3.3ms. |
 
 ## CCU summary (Phases 16–18)
 
-Post-Phase-18 ladder (8–16 partitions × 8–16 workers, release, 20 Hz):
+Post-Phase-18 ladder (8–16 partitions x 8–16 workers, release, 20 Hz):
 
 - **Connection-only: 20K PASS** — p99 32 ms (10K 12 ms, 15K 19 ms, 20K
   32 ms) vs Phase 16's 15K 63.7 ms / 20K 75.5 ms DEGRADED.
@@ -35,14 +35,14 @@ Post-Phase-18 ladder (8–16 partitions × 8–16 workers, release, 20 Hz):
   gateway reducer-result fan-out + SDK decode/drain (Phase 21), not the
   multi-core world tick (~2 ms avg at 15K). Phase 21 (Arc frames + attached
   index) improved the movement fan-out phase −23…27% and movement p99
-  72.9 → 64.7 ms @ 10K (B@15K 16×16: p95 64.6 → 59.0, p99 97.6 → 92.4 ms),
+  72.9 → 64.7 ms @ 10K (B@15K 16x16: p95 64.6 → 59.0, p99 97.6 → 92.4 ms),
   but the movement tick remains bound by the sum of O(CCU) per-client work.
 - **Realistic (profile C):** movement plus the simultaneous fire burst
   (wasmi re-instantiation per call): 10K ≈ 0.8 s, 15K ≈ 1.0 s fire tick
   (Phase 22). 15–20K *gameplay* CCU is NOT yet claimed.
 - **Memory (measured RSS, profile A):** steady state ≈ 5.7 MB + 24.7 KB
   private per connection (10K 251 MB, 15K 376 MB, 20K 502 MB); a mass
-  join storm without client consumption spikes several× (20K peak
+  join storm without client consumption spikes severalx (20K peak
   4.1 GB, O(N²) un-drained SDK buffers — settled in ~2 s).
 
 See [18-multi-core.md](18-multi-core.md), [16-production.md](16-production.md),

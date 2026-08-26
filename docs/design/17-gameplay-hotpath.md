@@ -1,4 +1,4 @@
-# Phase 17 — Gameplay Hot-Path & CCU Scaling: Design
+﻿# Phase 17 — Gameplay Hot-Path & CCU Scaling: Design
 
 Status: complete. Phase 17 removes the accidental O(N) work in the realistic
 gameplay path identified at the end of Phase 16, re-benchmarks the CCU curve,
@@ -102,7 +102,7 @@ aim/hit/damage, sandboxed decision) is unchanged.
 - **The per-tick cooldown system** keeps its O(N)/tick scan: decrementing
   every alive player's cooldown is an inherent per-tick simulation cost (one
   scan per tick, not per command; ~100–200 µs at 20K rows). Documented.
-- **Subscription fanout** (O(subscriptions × changes) per commit) is the
+- **Subscription fanout** (O(subscriptions x changes) per commit) is the
   **expected next bottleneck** and belongs to the interest-management phase
   (Phase 20). Phase 17 measures and documents it; it does not build AOI.
 - The storage engine, transaction/OCC path, WAL, and subscription registry

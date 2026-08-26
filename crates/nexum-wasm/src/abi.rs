@@ -1,4 +1,4 @@
-//! The restricted host ABI (design doc §4, ADR-007 D2–D4).
+﻿//! The restricted host ABI (design doc §4, ADR-007 D2–D4).
 //!
 //! A WASM reducer communicates with Nexum through a single imported function,
 //! `("nexum","op")`, with signature `(i32, i32, i32, i32, i32) -> i32`:
@@ -45,7 +45,7 @@ pub const OP_LOOKUP_INDEX: u32 = 9;
 pub const OP_LOOKUP_GET_UNIQUE: u32 = 10;
 /// Composite (Phase 27c-a): non-unique-index lookup + all matching rows in
 /// **one** crossing. Args identical to `OP_LOOKUP_INDEX`; result is
-/// `[count u64]` followed by `count × [rid u64][row]`.
+/// `[count u64]` followed by `count x [rid u64][row]`.
 pub const OP_INDEX_SCAN_GET: u32 = 11;
 /// `INSERT` a row; returns the provisional row id.
 pub const OP_INSERT: u32 = 5;

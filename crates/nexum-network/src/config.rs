@@ -1,4 +1,4 @@
-//! Network configuration ([`NetworkConfig`], [`OutboundOverflowPolicy`],
+﻿//! Network configuration ([`NetworkConfig`], [`OutboundOverflowPolicy`],
 //! [`NetworkEvent`], ADR-011 D3–D5).
 //!
 //! Every client-controlled size is bounded here — frame payloads, per-frame
@@ -77,7 +77,7 @@ pub struct NetworkConfig {
     /// Whether `TickUpdate` broadcasts carry the full committed change list
     /// (ADR-020 D2). Bounded by default (`false`): clients receive windowed
     /// `SubscriptionDelta` frames as the delivery path, and the `TickUpdate`
-    /// carries only tick metadata + events — removing the O(changes ×
+    /// carries only tick metadata + events — removing the O(changes x
     /// clients) redundant decode. Opt in for per-tick full-change
     /// diagnostics.
     pub(crate) tick_update_changes: bool,

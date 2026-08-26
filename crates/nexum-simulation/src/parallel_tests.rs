@@ -1,4 +1,4 @@
-//! Phase 11 unit tests (ADR-011): deterministic parallel tick execution.
+﻿//! Phase 11 unit tests (ADR-011): deterministic parallel tick execution.
 //!
 //! The central claim under test: `ExecutionMode::Serial` and
 //! `ExecutionMode::Parallel(N)` produce **identical** per-tick change/event
@@ -1028,7 +1028,7 @@ fn one_hundred_systems_in_ten_groups_are_worker_count_independent() {
             "Parallel({workers}) diverged for 100 systems"
         );
     }
-    // Sanity: 100 systems × 2 ticks = 200 committed inserts.
+    // Sanity: 100 systems x 2 ticks = 200 committed inserts.
     let total: usize = serial.0.iter().map(|(c, _)| c.len()).sum();
     assert_eq!(total, 200);
 }

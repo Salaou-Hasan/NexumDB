@@ -1,4 +1,4 @@
-# ADR-23/24/25 — Performance Campaign Architecture Decisions
+﻿# ADR-23/24/25 — Performance Campaign Architecture Decisions
 
 Status: accepted (Phases 23–25).
 
@@ -18,7 +18,7 @@ O(CCU) in every phase.
 `Runtime::tick_worlds`.
 
 **Rationale**: `std::thread::scope` creates N OS threads per tick (one per
-worker). On Windows, thread creation costs ~50–100 µs. At 16 workers × 20 Hz
+worker). On Windows, thread creation costs ~50–100 µs. At 16 workers x 20 Hz
 this adds 1.6–3.2 ms per tick — a constant overhead independent of workload.
 
 Rayon maintains a persistent thread pool. `in_place_scope` reuses the existing

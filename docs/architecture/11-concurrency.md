@@ -1,4 +1,4 @@
-# ADR-011 — Deterministic Parallel Tick Execution
+﻿# ADR-011 — Deterministic Parallel Tick Execution
 
 - **Status:** Accepted
 - **Phase:** 11 (canonical — concurrency & parallel execution; the old
@@ -86,7 +86,7 @@ WASM reducers work unchanged inside children (`invoke_in_tx` is
 `Sync`-safe); no new dependencies; `unsafe_code = forbid` maintained.
 
 **Negative.** Table-granularity declaration is coarse; `branch_of` copies the
-parent write set per child (O(members × writes)); opaque systems never
+parent write set per child (O(members x writes)); opaque systems never
 parallelize; greedy grouping is not optimal; per-tick scoped-thread spawn
 cost dominates trivial ticks (a persistent worker pool is the Phase 15
 optimization); declarations are trusted-code contracts — lying declarations

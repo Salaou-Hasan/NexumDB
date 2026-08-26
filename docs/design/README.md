@@ -1,4 +1,4 @@
-# Design Notes
+﻿# Design Notes
 
 Design notes and worked examples for Nexum subsystems live here as each phase
 is implemented.
@@ -104,8 +104,8 @@ is implemented.
   `OP_LOOKUP_INDEX` (WASM op 9) / `Table::add_index` for recovery-
   compatible post-creation indexing. Measured honest CCU: 10K PASS
   (connection-only), gameplay profiles SATURATED due to subscription
-  all-to-all fan-out O(changes × subs) — explicitly Phase 20 scope.
-  Server-side profile D @ 500: 83ms → 2.7ms (30×). Report:
+  all-to-all fan-out O(changes x subs) — explicitly Phase 20 scope.
+  Server-side profile D @ 500: 83ms → 2.7ms (30x). Report:
   [reports/17-gameplay-hotpath.md](../reports/17-gameplay-hotpath.md).
 
 ## Completed (Phase 19)
@@ -117,7 +117,7 @@ is implemented.
   full-set decode 13%, world tick 28%), and implemented the highest-value
   optimization: `Change` rows are now `Arc<Row>` shared across the WAL
   and every subscription window (ADR-019 D4) — sub_apply 30.5ms →
-  11.4ms (2.7×) at 1K profile C. Report:
+  11.4ms (2.7x) at 1K profile C. Report:
   [reports/19-hotpath-profiling.md](../reports/19-hotpath-profiling.md).
 
 ## Completed (Phase 20)
@@ -125,7 +125,7 @@ is implemented.
 - [20-interest-management.md](20-interest-management.md) — Interest
   management / AOI (canonical Phase 20): duplicate-subscription grouping
   (one shared derived view per distinct query — evaluations per change
-  ~1,000 → 1.00, sub_apply 11.4ms → 0.2ms, 57×) and bounded TickUpdate
+  ~1,000 → 1.00, sub_apply 11.4ms → 0.2ms, 57x) and bounded TickUpdate
   (no full change list in the broadcast — client decode 4.0ms → 1.4ms).
   Preserves per-member buffers, overflow→stale, resync, drop detection;
   adds evaluation/delta counters (`ApplyReport`, `RegistryStats`,
@@ -141,7 +141,7 @@ is implemented.
   D1 — `Arc<[u8]>` transport frames (per-world TickUpdate encoded once,
   delivered to every attached session by refcount bump: zero per-client
   encode/copy; 10K allocs/tick saved at 10K) — and D3 — a per-world
-  attached index turning the fan-out pass's O(worlds × CCU) connection
+  attached index turning the fan-out pass's O(worlds x CCU) connection
   scans into O(CCU). D2 (per-connection outbound batching) was
   implemented, measured **net-negative** (B@10K p95 44.6 vs 39.5 ms
   baseline), and reverted per the phase rule. Measured: idle fan-out
@@ -159,7 +159,7 @@ is implemented.
   (`SimulationConfig::with_reducer_profiling`), a counting global
   allocator (`nexum-alloc-count`, `ccu-alloc` feature), p99.9/max,
   worst-tick spike analysis, and Profile E (extreme gameplay). Ranked cost
-  map: WASM fire_weapon 65–69 µs/call ≈ 15× native (the Phase 22 target),
+  map: WASM fire_weapon 65–69 µs/call ≈ 15x native (the Phase 22 target),
   then gateway fan-out and SDK decode; idle PASS @ 20K; p99.9 ≈ p99 (no
   pathological tail); two measurement bugs fixed (per-world
   `last_tick_profile` under-count, warmup backlog spike). Report:
@@ -175,7 +175,7 @@ is implemented.
   exact trace-equality tests incl. cross-partition messaging). The Phase
   18 benchmark also uncovered and fixed a gateway inbound O(N²)
   (per-call `pending_calls` scans → per-connection `BTreeSet` index;
-  inbound 25.5ms → 2.3ms). Measured at 8K clients × 8 partitions: p95
+  inbound 25.5ms → 2.3ms). Measured at 8K clients x 8 partitions: p95
   movement tick 62.3ms → 31.7ms (8 workers), runtime step 15.3ms →
   7.4ms. Report: [reports/18-multi-core.md](../reports/18-multi-core.md).
 
@@ -188,8 +188,8 @@ is implemented.
   no Insert entries exist — the common case for update-heavy workloads),
   absorb fast-path + `Arc::try_unwrap` (skip logical-view check for
   non-Delete workloads, move entries instead of cloning). Measured: harness
-  loop 411 µs → 119 µs (3.5×), Profile C @ 1K p99 573 ms → 57.5 ms
-  (10×). Report:
+  loop 411 µs → 119 µs (3.5x), Profile C @ 1K p99 573 ms → 57.5 ms
+  (10x). Report:
   [reports/22-wasm-hotpath.md](../reports/22-wasm-hotpath.md).
 
 ## Completed (Phases 23–25)

@@ -1,4 +1,4 @@
-# Phase 11 — Concurrency & Parallel Execution (design)
+﻿# Phase 11 — Concurrency & Parallel Execution (design)
 
 Status: **DESIGN** (canonical Phase 11; replaces the old networking number).
 
@@ -276,7 +276,7 @@ Correctness first: these are honest baselines for Phase 15.
   is the one place the two modes differ, and only for invalid
   configurations; it is deterministic and documented.
 - Table-granularity conflict model — row-level declaration is future work.
-- `branch_of` copies the parent's write set per child: O(members × writes)
+- `branch_of` copies the parent's write set per child: O(members x writes)
   per group. Fine for typical ticks; a borrowed overlay is the optimization
   path later.
 - Opaque (undeclared) systems never run in parallel — the safe default.

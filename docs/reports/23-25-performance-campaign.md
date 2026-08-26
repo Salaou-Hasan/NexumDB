@@ -1,4 +1,4 @@
-# Phase 23–25 Performance Campaign Report
+﻿# Phase 23–25 Performance Campaign Report
 
 ## Summary
 
@@ -26,7 +26,7 @@ attach → subscribe → tick → fan-out → SDK pump → drain.
 ### 1. Rayon Thread Pool (commit 2050d25)
 
 **Problem**: `std::thread::scope` in `tick_worlds` created N OS threads per
-tick. At 16 workers × 20 Hz = 320 thread creations/sec, each ~50–100 µs on
+tick. At 16 workers x 20 Hz = 320 thread creations/sec, each ~50–100 µs on
 Windows = 1.6–3.2 ms of overhead per tick.
 
 **Fix**: Replaced with `rayon::in_place_scope`. The rayon thread pool is
@@ -100,14 +100,14 @@ for join-storm delivery.
 
 | Metric | Phase 22 Baseline | After Phase 23–25 | Improvement |
 |--------|-------------------|-------------------|-------------|
-| 20K A p50 | 3.5 ms | 2.5 ms | **1.4×** |
-| 20K B p50 | 5.4 ms | 3.3 ms | **1.6×** |
-| 10K B p50 | 3.0 ms | 1.4 ms | **2.2×** |
-| 10K B tick phase | 3.5 ms | 1.2 ms | **2.9×** |
-| 10K B clients | 4.2 ms | 1.2 ms | **3.5×** |
+| 20K A p50 | 3.5 ms | 2.5 ms | **1.4x** |
+| 20K B p50 | 5.4 ms | 3.3 ms | **1.6x** |
+| 10K B p50 | 3.0 ms | 1.4 ms | **2.2x** |
+| 10K B tick phase | 3.5 ms | 1.2 ms | **2.9x** |
+| 10K B clients | 4.2 ms | 1.2 ms | **3.5x** |
 | 20K A fanout | 1.1 ms | 0.0 ms | **eliminated** |
-| 20K B clients | 9.1 ms | 2.7 ms | **3.4×** |
-| 20K B world_tick | 85 ms | 22 ms | **3.9×** |
+| 20K B clients | 9.1 ms | 2.7 ms | **3.4x** |
+| 20K B world_tick | 85 ms | 22 ms | **3.9x** |
 
 ## Bottleneck Ranking (Post-Optimization)
 
@@ -116,7 +116,7 @@ for join-storm delivery.
 | 1 | inbound | 5.0 ms | 40% | YELLOW — per-connection Mutex |
 | 2 | fanout | 5.0 ms | 40% | YELLOW — per-subscriber send |
 | 3 | tick (world_tick) | 2.5 ms | 20% | GREEN — parallelized |
-| 4 | clients | 2.7 ms | 22% | GREEN — improved 3.4× |
+| 4 | clients | 2.7 ms | 22% | GREEN — improved 3.4x |
 | 5 | drain | 1.4 ms | 11% | GREEN |
 
 ## Correctness
@@ -143,17 +143,17 @@ production, clients connect gradually and this never happens.
 ### What limits 20K gameplay p50
 The subscription evaluation cost inside `world_tick` — for each movement tick,
 20K changes must be evaluated against all subscribers' views. This is
-O(changes × subscribers_per_view) and is the dominant cost at high CCU.
+O(changes x subscribers_per_view) and is the dominant cost at high CCU.
 
 ## Remaining Bottlenecks
 
-1. **Subscription evaluation in world_tick** — O(changes × views). The shared
+1. **Subscription evaluation in world_tick** — O(changes x views). The shared
    view optimization (ADR-020 D1) already reduces this, but at 20K changes the
    evaluation cost is still significant.
 
 2. **Per-connection Mutex in inbound/fanout** — each `send()` and
    `try_recv_frame()` locks a per-connection Mutex. At 20K connections this is
-   ~50 ns × 20K = 1 ms per phase.
+   ~50 ns x 20K = 1 ms per phase.
 
 3. **Join storm at mass-connect scale** — initial subscription snapshot delivery
    takes ~20 ticks to fully drain at 20K clients.

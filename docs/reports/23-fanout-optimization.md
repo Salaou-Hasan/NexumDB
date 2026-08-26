@@ -1,10 +1,10 @@
-# Phase 23 — Fan-Out & Transport Hot-Path Optimization Report
+﻿# Phase 23 — Fan-Out & Transport Hot-Path Optimization Report
 
 ## Summary
 
 Phase 23 reduced the per-tick networking/transport overhead through five measured
 optimizations. The cumulative effect cut fan-out by ~47% and improved p50 latency
-by ~2.7× at 10K clients.
+by ~2.7x at 10K clients.
 
 ## Optimizations Implemented
 
@@ -40,11 +40,11 @@ queue in a single Mutex lock for `MemoryConnection`. The SDK pump previously did
 
 | Metric | Phase 22 Baseline | After Phase 23 | Improvement |
 |--------|-------------------|----------------|-------------|
-| fanout | 4.2 ms/tick | 2.1 ms/tick | **2.0×** |
-| flush | 0.4 ms/tick | 0.1 ms/tick | **4.0×** |
-| inbound | 2.9 ms/tick | 2.6 ms/tick | 1.1× |
-| tick | 3.5 ms/tick | 2.2 ms/tick | 1.6× |
-| p50 | 8.0 ms | 2.9 ms | **2.8×** |
+| fanout | 4.2 ms/tick | 2.1 ms/tick | **2.0x** |
+| flush | 0.4 ms/tick | 0.1 ms/tick | **4.0x** |
+| inbound | 2.9 ms/tick | 2.6 ms/tick | 1.1x |
+| tick | 3.5 ms/tick | 2.2 ms/tick | 1.6x |
+| p50 | 8.0 ms | 2.9 ms | **2.8x** |
 | tick_updates sent | 5,000,000 | 0 | **eliminated** |
 
 ### CCU Ladder (Phase 23 Results)

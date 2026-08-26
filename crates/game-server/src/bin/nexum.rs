@@ -1,4 +1,4 @@
-//! `nexum` â€” the unified CLI for the Nexum authoritative state engine.
+﻿//! `nexum` -- the unified CLI for the Nexum authoritative state engine.
 //!
 //! ```text
 //! nexum init [name]     Scaffold a new project

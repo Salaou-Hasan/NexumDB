@@ -1,4 +1,4 @@
-# Phase 26–27: Simulation Battery & Performance Campaign
+﻿# Phase 26–27: Simulation Battery & Performance Campaign
 
 ## Summary
 
@@ -33,7 +33,7 @@ reads, SCORECARD CSV output, gateway stage profiler, tick-phase breakdown.
 
 | Fix | Impact |
 |---|---|
-| WriteSet::absorb Arc-release ordering | **188×** on branch/absorb cycles |
+| WriteSet::absorb Arc-release ordering | **188x** on branch/absorb cycles |
 | WASM instance pooling | fire: 994→19.6 µs at 20K |
 | Composite host ops | fire crossings 6–9→4–6 |
 | Runtime input-frame merge | N clients = N merged frames/tick |
@@ -100,7 +100,7 @@ Zero failed ticks, zero rejected, zero dropped across every cell.
    traversing BTreeMaps saturate memory bandwidth. SoA storage would help
    but requires multi-day engine redesign.
 
-4. **Benchmark correctness matters.** The double-drive bug (measuring 2×
+4. **Benchmark correctness matters.** The double-drive bug (measuring 2x
    load) invalidated earlier results. Always verify accepted counts match
    expected command volume.
 

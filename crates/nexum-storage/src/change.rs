@@ -1,4 +1,4 @@
-//! Change records: the observable result of committed storage mutations.
+﻿//! Change records: the observable result of committed storage mutations.
 //!
 //! A [`Change`] is the minimum useful representation of one committed
 //! mutation — enough for future transaction change sets, subscriptions, and
@@ -21,7 +21,7 @@ use nexum_core::{ChangeKind, RowId, TableId, Version};
 /// D4): the commit path wraps each row once, then the WAL and every
 /// subscription window share the same allocation via refcount bumps instead
 /// of deep-cloning the row per consumer — the measured subscription hot path
-/// (O(changes × subscriptions) clones per tick). `old_row`/`new_row` return
+/// (O(changes x subscriptions) clones per tick). `old_row`/`new_row` return
 /// plain `&Row` (deref), so readers are unchanged.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Change {

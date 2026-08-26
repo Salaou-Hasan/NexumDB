@@ -1,4 +1,4 @@
-# Phase 19 — Execution Hot-Path Profiling: Report
+﻿# Phase 19 — Execution Hot-Path Profiling: Report
 
 Status: complete. The tick path was instrumented at phase and sub-phase
 level, the dominant costs were measured (not assumed), and the single
@@ -32,15 +32,15 @@ re-measured.
 ### #1 — Subscription all-to-all fan-out — 30.5 ms/tick (72% of tick, 52% of round trip)
 
 `apply_changes` evaluates every committed change against every
-subscription on that table: **O(changes × subscriptions)**. At 1K, a
-movement tick = 1,000 changes × 1,000 subs = **1,000,000 `apply_change`
+subscription on that table: **O(changes x subscriptions)**. At 1K, a
+movement tick = 1,000 changes x 1,000 subs = **1,000,000 `apply_change`
 calls**, each doing predicate match + window maintenance + a full
 `row.clone()` into the window.
 
 ### #2 — Client-side TickUpdate decode — 6.6 + 1.0 ms/tick (13% of round trip)
 
 Every attached client decodes the **full** change set (1,000 changes)
-even though its subscription window is 32 rows: **O(changes × clients)**.
+even though its subscription window is 32 rows: **O(changes x clients)**.
 
 ### #3 — World tick — 11.9 ms/tick (28% of tick, 20% of round trip)
 
@@ -70,15 +70,15 @@ Files changed:
 
 | Metric | Before | After | Δ |
 |--------|--------|-------|---|
-| sub_apply (avg/tick) | 30.5 ms | 11.4 ms | **2.7×** |
+| sub_apply (avg/tick) | 30.5 ms | 11.4 ms | **2.7x** |
 | sub_apply (% of tick) | 72.0% | 65.4% | |
-| world_tick (avg/tick) | 11.9 ms | 6.0 ms | 2.0× |
-| p95 tick (round trip) | ~365 ms | 204 ms | 1.8× |
+| world_tick (avg/tick) | 11.9 ms | 6.0 ms | 2.0x |
+| p95 tick (round trip) | ~365 ms | 204 ms | 1.8x |
 | p50 tick (idle-dominated) | ~0.9 ms | 0.8 ms | |
 | workspace tests | 641 | 642 | +1 regression |
 
 The remaining movement-tick cost is the **evaluation count**
-(O(changes × subs) = 1M calls), not per-unit cloning. The next reduction
+(O(changes x subs) = 1M calls), not per-unit cloning. The next reduction
 must reduce the count: **Phase 20 interest management / AOI**
 (subscription indexing, spatial relevance, bounded per-subscription
 frames) — which also fixes bottleneck #2 (client decode of full change
@@ -98,9 +98,9 @@ sets).
 
 ## 7. Remaining Bottlenecks (next steps)
 
-1. **O(changes × subscriptions) evaluation count** — Phase 20 interest
+1. **O(changes x subscriptions) evaluation count** — Phase 20 interest
    management (subscription grouping, per-zone change routing).
-2. **O(changes × clients) full-set decode** — Phase 20 bounded
+2. **O(changes x clients) full-set decode** — Phase 20 bounded
    per-subscription frames (server-side relevance filtering).
 3. **World tick / inbound** — linear O(clients) game logic; Phase 18
    (multi-core across worlds/partitions) applies here.

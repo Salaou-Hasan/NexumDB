@@ -1,4 +1,4 @@
-//! The [`NetworkGateway`]: the realtime adapter around the runtime
+﻿//! The [`NetworkGateway`]: the realtime adapter around the runtime
 //! (ADR-011 D1).
 //!
 //! The gateway owns the runtime and orchestrates it, but every
@@ -172,7 +172,7 @@ pub struct NetworkGateway {
     snapshot_requests: BTreeMap<(ConnectionId, SubscriptionId), u64>,
     /// Attached sessions indexed by world (ADR-021 D3): the fan-out path
     /// iterates a world's attached set directly instead of scanning every
-    /// connection per world — O(CCU) per pass instead of O(worlds × CCU).
+    /// connection per world — O(CCU) per pass instead of O(worlds x CCU).
     /// Maintained on attach / detach / disconnect; never authoritative.
     attached_by_world: BTreeMap<WorldId, BTreeSet<ConnectionId>>,
     /// Pre-computed per-world subscriber list: the fan-out path iterates
@@ -827,7 +827,7 @@ impl NetworkGateway {
         }
         // O(log n) per-connection pending-call bookkeeping (Phase 18
         // finding): the previous `pending_calls.values()` scans were O(pending)
-        // per call, i.e. O(clients×) on a movement tick. One lookup serves
+        // per call, i.e. O(clientsx) on a movement tick. One lookup serves
         // both the cap check and the duplicate-id check.
         if let Some(ids) = self.pending_by_connection.get(&connection) {
             if ids.len() >= self.config.max_pending_calls_per_connection() {
@@ -1278,12 +1278,12 @@ impl NetworkGateway {
             report.worlds += 1;
             // One TickUpdate per world, encoded **once** and cloned to every
             // attached session (ADR-017 D4): re-encoding per connection was
-            // O(changes × clients) — the dominant fan-out cost at scale.
+            // O(changes x clients) — the dominant fan-out cost at scale.
             //
             // Bounded payload (ADR-020 D2): by default the broadcast carries
             // tick metadata + events only — the full change list is redundant
             // with the windowed `SubscriptionDelta` delivery path and costs
-            // O(changes × clients) to decode. Opt in via
+            // O(changes x clients) to decode. Opt in via
             // `NetworkConfig::with_tick_update_changes(true)` for per-tick
             // full-change diagnostics.
             let changes = if self.config.tick_update_changes {

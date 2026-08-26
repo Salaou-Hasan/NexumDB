@@ -1,4 +1,4 @@
-//! Dependency-free timing benchmark for reducer invocation (Phase 6
+﻿//! Dependency-free timing benchmark for reducer invocation (Phase 6
 //! completion criterion).
 //!
 //! Measures, on a freshly created store per scenario:
@@ -200,7 +200,7 @@ fn main() {
             )
             .unwrap();
         let mut counter = 0u64;
-        bench("multi-table reducer (2 tables × 2 writes)", n, || {
+        bench("multi-table reducer (2 tables x 2 writes)", n, || {
             counter += 1;
             let args = ReducerArgs::new().insert("id", counter);
             let result = registry.invoke(&mut store, "trade", &args).unwrap();

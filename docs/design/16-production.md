@@ -1,4 +1,4 @@
-# Phase 16 — Production Hardening, Scale Validation & Release: Design
+﻿# Phase 16 — Production Hardening, Scale Validation & Release: Design
 
 Status: **implemented** (see `docs/reports/16-production.md` for measured results).
 
@@ -144,7 +144,7 @@ project's zero-dependency style.
 - `NetworkMetrics` (connections, sessions, frames, drops, protocol errors,
   auth failures, rate-limit rejections);
 - `GameServerMetrics` (games, players, joins/leaves, reducer calls);
-- memory estimate (rows × bytes/row from Phase 15 + connections × per-client
+- memory estimate (rows x bytes/row from Phase 15 + connections x per-client
   estimate) and process RSS where the platform exposes it.
 
 Snapshots are point-in-time and never influence simulation.

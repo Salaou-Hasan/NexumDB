@@ -1,4 +1,4 @@
-//! A single subscription: its per-member delivery state, and the **shared
+﻿//! A single subscription: its per-member delivery state, and the **shared
 //! derived view** it belongs to (ADR-020 D1).
 //!
 //! The **view** is a derived cache over authoritative state (ADR-008 D5):
@@ -27,7 +27,7 @@
 //! so the registry shares **one** view per distinct query and evaluates
 //! each committed change once per group, then fans the resulting deltas
 //! out to every member's buffer (ADR-020 D1). This turns the measured
-//! O(changes × subscriptions) fan-out into O(changes × distinct_queries)
+//! O(changes x subscriptions) fan-out into O(changes x distinct_queries)
 //! evaluation plus a window-sized per-member clone — the Phase 19 finding
 //! that the number of evaluations, not their unit cost, was the
 //! bottleneck.

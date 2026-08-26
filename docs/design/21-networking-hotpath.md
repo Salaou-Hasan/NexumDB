@@ -1,7 +1,7 @@
-# Phase 21 — Networking & Serialization Hot-Path
+﻿# Phase 21 — Networking & Serialization Hot-Path
 
 Status: complete. The network/SDK delivery path was profiled with the real
-CCU harness (release, 20 Hz, 8 partitions × 8 workers, in-process
+CCU harness (release, 20 Hz, 8 partitions x 8 workers, in-process
 transport), a ranked bottleneck list was produced, and the two measured
 dominant costs were reduced without changing authoritative semantics.
 
@@ -78,7 +78,7 @@ preserved (Arc is safe).
 
 The fan-out pass previously scanned **all** connections for **each** world
 twice (once for the TickUpdate broadcast, once for subscribers):
-O(worlds × CCU) predicate evaluations per tick. A `BTreeMap<WorldId,
+O(worlds x CCU) predicate evaluations per tick. A `BTreeMap<WorldId,
 BTreeSet<ConnectionId>>` index, maintained on attach / detach / disconnect
 and never authoritative, makes both scans O(attached to that world) — the
 pass is O(CCU) total. The index is a delivery optimization only; the

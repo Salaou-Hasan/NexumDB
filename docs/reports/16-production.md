@@ -1,4 +1,4 @@
-# Phase 16 — Production Hardening, Scale Validation & Release: Report
+﻿# Phase 16 — Production Hardening, Scale Validation & Release: Report
 
 Status: complete. Phase 16 hardened the playable stack (rate limiting,
 validated production configuration, graceful shutdown, observability, a
@@ -106,7 +106,7 @@ security/correctness findings the harness exposed.
 
 - **Second bottleneck (gameplay)**: the arena's `move_player` reducer does a
   full `ctx.scan(TABLE)` per call (O(N) reducer cost). With every client
-  moving every few ticks, each tick performs N×players row scans — the
+  moving every few ticks, each tick performs Nxplayers row scans — the
   game's reducer design, not the engine, bounds realistic-gameplay CCU.
   Phase 15 already proved the core one-row update is O(1)-like at 10M rows;
   the game simply does not use indexed lookups.

@@ -1,4 +1,4 @@
-# Phase 18 — Multi-Core Runtime: Design (ADR-018)
+﻿# Phase 18 — Multi-Core Runtime: Design (ADR-018)
 
 Status: complete. The runtime's tick phase now executes **independent
 worlds/partitions concurrently** on one thread per configured worker, while
@@ -14,7 +14,7 @@ world **serially** in `(worker_id, world_id)` order. The Phase 19–20
 measurements showed the remaining linear cost is the world tick itself
 (reducers + transaction + OCC + commit + subscription apply): ~12 ms per
 1K movement calls on one world. With P partitions of N clients each, serial
-execution is `P × world_tick(N/P)` — the per-world cost scales linearly
+execution is `P x world_tick(N/P)` — the per-world cost scales linearly
 with active partitions even though no world reads another world's state
 within a step.
 

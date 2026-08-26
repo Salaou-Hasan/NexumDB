@@ -1,4 +1,4 @@
-//! The subscription registry (ADR-008, ADR-020 D1).
+﻿//! The subscription registry (ADR-008, ADR-020 D1).
 //!
 //! The registry owns all subscriptions and the **commit sequence** — the
 //! monotonic observation cursor. Every `apply_changes` call represents one
@@ -15,8 +15,8 @@
 //! **Interest management (ADR-020 D1):** subscriptions with **identical
 //! queries** share one derived view, which is evaluated **once per distinct
 //! query per commit**; the resulting delta stream is then fanned out to
-//! each member's independent buffer. This turns the measured O(changes ×
-//! subscriptions) fan-out into O(changes × distinct_queries) evaluation
+//! each member's independent buffer. This turns the measured O(changes x
+//! subscriptions) fan-out into O(changes x distinct_queries) evaluation
 //! plus a window-sized per-member clone. Identical queries produce
 //! identical views and delta streams, so the grouped path is value-identical
 //! to the historical per-subscription path (proven by the unchanged suite).
@@ -43,7 +43,7 @@ use crate::subscription::{SharedView, Subscription, SubscriptionState};
 pub struct ApplyReport {
     seq: u64,
     affected: Vec<SubscriptionId>,
-    /// `apply_change` evaluations performed: one per (change × distinct
+    /// `apply_change` evaluations performed: one per (change x distinct
     /// query) on the shared views (ADR-020 D3).
     evaluations: u64,
     /// Subscription updates produced by the shared views this call.
@@ -65,9 +65,9 @@ impl ApplyReport {
     }
 
     /// Returns the number of `apply_change` evaluations performed — one per
-    /// (change × distinct query) whose table appeared in the change set
+    /// (change x distinct query) whose table appeared in the change set
     /// (ADR-020 D3). The Phase 20 headline metric: before grouping this was
-    /// changes × subscriptions.
+    /// changes x subscriptions.
     pub fn evaluations(&self) -> u64 {
         self.evaluations
     }
@@ -83,7 +83,7 @@ impl ApplyReport {
 /// observability.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct RegistryStats {
-    /// Total `apply_change` evaluations: one per (change × distinct query).
+    /// Total `apply_change` evaluations: one per (change x distinct query).
     pub evaluations: u64,
     /// Total subscription updates produced by the shared views.
     pub deltas: u64,
@@ -295,7 +295,7 @@ impl SubscriptionRegistry {
     /// view is evaluated once per change, producing the group's delta
     /// stream; each member then receives that stream in its own buffer.
     /// Identical queries therefore cost O(changes) evaluation + a
-    /// window-sized per-member clone, instead of O(changes × subscriptions).
+    /// window-sized per-member clone, instead of O(changes x subscriptions).
     ///
     /// `store` is consulted only to detect dropped tables (a subscription
     /// whose table no longer exists is marked stale). This is infallible:

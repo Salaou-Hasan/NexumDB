@@ -1,4 +1,4 @@
-# Phase 22 — WASM Execution Hot-Path & Transaction Optimization
+﻿# Phase 22 — WASM Execution Hot-Path & Transaction Optimization
 
 ## Status
 
@@ -42,7 +42,7 @@ Harness-style loop (2000 branch/invoke/absorb per tick tx):
 | absorb | 16,224 ns |
 | **total** | **411,385 ns** |
 
-The gap between isolated (12.7 µs) and harness (411 µs) was 32×. The
+The gap between isolated (12.7 µs) and harness (411 µs) was 32x. The
 dominant costs were:
 
 - **branch**: O(parent_writes) clone per call (BTreeMap deep-copy)
@@ -75,7 +75,7 @@ when the entry could be moved.
 Changed `own: Map` to `own: Arc<Map>`. Branching via `Arc::clone` is O(1).
 Write operations use `Arc::make_mut` (O(1) when refcount == 1).
 
-**Result**: branch 79,416 ns → **109 ns** (728× faster)
+**Result**: branch 79,416 ns → **109 ns** (728x faster)
 
 ### `has_any_insert()` Skip
 
@@ -83,7 +83,7 @@ Added `has_any_insert()` to WriteSet. `lookup_unique` and `lookup_index` skip
 the O(N) pending-insert scan when no Insert entries exist in the logical view.
 The fire_weapon workload is update-only, so this scan was always wasted work.
 
-**Result**: invoke 315,745 ns → **22,261 ns** (14.2× faster)
+**Result**: invoke 315,745 ns → **22,261 ns** (14.2x faster)
 
 ### Absorb Fast-Path + try_unwrap
 
@@ -102,17 +102,17 @@ child's delta entries. The per-delta-entry cost is higher because each entry
 goes through `Arc::make_mut` + BTreeMap insert, but the total work is lower
 because there are far fewer entries to process.
 
-The harness-style loop total went from 411 µs to 119 µs (**3.5× faster**),
+The harness-style loop total went from 411 µs to 119 µs (**3.5x faster**),
 confirming the net improvement.
 
 ## Before/After: Harness-Style Loop
 
 | Phase | Before | After | Speedup |
 |-------|--------|-------|---------|
-| branch | 79,416 ns | 109 ns | 728× |
-| invoke | 315,745 ns | 22,261 ns | 14.2× |
-| absorb | 16,224 ns | 96,194 ns | 0.17× |
-| **total** | **411,385 ns** | **118,564 ns** | **3.5×** |
+| branch | 79,416 ns | 109 ns | 728x |
+| invoke | 315,745 ns | 22,261 ns | 14.2x |
+| absorb | 16,224 ns | 96,194 ns | 0.17x |
+| **total** | **411,385 ns** | **118,564 ns** | **3.5x** |
 
 ## Before/After: Isolated WASM
 
@@ -162,10 +162,10 @@ the transaction overlay path, not the WASM execution engine itself.
 
 | Metric | Phase 21.5 | Phase 22 | Improvement |
 |--------|-----------|----------|-------------|
-| fire_weapon µs/call | 65–69 | 47–56 | 1.2–1.5× |
-| Profile C @ 1K p99 | ~573 ms | 57.5 ms | **10×** |
-| Profile E @ 1K p99 | ~1,094 ms | 71.9 ms | **15×** |
-| Harness loop total | 411 µs | 119 µs | **3.5×** |
+| fire_weapon µs/call | 65–69 | 47–56 | 1.2–1.5x |
+| Profile C @ 1K p99 | ~573 ms | 57.5 ms | **10x** |
+| Profile E @ 1K p99 | ~1,094 ms | 71.9 ms | **15x** |
+| Harness loop total | 411 µs | 119 µs | **3.5x** |
 
 ## Honest Current Ceiling
 
@@ -180,7 +180,7 @@ levels, not the transaction/WASM path.
 
 ## Remaining Bottlenecks
 
-1. **Subscription fan-out**: O(changes × relevant_subscriptions) dominates at
+1. **Subscription fan-out**: O(changes x relevant_subscriptions) dominates at
    2.5K+ CCU. Phase 20 interest management helps but the evaluation cost
    still scales with client count.
 2. **fire_weapon per-call**: 47–56 µs vs 13.8 µs isolated WASM. The gap is

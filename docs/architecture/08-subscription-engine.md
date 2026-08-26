@@ -1,4 +1,4 @@
-# ADR-008 — Subscription Engine
+﻿# ADR-008 — Subscription Engine
 
 - Status: accepted
 - Phase: 8
@@ -112,7 +112,7 @@ acyclic: `nexum-subscription` depends only on `nexum-core`, `nexum-table`
 **Negative / trade-offs.** Conservative, deliberately: one table per
 subscription; AND-only predicates; single sort key; registry-local commit
 sequence until the runtime aligns it with the WAL LSN; live fan-out is
-O(subscriptions × changes) per commit (index-based fan-out is future work);
+O(subscriptions x changes) per commit (index-based fan-out is future work);
 subscription state is not durable by design (the application re-subscribes
 after recovery, which the brief's §19 recovery requirement explicitly wants).
 
