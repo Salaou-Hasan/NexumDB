@@ -307,10 +307,8 @@ impl SubscriptionRegistry {
         self.next_seq += 1;
 
         let changed_tables: BTreeSet<TableId> = changes.iter().map(Change::table_id).collect();
-        // Table ids that exist right now, for drop detection.
         let existing: BTreeSet<TableId> = store.tables().map(|(_, table)| table.id()).collect();
 
-        // Group members by shared view, in subscription id order.
         let mut by_view: BTreeMap<usize, Vec<SubscriptionId>> = BTreeMap::new();
         for (sid, sub) in &self.subscriptions {
             by_view.entry(sub.view()).or_default().push(*sid);
@@ -326,9 +324,6 @@ impl SubscriptionRegistry {
                 .as_ref()
                 .is_none_or(|view| !existing.contains(&view.table_id()));
             if dropped {
-                // The observed table was dropped: every member's view is
-                // invalid. This is checked before the change filter so it
-                // fires even when the commit touches only unrelated tables.
                 for sid in &members {
                     let sub = self.subscriptions.get_mut(sid).expect("member exists");
                     if sub.state() == SubscriptionState::Stale {
@@ -339,19 +334,16 @@ impl SubscriptionRegistry {
                 }
                 continue;
             }
-            if !changed_tables.contains(
-                &self.views[view_idx]
-                    .as_ref()
-                    .expect("referenced view exists")
-                    .table_id(),
-            ) {
+            let view_table = self.views[view_idx]
+                .as_ref()
+                .expect("referenced view exists")
+                .table_id();
+            if !changed_tables.contains(&view_table) {
                 continue;
             }
-            // Evaluate the shared view once per distinct query (ADR-020 D1).
             let view = self.views[view_idx]
                 .as_mut()
                 .expect("referenced view exists");
-            let view_table = view.table_id();
             let mut scratch: Vec<SubscriptionUpdate> = Vec::new();
             for change in changes
                 .iter()
@@ -360,8 +352,10 @@ impl SubscriptionRegistry {
                 view.apply_change(change, seq, &mut scratch);
                 evaluations += 1;
             }
+            if scratch.is_empty() {
+                continue;
+            }
             deltas += scratch.len() as u64;
-            // Fan the delta stream out to each member, in id order.
             for sid in &members {
                 let sub = self.subscriptions.get_mut(sid).expect("member exists");
                 if sub.state() == SubscriptionState::Stale {
@@ -371,7 +365,6 @@ impl SubscriptionRegistry {
                 sub.push_commit(&scratch, seq);
                 fanouts += scratch.len() as u64;
                 affected.push(*sid);
-                // Track in pending_set when buffer transitions empty → non-empty.
                 if before == 0 && sub.buffer_len() > 0 {
                     self.pending_set.insert(*sid);
                 }

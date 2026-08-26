@@ -677,20 +677,25 @@ fn movement_stream(ctx: &mut SimulationContext, frame: &InputFrame) -> Result<()
     }
 
     // Phase B2: AOI visibility — mark players within AOI_RADIUS of at least
-    // one other player as "active". Dormant players skip the write-back,
+    // one *moved* player as "active". Dormant players skip the write-back,
     // reducing subscription delta volume proportional to the radius.
+    // Only O(M×N) where M = movers, not O(N²).
     let r2 = AOI_RADIUS * AOI_RADIUS;
     let mut active = vec![false; players.len()];
+    // All movers are active by definition
+    for &idx in &pending {
+        active[idx] = true;
+    }
+    // Non-movers are active if within AOI_RADIUS of any mover
     for i in 0..players.len() {
-        for j in 0..players.len() {
-            if i == j {
-                continue;
-            }
-            let dx = players[i].x - players[j].x;
-            let dy = players[i].y - players[j].y;
+        if active[i] {
+            continue;
+        }
+        for &m in &pending {
+            let dx = players[i].x - players[m].x;
+            let dy = players[i].y - players[m].y;
             if dx * dx + dy * dy <= r2 {
                 active[i] = true;
-                active[j] = true;
                 break;
             }
         }
