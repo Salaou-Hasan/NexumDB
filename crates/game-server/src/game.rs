@@ -581,10 +581,27 @@ fn relay_station(ctx: &mut SimulationContext, frame: &InputFrame) -> Result<()> 
 /// ~1.9 Âµs (multiple index traversals + row clones) to ~0.5 Âµs (hash lookup
 /// + arithmetic + one write-buffer insert).
 fn movement_stream(ctx: &mut SimulationContext, frame: &InputFrame) -> Result<()> {
-    // Phase A: scan all connected+alive players into a working set.
-    // One O(N) pass with sequential memory access beats N individual
-    // BTreeMap traversals at high N.
-    let mut players: Vec<(RowId, Row)> = Vec::new();
+    // Phase A: scan all connected+alive players into a typed working set.
+    // Field extraction avoids deep-cloning Vec<Value> per row; the struct
+    // is compact (stack-friendly) and write-back constructs a fresh Row
+    // from struct fields without intermediate clones.
+    #[derive(Clone)]
+    struct PlayerState {
+        rid: RowId,
+        id: u64,
+        x: i64,
+        y: i64,
+        hp: i64,
+        max_hp: i64,
+        alive: i64,
+        score: i64,
+        cooldown: i64,
+        facing: i64,
+        ammo: i64,
+        connected: i64,
+    }
+
+    let mut players: Vec<PlayerState> = Vec::new();
     let mut id_to_idx: std::collections::HashMap<u64, usize> =
         std::collections::HashMap::with_capacity(1024);
     let mut occupied: std::collections::HashSet<(i64, i64)> = std::collections::HashSet::new();
@@ -598,29 +615,27 @@ fn movement_stream(ctx: &mut SimulationContext, frame: &InputFrame) -> Result<()
         let y = get(&row, COL_Y);
         occupied.insert((x, y));
         id_to_idx.insert(pid, players.len());
-        players.push((row_id, row));
+        players.push(PlayerState {
+            rid: row_id,
+            id: pid,
+            x,
+            y,
+            hp: get(&row, COL_HP),
+            max_hp: get(&row, COL_MAX_HP),
+            alive: get(&row, COL_ALIVE),
+            score: get(&row, COL_SCORE),
+            cooldown: get(&row, COL_COOLDOWN),
+            facing: get(&row, COL_FACING),
+            ammo: get(&row, COL_AMMO),
+            connected: get(&row, COL_CONNECTED),
+        });
     }
-    let n_players = players.len();
-    if n_players == 0 {
+    if players.is_empty() {
         return Ok(());
     }
 
-    // Track mutable positions separately so consecutive moves chain correctly.
-    let mut px = vec![0i64; n_players];
-    let mut py = vec![0i64; n_players];
-    for (i, (_, row)) in players.iter().enumerate() {
-        px[i] = get(row, COL_X);
-        py[i] = get(row, COL_Y);
-    }
-
     // Phase B: process all commands against in-memory state.
-    struct PendingMove {
-        idx: usize,
-        nx: i64,
-        ny: i64,
-        facing: i64,
-    }
-    let mut pending: Vec<PendingMove> = Vec::new();
+    let mut pending: Vec<usize> = Vec::new();
 
     for command in frame.commands() {
         if command.kind() != "mv" {
@@ -636,40 +651,43 @@ fn movement_stream(ctx: &mut SimulationContext, frame: &InputFrame) -> Result<()
         let Some(&idx) = id_to_idx.get(&player_id) else {
             continue;
         };
-        let nx = (px[idx] + dx).clamp(0, ARENA_WIDTH - 1);
-        let ny = (py[idx] + dy).clamp(0, ARENA_HEIGHT - 1);
-        if nx == px[idx] && ny == py[idx] {
+        let p = &mut players[idx];
+        let nx = (p.x + dx).clamp(0, ARENA_WIDTH - 1);
+        let ny = (p.y + dy).clamp(0, ARENA_HEIGHT - 1);
+        if nx == p.x && ny == p.y {
             continue;
         }
-        // O(1) occupancy check via HashSet (was O(log N) BTreeMap + row clones).
         if occupied.contains(&(nx, ny)) {
             continue;
         }
-        occupied.remove(&(px[idx], py[idx]));
+        occupied.remove(&(p.x, p.y));
         occupied.insert((nx, ny));
-        px[idx] = nx;
-        py[idx] = ny;
-        pending.push(PendingMove {
-            idx,
-            nx,
-            ny,
-            facing: facing_of(dx, dy),
-        });
+        p.x = nx;
+        p.y = ny;
+        p.facing = facing_of(dx, dy);
+        pending.push(idx);
     }
 
-    // Phase C: write back all position updates through the tx overlay.
-    for pm in &pending {
-        let (ref rid, ref row) = players[pm.idx];
-        let new_row = with(
-            with(
-                with(row.clone(), COL_X, Value::I64(pm.nx)),
-                COL_Y,
-                Value::I64(pm.ny),
-            ),
-            COL_FACING,
-            Value::I64(pm.facing),
-        );
-        ctx.update(TABLE, *rid, new_row)?;
+    // Phase C: write back from struct fields directly — no Row.clone().
+    for &idx in &pending {
+        let p = &players[idx];
+        ctx.update(
+            TABLE,
+            p.rid,
+            row![
+                p.id,
+                p.x,
+                p.y,
+                p.hp,
+                p.max_hp,
+                p.alive,
+                p.score,
+                p.cooldown,
+                p.facing,
+                p.ammo,
+                p.connected
+            ],
+        )?;
     }
     Ok(())
 }
