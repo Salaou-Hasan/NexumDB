@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/nexum-core",
+    "crates/nexum-macros",
     "crates/nexum-table",
     "crates/nexum-tx",
     "crates/nexum-storage",
@@ -48,6 +49,7 @@ panic = "unwind"
 strip = "debuginfo"
 
 [workspace.dependencies]
+nexum-macros = { path = "crates/nexum-macros" }
 nexum-core = { path = "crates/nexum-core", version = "0.1.0" }
 nexum-storage = { path = "crates/nexum-storage", version = "0.1.0" }
 nexum-table = { path = "crates/nexum-table", version = "0.1.0" }

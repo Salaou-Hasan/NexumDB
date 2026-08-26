@@ -133,6 +133,7 @@ dependencies = [
  "nexum-alloc-count",
  "nexum-core",
  "nexum-game-server",
+ "nexum-macros",
  "nexum-network",
  "nexum-reducer",
  "nexum-runtime",
@@ -260,6 +261,15 @@ dependencies = [
  "nexum-table",
  "nexum-tx",
  "nexum-wal",
+]
+
+[[package]]
+name = "nexum-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]

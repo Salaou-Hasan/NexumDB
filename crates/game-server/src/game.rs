@@ -217,12 +217,15 @@ pub fn fire_weapon_native(ctx: &mut ReducerContext, args: &ReducerArgs) -> Resul
         if cand == s_rid {
             continue;
         }
-        if let Some(row) = ctx.get(TABLE, cand)? {
-            if get(&row, COL_ALIVE) != 0 {
-                target_rid = Some(cand);
-                target_pid = get(&row, COL_ID) as u64;
-                break;
-            }
+        if let Some(row) = ctx
+            .get(TABLE, cand)
+            .ok()
+            .flatten()
+            .filter(|r| get(r, COL_ALIVE) != 0)
+        {
+            target_rid = Some(cand);
+            target_pid = get(&row, COL_ID) as u64;
+            break;
         }
     }
 

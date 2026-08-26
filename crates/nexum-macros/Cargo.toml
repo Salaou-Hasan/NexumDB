@@ -1,0 +1,17 @@
+[package]
+name = "nexum-macros"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Nexum derive macros: #[table], #[reducer], #[system] for dead-simple game authoring"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "2", features = ["full", "extra-traits"] }
+quote = "1"
+proc-macro2 = "1"
+
+[lints]
+workspace = true

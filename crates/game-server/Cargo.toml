@@ -8,6 +8,7 @@ description = "Nexum: the actual playable multiplayer arena game built on the au
 
 [dependencies]
 nexum-core.workspace = true
+nexum-macros = { path = "../nexum-macros" }
 nexum-table.workspace = true
 nexum-reducer.workspace = true
 nexum-simulation.workspace = true
