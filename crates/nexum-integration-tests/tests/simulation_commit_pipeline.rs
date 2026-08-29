@@ -1,4 +1,4 @@
-//! Cross-crate seam: `World::tick` → Transaction/OCC → `Vec<Change>` →
+//! Cross-crate seam: `Partition::tick` → Transaction/OCC → `Vec<Change>` →
 //! `SubscriptionRegistry` deltas.
 //!
 //! Proves that simulation ticks produce the exact change stream the
@@ -7,14 +7,14 @@
 //! deterministic regardless of system registration order.
 
 use nexum_core::{ColumnType, Row, SystemId, TableSchema, TickId, Value, WorldId};
-use nexum_simulation::{
-    ExecutionMode, InputCommand, InputFrame, SimulationConfig, SystemDefinition, World,
+use nexum_execution::{
+    ExecutionMode, InputCommand, InputFrame, Partition, PartitionConfig, SystemDefinition,
 };
 use nexum_subscription::{Query, SubscriptionRegistry, SubscriptionUpdate};
 use nexum_table::TableStore;
 
-fn config(execution: ExecutionMode) -> SimulationConfig {
-    SimulationConfig::new()
+fn config(execution: ExecutionMode) -> PartitionConfig {
+    PartitionConfig::new()
         .with_seed(42)
         .with_execution(execution)
 }
@@ -23,7 +23,7 @@ fn config(execution: ExecutionMode) -> SimulationConfig {
 /// command and whose healer system buffs every row by 5 each tick (capped
 /// at 150). Systems keep fixed `(priority, id)`; only the *registration*
 /// order can be swapped.
-fn world(id: u64, execution: ExecutionMode, spawner_first: bool) -> World {
+fn world(id: u64, execution: ExecutionMode, spawner_first: bool) -> Partition {
     let mut store = TableStore::new();
     store
         .create_table(
@@ -36,7 +36,7 @@ fn world(id: u64, execution: ExecutionMode, spawner_first: bool) -> World {
                 .unwrap(),
         )
         .unwrap();
-    let mut world = World::new(WorldId::from_u64(id), store, config(execution)).unwrap();
+    let mut world = Partition::new(WorldId::from_u64(id), store, config(execution)).unwrap();
 
     let spawner = || {
         SystemDefinition::new(SystemId::from_u64(0), "spawner", 0, |ctx, frame| {
@@ -151,7 +151,7 @@ fn identical_inputs_produce_identical_state_across_registration_order() {
         );
     }
 
-    let dump = |w: &World| {
+    let dump = |w: &Partition| {
         let mut rows: Vec<_> = w
             .store()
             .table("players")

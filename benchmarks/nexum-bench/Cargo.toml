@@ -15,7 +15,7 @@ nexum-wal.workspace = true
 nexum-reducer.workspace = true
 nexum-wasm.workspace = true
 nexum-subscription.workspace = true
-nexum-simulation.workspace = true
+nexum-execution.workspace = true
 nexum-runtime.workspace = true
 wat = "1.256"
 

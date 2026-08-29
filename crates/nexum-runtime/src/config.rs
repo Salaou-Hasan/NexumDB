@@ -9,7 +9,7 @@
 use std::path::PathBuf;
 
 use nexum_core::{Error, Result, WorkerId, WorldId};
-use nexum_simulation::{SimulationConfig, World};
+use nexum_execution::{Partition, PartitionConfig};
 use nexum_table::TableStore;
 
 /// The persistence policy applied to every world's WAL (ADR-010 D4).
@@ -54,22 +54,22 @@ pub enum TickFailurePolicy {
     Continue,
 }
 
-/// Builds a [`World`] from an id, an authoritative store, and a simulation
+/// Builds a [`Partition`] from an id, an authoritative store, and a simulation
 /// configuration.
 ///
-/// The same factory is used by `create_world` and `recover_world`, so a
+/// The same factory is used by `create_partition` and `recover_partition`, so a
 /// recovered world is byte-identical in setup to a fresh one (same systems,
 /// reducers, WASM modules — determinism across recovery).
 ///
 /// A recovered store may already contain the authoritative schema (restored
 /// from a snapshot), so factories must create tables only if absent
 /// (ADR-010 D5).
-pub type WorldFactory = Box<dyn Fn(WorldId, TableStore, SimulationConfig) -> Result<World>>;
+pub type PartitionFactory = Box<dyn Fn(WorldId, TableStore, PartitionConfig) -> Result<Partition>>;
 
 /// The runtime configuration, validated at [`Runtime::new`](crate::Runtime::new).
 pub struct RuntimeConfig {
     pub(crate) worker_count: usize,
-    pub(crate) factory: WorldFactory,
+    pub(crate) factory: PartitionFactory,
     pub(crate) persistence: PersistencePolicy,
     pub(crate) persistence_dir: Option<PathBuf>,
     pub(crate) max_queued_inputs: usize,
@@ -83,7 +83,7 @@ pub struct RuntimeConfig {
 impl RuntimeConfig {
     /// Creates a default configuration (1 worker, no persistence, `FailWorld`
     /// tick policy) with `factory` building worlds.
-    pub fn new(factory: WorldFactory) -> Self {
+    pub fn new(factory: PartitionFactory) -> Self {
         Self {
             worker_count: 1,
             factory,
@@ -197,7 +197,7 @@ impl RuntimeConfig {
     }
 
     /// Returns the world factory.
-    pub fn factory(&self) -> &WorldFactory {
+    pub fn factory(&self) -> &PartitionFactory {
         &self.factory
     }
 

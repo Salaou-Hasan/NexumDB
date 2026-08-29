@@ -1,8 +1,8 @@
-//! World lifecycle and status ([`WorldLifecycle`], [`WorldStatus`]) plus the
+//! Partition lifecycle and status ([`PartitionLifecycle`], [`PartitionStatus`]) plus the
 //! runtime's internal per-world entry ([`WorldEntry`], ADR-010 D1, D3).
 //!
 //! The world itself (authoritative state, tick execution) lives in
-//! `nexum-simulation`; the runtime entry adds **operational** metadata:
+//! `nexum-execution`; the runtime entry adds **operational** metadata:
 //! ownership, lifecycle, the input queue, the per-world WAL and snapshot
 //! directory, the per-world subscription registry, and counters. One
 //! WAL and one registry per world keeps isolated partitions (whose
@@ -14,13 +14,13 @@ use std::fmt;
 use std::path::PathBuf;
 
 use nexum_core::{TickId, WorkerId, WorldId};
-use nexum_simulation::{InputFrame, ReducerCall, World};
+use nexum_execution::{InputFrame, Partition, ReducerCall};
 use nexum_subscription::SubscriptionRegistry;
 use nexum_wal::Wal;
 
 /// The lifecycle state of a world inside the runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WorldLifecycle {
+pub enum PartitionLifecycle {
     /// Registered and owned by a worker, not yet ticking.
     Created,
     /// Scheduled for ticks; accepts inputs.
@@ -32,7 +32,7 @@ pub enum WorldLifecycle {
     Failed,
 }
 
-impl fmt::Display for WorldLifecycle {
+impl fmt::Display for PartitionLifecycle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Created => f.write_str("created"),
@@ -43,7 +43,7 @@ impl fmt::Display for WorldLifecycle {
     }
 }
 
-impl WorldLifecycle {
+impl PartitionLifecycle {
     /// Returns `true` for states that may be started (Created/Stopped).
     pub(crate) fn can_start(self) -> bool {
         matches!(self, Self::Created | Self::Stopped)
@@ -57,13 +57,13 @@ impl WorldLifecycle {
 
 /// A point-in-time view of a world for introspection.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WorldStatus {
+pub struct PartitionStatus {
     /// The world id.
     pub id: WorldId,
     /// The owning worker.
     pub worker: WorkerId,
     /// The lifecycle state.
-    pub state: WorldLifecycle,
+    pub state: PartitionLifecycle,
     /// The next tick the world will execute (logical time).
     pub next_tick: TickId,
     /// Inputs currently queued.
@@ -77,9 +77,9 @@ pub struct WorldStatus {
 /// The runtime's internal per-world entry (operational metadata only).
 #[derive(Debug)]
 pub(crate) struct WorldEntry {
-    pub(crate) world: World,
+    pub(crate) world: Partition,
     pub(crate) worker: WorkerId,
-    pub(crate) state: WorldLifecycle,
+    pub(crate) state: PartitionLifecycle,
     pub(crate) inputs: VecDeque<InputFrame>,
     /// Queued client reducer calls (ADR-013 D3), drained into the world's
     /// next tick in FIFO order.
@@ -94,7 +94,7 @@ pub(crate) struct WorldEntry {
 impl WorldEntry {
     /// Builds an entry for a freshly created (or recovered) world.
     pub(crate) fn new(
-        world: World,
+        world: Partition,
         worker: WorkerId,
         wal: Option<Wal>,
         snapshot_dir: Option<PathBuf>,
@@ -102,7 +102,7 @@ impl WorldEntry {
         Self {
             world,
             worker,
-            state: WorldLifecycle::Created,
+            state: PartitionLifecycle::Created,
             inputs: VecDeque::new(),
             calls: VecDeque::new(),
             wal,
@@ -114,8 +114,8 @@ impl WorldEntry {
     }
 
     /// Snapshot the world's status.
-    pub(crate) fn status(&self) -> WorldStatus {
-        WorldStatus {
+    pub(crate) fn status(&self) -> PartitionStatus {
+        PartitionStatus {
             id: self.world.id(),
             worker: self.worker,
             state: self.state,

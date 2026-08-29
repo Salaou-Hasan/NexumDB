@@ -1,6 +1,6 @@
 //! Phase 16 CCU (concurrent users) load harness (ADR-016 D4).
 //!
-//! Boots the **real stack**  GameServer  Runtime  World with the arena
+//! Boots the **real stack**  NexumServer  Runtime  Partition with the arena
 //! game  and drives N simulated clients through the **real gateway + real
 //! protocol codec + real SDK client objects** over in-process transport
 //! (honest scope: the socket layer is in-process; the protocol, gateway,
@@ -32,11 +32,11 @@
 use std::time::{Duration, Instant};
 
 use game_server::{
-    ARENA_HEIGHT, ARENA_WIDTH, CLIENT_REDUCERS, POS_INDEX, TABLE, fire_weapon_module, game_factory,
-    move_args,
+    ARENA_HEIGHT, ARENA_WIDTH, POS_INDEX, TABLE, fire_weapon_module, game_factory, move_args,
 };
-use nexum_game_server::{GameInstanceConfig, GameServer, GameServerConfig, JoinOutcome};
-use nexum_network::{NetworkConfig, Principal, TokenAuthenticator};
+use nexum_core::{PartitionId, WorldId};
+use nexum_network::{NetworkConfig, NexumServer, Principal, TokenAuthenticator};
+use nexum_reducer::ReducerArgs;
 use nexum_runtime::{PersistencePolicy, Runtime, RuntimeConfig};
 use nexum_sdk::{Client, SdkConfig, transport::ClientTransport};
 use nexum_subscription::Query;
@@ -216,14 +216,17 @@ struct MoveCtx {
     fire_reducer: &'static str,
 }
 
-/// Boots the real stack with arena games (lobbies) running and reducers exposed.
-/// Returns the server and a list of game ids (one per lobby).
-fn boot(args: &Args) -> (GameServer, Vec<nexum_core::GameInstanceId>) {
+/// Boots the real stack with arena worlds (lobbies) running. With the
+/// database-as-server model the modules (game reducers + WASM `fire_weapon`)
+/// are registered by the [`game_factory`] on every world; the `NexumServer`
+/// gateway defaults to `AllowAllPolicy`, so no per-reducer exposure is needed.
+/// Returns the server and a list of world ids (one per lobby).
+fn boot(args: &Args) -> (NexumServer, Vec<WorldId>) {
     let mut runtime_config = RuntimeConfig::new(game_factory())
         .with_worker_count(args.workers)
         .with_max_queued_reducer_calls(args.queue);
     // Battery v2: WAL durability under load. Recovery from the same
-    // directory is an explicit later step (Runtime::recover_world).
+    // directory is an explicit later step (Runtime::recover_partition).
     if let Some(dir) = &args.persist {
         let _ = std::fs::create_dir_all(dir);
         runtime_config = runtime_config.with_persistence(PersistencePolicy::Flush, dir.clone());
@@ -234,37 +237,35 @@ fn boot(args: &Args) -> (GameServer, Vec<nexum_core::GameInstanceId>) {
         .with_max_queued_outbound_frames(args.clients.saturating_add(16))
         .with_tick_update_changes(false)
         .with_skip_empty_broadcast(true);
-    let server_config = GameServerConfig::new()
-        .with_tick_rate_hz(args.hz as u32)
-        .with_reducer_profiling(args.reducer_profile);
-    let mut server = GameServer::new(runtime, network, auth_for(args.clients), server_config)
-        .expect("game server");
-    // Create lobbies: each lobby is a separate game with its own world.
-    let players_per_lobby = args.clients.div_ceil(args.lobbies);
-    let mut games = Vec::with_capacity(args.lobbies);
+    let mut server = NexumServer::new(runtime, network, auth_for(args.clients)).expect("server");
+    // Create lobbies: each lobby is a separate world with its own partition.
+    let mut worlds = Vec::with_capacity(args.lobbies);
     for lobby in 0..args.lobbies {
-        let game = server
-            .create_game(
-                GameInstanceConfig::new(format!("arena_{lobby}"))
-                    .with_partition_count(args.partitions)
-                    .with_max_players(players_per_lobby)
-                    .with_on_player_join("player_join"),
-            )
-            .expect("create game");
-        server.start_game(game).expect("start game");
-        games.push(game);
+        let world_id = WorldId::from_u64(lobby as u64);
+        let sim = nexum_execution::PartitionConfig::new();
+        server
+            .runtime_mut()
+            .create_partition(world_id, sim)
+            .expect("create world");
+        server
+            .runtime_mut()
+            .start_partition(world_id)
+            .expect("start world");
+        server
+            .runtime_mut()
+            .register_partition(PartitionId::from_u64(lobby as u64), world_id)
+            .expect("register partition");
+        worlds.push(world_id);
     }
-    for reducer in CLIENT_REDUCERS {
-        server.expose_reducer(reducer).expect("expose reducer");
-    }
-    (server, games)
+    (server, worlds)
 }
 
-/// Connects one SDK client end-to-end: handshake, authenticate, join (the
-/// server routes to a partition), attach, subscribe with a bounded window.
+/// Connects one SDK client end-to-end: handshake, authenticate, join (a
+/// server-originated `player_join` reducer call submitted to the lobby's
+/// world), attach, subscribe with a bounded window.
 fn connect_one(
-    server: &mut GameServer,
-    game: nexum_core::GameInstanceId,
+    server: &mut NexumServer,
+    world: WorldId,
     token: &str,
     window: u32,
     player_num: u64,
@@ -285,11 +286,21 @@ fn connect_one(
     client.pump().expect("pump auth");
     let principal = client.session_principal().expect("authenticated").clone();
 
-    let outcome = server.join_game(&principal, game).expect("join game");
-    assert_eq!(outcome, JoinOutcome::Joined, "fresh join");
-    let world = server
-        .player_world(nexum_core::PlayerId::from_u64(principal.id()))
-        .expect("player world");
+    // Server-originated join (ADR-014): the gateway stamps `__caller` for
+    // client-originated calls; here we submit on behalf of the player, so the
+    // player id is passed explicitly and `player_join` reads it.
+    let request_id = (1u64 << 63) | principal.id();
+    server
+        .runtime_mut()
+        .submit_reducer_call(
+            world,
+            request_id,
+            "player_join",
+            ReducerArgs::new()
+                .insert("player_id", principal.id())
+                .insert("game_id", 0u64),
+        )
+        .expect("submit player_join");
 
     client.attach(world).expect("attach");
     server.gateway_mut().process_inbound();
@@ -313,7 +324,7 @@ fn connect_one(
 }
 
 /// One server-side step + client pumps (mirrors the game server loop).
-fn step(server: &mut GameServer, clients: &mut [SimClient]) {
+fn step(server: &mut NexumServer, clients: &mut [SimClient]) {
     server.gateway_mut().process_inbound();
     let _ = server.step();
     // pump_subscriptions removed: fan_out_results inside step() already drains.
@@ -348,7 +359,7 @@ struct PhaseTimers {
     tick_samples: Vec<(u64, u64, u64, u64, u64, u64, u64)>,
 }
 
-fn step_server_timed(server: &mut GameServer, t: &mut PhaseTimers) {
+fn step_server_timed(server: &mut NexumServer, t: &mut PhaseTimers) {
     let t0 = Instant::now();
     server.gateway_mut().process_inbound();
     let t1 = Instant::now();
@@ -561,9 +572,9 @@ fn send_move(sim: &mut SimClient, mv: &MoveCtx, dx: i64, dy: i64) {
     if code == 4 {
         return; // zero step: nothing authoritative to request
     }
-    let mut frame = nexum_simulation::InputFrame::new(tick);
+    let mut frame = nexum_execution::InputFrame::new(tick);
     frame.push(
-        nexum_simulation::InputCommand::new(
+        nexum_execution::InputCommand::new(
             sim.player_num,
             "mv",
             Some(nexum_core::Value::I64(code)),
@@ -831,11 +842,11 @@ fn wasm_stage_breakdown() {
     println!("  total       {:>9.1} ns/call", total);
 
     // Harness-style loop: one tick transaction; each call branches off it,
-    // invokes, and absorbs back (exactly the World Phase 0c pattern). This
+    // invokes, and absorbs back (exactly the Partition Phase 0c pattern). This
     // isolates the transaction branch/absorb cost from the rest of the
     // pipeline: if it is far above the isolated per-call cost above, the
     // O(parent-writes) copy per call is the measured harness bottleneck.
-    // One tick tx with CALLS_PER_TICK branch/invoke/absorb calls (the World
+    // One tick tx with CALLS_PER_TICK branch/invoke/absorb calls (the Partition
     // Phase 0c pattern at harness burst scale). With the write set growing
     // every call, an O(parent-writes) branch copy shows up as a per-call
     // cost that grows with burst position; the average over the burst is
@@ -1037,7 +1048,7 @@ fn os_tune() {}
 fn build_client_pool(
     threads: usize,
     #[allow(unused_variables)] first_proc: Option<usize>,
-    procs: usize,
+    #[allow(unused_variables)] procs: usize,
 ) -> rayon::ThreadPool {
     rayon::ThreadPoolBuilder::new()
         .num_threads(threads)
@@ -1147,7 +1158,7 @@ fn main() {
     for tick in 0..100 {
         if move_ctx.enabled {
             for &w in &worlds {
-                if let Ok(status) = server.runtime().world_status(w) {
+                if let Ok(status) = server.runtime().partition_status(w) {
                     move_ctx.next_tick.insert(w, status.next_tick);
                 }
             }
@@ -1208,7 +1219,7 @@ fn main() {
     for tick in 0..args.ticks {
         if move_ctx.enabled {
             for &w in &worlds {
-                if let Ok(status) = server.runtime().world_status(w) {
+                if let Ok(status) = server.runtime().partition_status(w) {
                     move_ctx.next_tick.insert(w, status.next_tick);
                 }
             }
@@ -1234,11 +1245,18 @@ fn main() {
                 if sm64(args.seed ^ 0xC0FFEE ^ (tick << 24) ^ ((i as u64) << 4)) % 1000
                     < args.xpart as u64
                 {
-                    let _ = server.submit_command(
-                        nexum_core::PlayerId::from_u64(i as u64 + 1),
-                        "relay",
-                        None,
+                    let world = WorldId::from_u64((i as u64) % (args.lobbies as u64));
+                    let next_tick = server
+                        .runtime()
+                        .partition_status(world)
+                        .map(|status| status.next_tick)
+                        .unwrap_or_else(|_| nexum_core::TickId::from_u64(tick));
+                    let mut frame = nexum_execution::InputFrame::new(next_tick);
+                    frame.push(
+                        nexum_execution::InputCommand::new(i as u64 + 1, "relay", None)
+                            .expect("valid relay command"),
                     );
+                    let _ = server.runtime_mut().submit_input(world, frame);
                 }
             }
         }
@@ -1316,7 +1334,6 @@ fn main() {
 
     let metrics = server.gateway().metrics();
     let runtime_metrics = server.runtime().metrics();
-    let game_metrics = server.metrics();
     let accepted_delta =
         (metrics.inputs_accepted + metrics.reducer_calls_accepted).saturating_sub(accepted_before);
     let dropped_delta = metrics.messages_dropped.saturating_sub(dropped_before);
@@ -1352,7 +1369,7 @@ fn main() {
         "state: ticks_ok={} ticks_failed={} worlds={} partitions={}",
         runtime_metrics.ticks_succeeded,
         runtime_metrics.ticks_failed,
-        runtime_metrics.running_worlds,
+        runtime_metrics.running_partitions,
         runtime_metrics.partitions
     );
     println!(
@@ -1386,8 +1403,8 @@ fn main() {
         tick_delta + sub_msg_delta + result_delta
     );
     println!(
-        "game:  players_active={} games={} reducer_calls={}",
-        game_metrics.players_active, game_metrics.games_active, game_metrics.reducer_calls
+        "game:  players_active={} worlds={} reducer_calls={}",
+        args.clients, args.lobbies, metrics.reducer_calls_accepted
     );
     // Calibrated to measured steady-state RSS (Phase 18 follow-up): the
     // full stack (server + in-process SDK clients) needs  24.7 KB private

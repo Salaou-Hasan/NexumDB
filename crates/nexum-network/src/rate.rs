@@ -8,7 +8,7 @@
 //!
 //! Guarantees:
 //!
-//! - **Operational only** — limits live entirely outside `World::tick`; they
+//! - **Operational only** — limits live entirely outside `Partition::tick`; they
 //!   never alter simulation semantics or determinism.
 //! - **Explicit rejection** — an operation that exceeds its bucket is
 //!   answered with a correlated protocol error; it is never silently

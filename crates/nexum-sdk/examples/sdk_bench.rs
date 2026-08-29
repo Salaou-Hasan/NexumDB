@@ -11,13 +11,13 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use nexum_core::{ColumnType, ReducerId, SystemId, TickId, Value, WorldId};
+use nexum_execution::{InputCommand, InputFrame, Partition, PartitionConfig, SystemDefinition};
 use nexum_network::{
     NetworkConfig, NetworkGateway, Principal, TokenAuthenticator, protocol::ServerMessage,
 };
 use nexum_reducer::{ReducerArgs, ReducerContext, ReducerDefinition};
-use nexum_runtime::{Runtime, RuntimeConfig, WorldFactory};
+use nexum_runtime::{PartitionFactory, Runtime, RuntimeConfig};
 use nexum_sdk::{Client, SdkConfig, protocol::ClientMessage, transport::ClientTransport};
-use nexum_simulation::{InputCommand, InputFrame, SimulationConfig, SystemDefinition, World};
 use nexum_subscription::Query;
 use nexum_table::TableStore;
 
@@ -74,32 +74,30 @@ fn bump(ctx: &mut ReducerContext, args: &ReducerArgs) -> nexum_core::Result<Valu
 }
 
 /// A world whose system consumes `spawn` commands, with `bump` registered.
-fn input_factory() -> WorldFactory {
-    Box::new(
-        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-            ensure_players(&mut store);
-            let mut world = World::new(id, store, sim)?;
-            world
-                .add_system(
-                    SystemDefinition::new(SystemId::from_u64(0), "consumer", 0, |ctx, frame| {
-                        for command in frame.commands() {
-                            if command.kind() == "spawn" {
-                                let id = command.payload().and_then(Value::as_u64).unwrap();
-                                ctx.insert("players", nexum_core::row![id, 10u64, 100i32])?;
-                            }
+fn input_factory() -> PartitionFactory {
+    Box::new(|id: WorldId, mut store: TableStore, sim: PartitionConfig| {
+        ensure_players(&mut store);
+        let mut world = Partition::new(id, store, sim)?;
+        world
+            .add_system(
+                SystemDefinition::new(SystemId::from_u64(0), "consumer", 0, |ctx, frame| {
+                    for command in frame.commands() {
+                        if command.kind() == "spawn" {
+                            let id = command.payload().and_then(Value::as_u64).unwrap();
+                            ctx.insert("players", nexum_core::row![id, 10u64, 100i32])?;
                         }
-                        Ok(())
-                    })
-                    .unwrap(),
-                )
-                .unwrap();
-            world
-                .native_mut()
-                .register(ReducerDefinition::new(ReducerId::from_u64(1), "bump", bump).unwrap())
-                .unwrap();
-            Ok(world)
-        },
-    )
+                    }
+                    Ok(())
+                })
+                .unwrap(),
+            )
+            .unwrap();
+        world
+            .native_mut()
+            .register(ReducerDefinition::new(ReducerId::from_u64(1), "bump", bump).unwrap())
+            .unwrap();
+        Ok(world)
+    })
 }
 
 fn auth() -> Arc<TokenAuthenticator> {
@@ -191,9 +189,9 @@ fn main() {
         let mut gateway = gateway_with();
         gateway
             .control()
-            .create_world(world, SimulationConfig::new())
+            .create_partition(world, PartitionConfig::new())
             .unwrap();
-        gateway.control().start_world(world).unwrap();
+        gateway.control().start_partition(world).unwrap();
         bench("SDK session setup (h+a+a)", iterations, || {
             let mut client = open_client(&mut gateway);
             gateway.process_inbound();
@@ -213,9 +211,9 @@ fn main() {
         let mut gateway = gateway_with();
         gateway
             .control()
-            .create_world(world, SimulationConfig::new())
+            .create_partition(world, PartitionConfig::new())
             .unwrap();
-        gateway.control().start_world(world).unwrap();
+        gateway.control().start_partition(world).unwrap();
         let (mut client, _local) = joined_client(&mut gateway, world);
         let mut tick = 0u64;
         bench("SDK input → tick → events", iterations, || {
@@ -235,9 +233,9 @@ fn main() {
         let mut gateway = gateway_with();
         gateway
             .control()
-            .create_world(world, SimulationConfig::new())
+            .create_partition(world, PartitionConfig::new())
             .unwrap();
-        gateway.control().start_world(world).unwrap();
+        gateway.control().start_partition(world).unwrap();
         let (mut client, _local) = joined_client(&mut gateway, world);
         // Seed one player row so `bump` succeeds.
         let mut frame = InputFrame::new(TickId::from_u64(0));
@@ -265,9 +263,9 @@ fn main() {
         let mut gateway = gateway_with();
         gateway
             .control()
-            .create_world(world, SimulationConfig::new())
+            .create_partition(world, PartitionConfig::new())
             .unwrap();
-        gateway.control().start_world(world).unwrap();
+        gateway.control().start_partition(world).unwrap();
         let (mut client, local) = joined_client(&mut gateway, world);
         // Populate 100 rows in 100 ticks.
         for tick in 0..100u64 {
@@ -301,9 +299,9 @@ fn main() {
         let mut gateway = gateway_with();
         gateway
             .control()
-            .create_world(world, SimulationConfig::new())
+            .create_partition(world, PartitionConfig::new())
             .unwrap();
-        gateway.control().start_world(world).unwrap();
+        gateway.control().start_partition(world).unwrap();
         let (mut client, local) = joined_client(&mut gateway, world);
         for tick in 0..50u64 {
             let mut frame = InputFrame::new(TickId::from_u64(tick));
@@ -330,9 +328,9 @@ fn main() {
         let mut gateway = gateway_with();
         gateway
             .control()
-            .create_world(world, SimulationConfig::new())
+            .create_partition(world, PartitionConfig::new())
             .unwrap();
-        gateway.control().start_world(world).unwrap();
+        gateway.control().start_partition(world).unwrap();
         let (mut client, _local) = joined_client(&mut gateway, world);
         bench("SDK subscribe/unsubscribe roundtrip", iterations, || {
             let local = client
@@ -353,9 +351,9 @@ fn main() {
         let mut gateway = gateway_with();
         gateway
             .control()
-            .create_world(world, SimulationConfig::new())
+            .create_partition(world, PartitionConfig::new())
             .unwrap();
-        gateway.control().start_world(world).unwrap();
+        gateway.control().start_partition(world).unwrap();
         bench("SDK reconnect (new session)", iterations / 2, || {
             let mut client = open_client(&mut gateway);
             gateway.process_inbound();
@@ -375,9 +373,9 @@ fn main() {
         let mut gateway = gateway_with();
         gateway
             .control()
-            .create_world(world, SimulationConfig::new())
+            .create_partition(world, PartitionConfig::new())
             .unwrap();
-        gateway.control().start_world(world).unwrap();
+        gateway.control().start_partition(world).unwrap();
         let (slow_transport, slow_server) = ClientTransport::memory_pair(4096, 1);
         gateway.register_connection(Box::new(slow_server)).unwrap();
         let mut slow = Client::new(SdkConfig::new()).unwrap();

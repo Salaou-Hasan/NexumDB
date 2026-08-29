@@ -3,16 +3,13 @@
 //!
 //! The logger is dependency-free: `timestamp level module message` lines on
 //! stderr, filtered by the configured [`LogLevel`]. Structured `key=value`
-//! fields are emitted for hot operational events. No heavyweight framework
-//! — consistent with the project's zero-dependency style.
+//! fields are emitted for hot operational events.
 //!
-//! [`ServerMetricsSnapshot`] merges the runtime, network, and game-server
-//! metric structs plus a coarse memory estimate into one point-in-time
-//! picture. Snapshots never influence simulation semantics.
+//! [`ServerMetricsSnapshot`] merges the runtime and network metric structs
+//! plus a coarse memory estimate into one point-in-time picture.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use nexum_game_server::GameServerMetrics;
 use nexum_network::NetworkMetrics;
 use nexum_runtime::RuntimeMetrics;
 
@@ -22,7 +19,6 @@ use crate::LogLevel;
 #[derive(Debug, Clone)]
 pub struct Logger {
     level: LogLevel,
-    /// The module tag shown on every line.
     module: String,
 }
 
@@ -84,22 +80,15 @@ pub struct ServerMetricsSnapshot {
     pub runtime: RuntimeMetrics,
     /// Network metrics (connections, sessions, frames, rejections).
     pub network: NetworkMetrics,
-    /// Game-server metrics (games, players, reducer calls).
-    pub game: GameServerMetrics,
-    /// Coarse live-memory estimate in bytes (rows x per-row + connections x
-    /// per-client + base), intended for trend detection, not accounting.
+    /// Coarse live-memory estimate in bytes.
     pub memory_estimate_bytes: u64,
 }
 
 impl ServerMetricsSnapshot {
-    /// Builds a snapshot from the three metric sources. `rows` is the
-    /// approximate number of authoritative rows across worlds (used with the
-    /// Phase 15 measured ≈88 bytes/row), and `connections` is the current
-    /// connection count (≈2 KB per client estimate).
+    /// Builds a snapshot from the metric sources.
     pub fn capture(
         runtime: RuntimeMetrics,
         network: NetworkMetrics,
-        game: GameServerMetrics,
         rows: u64,
         connections: usize,
     ) -> Self {
@@ -112,13 +101,11 @@ impl ServerMetricsSnapshot {
         Self {
             runtime,
             network,
-            game,
             memory_estimate_bytes,
         }
     }
 
-    /// Formats the snapshot as one human-readable summary line (used by the
-    /// periodic metrics log).
+    /// Formats the snapshot as one human-readable summary line.
     pub fn summary_line(&self) -> String {
         let tick_avg_ns = self
             .runtime
@@ -128,11 +115,11 @@ impl ServerMetricsSnapshot {
         format!(
             "ticks={} failed={} avg_tick={:.1}us | worlds={} partitions={} workers={} | \
              conns={} sessions={} subs={} | frames={} dropped={} rate_limited={} | \
-             games={} players={} reducer_calls={} | mem~{}MB",
+             mem~{}MB",
             self.runtime.ticks_succeeded,
             self.runtime.ticks_failed,
             tick_avg_ns as f64 / 1_000.0,
-            self.runtime.running_worlds,
+            self.runtime.running_partitions,
             self.runtime.partitions,
             self.runtime.workers,
             self.network.connections,
@@ -141,9 +128,6 @@ impl ServerMetricsSnapshot {
             self.network.frames_received,
             self.network.messages_dropped,
             self.network.rate_limited,
-            self.game.games_active,
-            self.game.players_active,
-            self.game.reducer_calls,
             self.memory_estimate_bytes / (1024 * 1024),
         )
     }
@@ -156,7 +140,6 @@ mod tests {
     #[test]
     fn logger_filters_by_level() {
         let logger = Logger::new(LogLevel::Warn, "test");
-        // info must be suppressed at warn level (no panic, no output).
         logger.info("hidden", &[]);
         logger.warn("visible", &[("k", "v".to_string())]);
     }
@@ -166,7 +149,6 @@ mod tests {
         let snapshot = ServerMetricsSnapshot::capture(
             RuntimeMetrics::empty(),
             NetworkMetrics::empty(),
-            GameServerMetrics::default(),
             1_000_000,
             100,
         );

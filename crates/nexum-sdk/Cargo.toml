@@ -12,7 +12,7 @@ nexum-core.workspace = true
 nexum-storage.workspace = true
 nexum-reducer.workspace = true
 nexum-subscription.workspace = true
-nexum-simulation.workspace = true
+nexum-execution.workspace = true
 nexum-network.workspace = true
 
 [dev-dependencies]

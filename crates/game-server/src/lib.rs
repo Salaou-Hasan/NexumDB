@@ -1,23 +1,17 @@
 //! The **actual playable multiplayer arena game** built on the Nexum stack.
 //!
-//! Three distinct layers (per the Nexum roadmap):
+//! This crate is a Nexum module: it defines tables, reducers, indexes,
+//! and subscriptions that run on the Nexum Database Server.
 //!
-//! - [`nexum-game-server`] — the reusable game-server framework (game
-//!   instances, players, exposure, routing). No game mechanics.
-//! - [`nexum-server`] — the reference Nexum stack demo (no gameplay).
-//! - **this crate** — the playable game: authoritative gameplay reducers
-//!   (native + WASM), simulation systems, the realtime server, and the
-//!   terminal client, all over the real SDK/TCP network boundary.
-//!
-//! The simulation remains authoritative. Every mutation flows
-//! `World::tick → Transaction/OCC → one atomic commit → Vec<Change> → WAL +
-//! SubscriptionRegistry → network → SDK view`. The client only sends intents
+//! The database is authoritative. Every mutation flows
+//! `Partition::tick -> Transaction/OCC -> one atomic commit -> Vec<Change> -> WAL +
+//! SubscriptionRegistry -> network -> SDK view`. The client only sends intents
 //! (reducer calls); the server validates and decides.
 //!
 //! Run:
 //!
 //! ```text
-//! cargo run -p game-server -- server          # the authoritative game server
+//! cargo run -p game-server -- server          # the Nexum database server
 //! cargo run -p game-server -- client --name alice
 //! ```
 //!

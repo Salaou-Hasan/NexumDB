@@ -1,24 +1,24 @@
 //! Gameplay tests: authoritative reducers (join/move/reload/respawn/damage),
 //! the cooldown system, the WASM `fire_weapon` reducer, and forged-identity
-//! rejection. Every mutation flows through `World::tick_with_calls` — the
+//! rejection. Every mutation flows through `Partition::tick_with_calls` — the
 //! same single commit path the runtime uses.
 
 use game_server::game::{
     COL_ALIVE, COL_AMMO, COL_COOLDOWN, COL_HP, COL_X, COL_Y, game_factory, spawn,
 };
 use nexum_core::{Row, RowId, TickId, Value, WorldId};
+use nexum_execution::{InputFrame, Partition, PartitionConfig, ReducerCall, ReducerCallResult};
 use nexum_network::CALLER_SOURCE_ARG;
 use nexum_reducer::ReducerArgs;
-use nexum_simulation::{InputFrame, ReducerCall, ReducerCallResult, SimulationConfig, World};
 use nexum_table::TableStore;
 
 /// Builds a fresh world through the real game factory.
-fn world(seed: u64) -> World {
+fn world(seed: u64) -> Partition {
     let store = TableStore::new();
     game_factory()(
         WorldId::from_u64(0),
         store,
-        SimulationConfig::new().with_seed(seed),
+        PartitionConfig::new().with_seed(seed),
     )
     .unwrap()
 }
@@ -26,17 +26,17 @@ fn world(seed: u64) -> World {
 /// Drives one reducer call through the real tick path (join tick semantics:
 /// the call executes against the tick transaction, the tick commits).
 fn call(
-    world: &mut World,
+    world: &mut Partition,
     request: u64,
     reducer: &str,
     args: ReducerArgs,
-) -> nexum_simulation::TickResult {
+) -> nexum_execution::TickResult {
     let frame = InputFrame::new(world.tick_number());
     let calls = vec![ReducerCall::new(request, reducer, args).unwrap()];
     world.tick_with_calls(&frame, &[], &calls).unwrap()
 }
 
-fn call_result(result: &nexum_simulation::TickResult, request: u64) -> &ReducerCallResult {
+fn call_result(result: &nexum_execution::TickResult, request: u64) -> &ReducerCallResult {
     result
         .reducer_results()
         .iter()
@@ -46,7 +46,7 @@ fn call_result(result: &nexum_simulation::TickResult, request: u64) -> &ReducerC
 
 /// The value of a column in the committed row for `player_id` (found through
 /// the latest change; the view is the authoritative committed state).
-fn join_player(world: &mut World, player_id: u64) {
+fn join_player(world: &mut Partition, player_id: u64) {
     let result = call(
         world,
         player_id,
@@ -59,7 +59,7 @@ fn join_player(world: &mut World, player_id: u64) {
 }
 
 /// Extracts the committed rows from the world's authoritative store.
-fn scan_players(world: &World) -> Vec<(RowId, Row)> {
+fn scan_players(world: &Partition) -> Vec<(RowId, Row)> {
     world
         .store()
         .table("players")
@@ -362,7 +362,7 @@ fn reload_refills_ammo() {
 
 /// Places player `target_id` one cell east of player `shooter_id` (the
 /// shooter faces east by default).
-fn place_adjacent(world: &mut World, shooter: u64, target: u64) {
+fn place_adjacent(world: &mut Partition, shooter: u64, target: u64) {
     let (x, y) = spawn(shooter);
     call(
         world,

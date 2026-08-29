@@ -5,12 +5,12 @@
 
 use nexum_core::row;
 use nexum_core::{ColumnType, Error, PartitionId, ReducerId, SystemId, TickId, Value, WorldId};
+use nexum_execution::{InputFrame, Partition, PartitionConfig, SystemDefinition};
 use nexum_reducer::{ReducerArgs, ReducerDefinition};
-use nexum_simulation::{InputFrame, SimulationConfig, SystemDefinition, World};
 use nexum_subscription::{Query, SubscriptionUpdate};
 use nexum_table::TableStore;
 
-use crate::WorldFactory;
+use crate::PartitionFactory;
 use crate::config::RuntimeConfig;
 use crate::error::RuntimeError;
 use crate::runtime::Runtime;
@@ -37,164 +37,158 @@ fn ensure_ledger(store: &mut TableStore) {
 /// A factory whose worlds register the `transfer` handler and, per world, a
 /// sender system that messages the next partition in the ring
 /// (0 → 1 → 2 → 0). All capture-free: everything derives from the context.
-fn mesh_factory() -> WorldFactory {
-    Box::new(
-        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-            ensure_ledger(&mut store);
-            let mut world = World::new(id, store, sim)?;
-            world
-                .native_mut()
-                .register(
-                    ReducerDefinition::new(ReducerId::from_u64(0), "transfer", |ctx, args| {
-                        let amount = args.require_i64("amount")?;
-                        let to = args.require_u64("to")?;
-                        let from = args.require_u64("from")?;
-                        let seq = args.require_u64("seq")?;
-                        ctx.insert("ledger", row![seq, from, to, amount])?;
-                        ctx.emit("transfer", amount)?;
-                        Ok(Value::U64(seq))
-                    })
-                    .unwrap(),
-                )
-                .unwrap();
+fn mesh_factory() -> PartitionFactory {
+    Box::new(|id: WorldId, mut store: TableStore, sim: PartitionConfig| {
+        ensure_ledger(&mut store);
+        let mut world = Partition::new(id, store, sim)?;
+        world
+            .native_mut()
+            .register(
+                ReducerDefinition::new(ReducerId::from_u64(0), "transfer", |ctx, args| {
+                    let amount = args.require_i64("amount")?;
+                    let to = args.require_u64("to")?;
+                    let from = args.require_u64("from")?;
+                    let seq = args.require_u64("seq")?;
+                    ctx.insert("ledger", row![seq, from, to, amount])?;
+                    ctx.emit("transfer", amount)?;
+                    Ok(Value::U64(seq))
+                })
+                .unwrap(),
+            )
+            .unwrap();
+        world.add_system(
+            SystemDefinition::new(SystemId::from_u64(0), "sender", 0, |ctx, _| {
+                let from = ctx.partition().as_u64();
+                let target = match from {
+                    0 => 1,
+                    1 => 2,
+                    _ => 0,
+                };
+                let tick = ctx.tick().as_u64();
+                ctx.send_to(
+                    PartitionId::from_u64(target),
+                    "transfer",
+                    ReducerArgs::new()
+                        .insert("amount", 10i64)
+                        .insert("to", target)
+                        .insert("from", from)
+                        .insert("seq", tick),
+                )?;
+                Ok(())
+            })
+            .unwrap(),
+        )?;
+        Ok(world)
+    })
+}
+
+/// A one-way factory: only world 0 has a sender, messaging partition 1.
+/// Partition 1 registers the accepting handler and nothing else — clean
+/// count-based assertions for two-partition routing tests.
+fn one_way_factory() -> PartitionFactory {
+    Box::new(|id: WorldId, mut store: TableStore, sim: PartitionConfig| {
+        ensure_ledger(&mut store);
+        let mut world = Partition::new(id, store, sim)?;
+        world
+            .native_mut()
+            .register(
+                ReducerDefinition::new(ReducerId::from_u64(0), "transfer", |ctx, args| {
+                    let amount = args.require_i64("amount")?;
+                    let to = args.require_u64("to")?;
+                    let from = args.require_u64("from")?;
+                    let seq = args.require_u64("seq")?;
+                    ctx.insert("ledger", row![seq, from, to, amount])?;
+                    ctx.emit("transfer", amount)?;
+                    Ok(Value::U64(seq))
+                })
+                .unwrap(),
+            )
+            .unwrap();
+        if id.as_u64() == 0 {
             world.add_system(
                 SystemDefinition::new(SystemId::from_u64(0), "sender", 0, |ctx, _| {
-                    let from = ctx.partition().as_u64();
-                    let target = match from {
-                        0 => 1,
-                        1 => 2,
-                        _ => 0,
-                    };
                     let tick = ctx.tick().as_u64();
                     ctx.send_to(
-                        PartitionId::from_u64(target),
+                        PartitionId::from_u64(1),
                         "transfer",
                         ReducerArgs::new()
                             .insert("amount", 10i64)
-                            .insert("to", target)
-                            .insert("from", from)
+                            .insert("to", 1u64)
+                            .insert("from", ctx.partition().as_u64())
                             .insert("seq", tick),
                     )?;
                     Ok(())
                 })
                 .unwrap(),
             )?;
-            Ok(world)
-        },
-    )
-}
-
-/// A one-way factory: only world 0 has a sender, messaging partition 1.
-/// World 1 registers the accepting handler and nothing else — clean
-/// count-based assertions for two-partition routing tests.
-fn one_way_factory() -> WorldFactory {
-    Box::new(
-        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-            ensure_ledger(&mut store);
-            let mut world = World::new(id, store, sim)?;
-            world
-                .native_mut()
-                .register(
-                    ReducerDefinition::new(ReducerId::from_u64(0), "transfer", |ctx, args| {
-                        let amount = args.require_i64("amount")?;
-                        let to = args.require_u64("to")?;
-                        let from = args.require_u64("from")?;
-                        let seq = args.require_u64("seq")?;
-                        ctx.insert("ledger", row![seq, from, to, amount])?;
-                        ctx.emit("transfer", amount)?;
-                        Ok(Value::U64(seq))
-                    })
-                    .unwrap(),
-                )
-                .unwrap();
-            if id.as_u64() == 0 {
-                world.add_system(
-                    SystemDefinition::new(SystemId::from_u64(0), "sender", 0, |ctx, _| {
-                        let tick = ctx.tick().as_u64();
-                        ctx.send_to(
-                            PartitionId::from_u64(1),
-                            "transfer",
-                            ReducerArgs::new()
-                                .insert("amount", 10i64)
-                                .insert("to", 1u64)
-                                .insert("from", ctx.partition().as_u64())
-                                .insert("seq", tick),
-                        )?;
-                        Ok(())
-                    })
-                    .unwrap(),
-                )?;
-            }
-            Ok(world)
-        },
-    )
+        }
+        Ok(world)
+    })
 }
 
 /// A factory where partition 1's `transfer` handler rejects (all others
 /// accept) and every world's sender messages partition 1 — except partition
 /// 1 itself, which messages partition 0. For destination-failure tests.
-fn rejecting_destination_factory() -> WorldFactory {
-    Box::new(
-        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-            ensure_ledger(&mut store);
-            let mut world = World::new(id, store, sim)?;
-            if id.as_u64() == 1 {
-                world
-                    .native_mut()
-                    .register(
-                        ReducerDefinition::new(ReducerId::from_u64(0), "transfer", |_ctx, _| {
-                            Err(Error::invalid_argument("handler rejected the message"))
-                        })
-                        .unwrap(),
-                    )
-                    .unwrap();
-            } else {
-                world
-                    .native_mut()
-                    .register(
-                        ReducerDefinition::new(ReducerId::from_u64(0), "transfer", |ctx, args| {
-                            let amount = args.require_i64("amount")?;
-                            let to = args.require_u64("to")?;
-                            let from = args.require_u64("from")?;
-                            let seq = args.require_u64("seq")?;
-                            ctx.insert("ledger", row![seq, from, to, amount])?;
-                            Ok(Value::U64(seq))
-                        })
-                        .unwrap(),
-                    )
-                    .unwrap();
-            }
-            world.add_system(
-                SystemDefinition::new(SystemId::from_u64(0), "sender", 0, |ctx, _| {
-                    let from = ctx.partition().as_u64();
-                    let target = if from == 1 { 0 } else { 1 };
-                    let tick = ctx.tick().as_u64();
-                    ctx.send_to(
-                        PartitionId::from_u64(target),
-                        "transfer",
-                        ReducerArgs::new()
-                            .insert("amount", 1i64)
-                            .insert("to", target)
-                            .insert("from", from)
-                            .insert("seq", tick),
-                    )?;
-                    Ok(())
-                })
-                .unwrap(),
-            )?;
-            Ok(world)
-        },
-    )
+fn rejecting_destination_factory() -> PartitionFactory {
+    Box::new(|id: WorldId, mut store: TableStore, sim: PartitionConfig| {
+        ensure_ledger(&mut store);
+        let mut world = Partition::new(id, store, sim)?;
+        if id.as_u64() == 1 {
+            world
+                .native_mut()
+                .register(
+                    ReducerDefinition::new(ReducerId::from_u64(0), "transfer", |_ctx, _| {
+                        Err(Error::invalid_argument("handler rejected the message"))
+                    })
+                    .unwrap(),
+                )
+                .unwrap();
+        } else {
+            world
+                .native_mut()
+                .register(
+                    ReducerDefinition::new(ReducerId::from_u64(0), "transfer", |ctx, args| {
+                        let amount = args.require_i64("amount")?;
+                        let to = args.require_u64("to")?;
+                        let from = args.require_u64("from")?;
+                        let seq = args.require_u64("seq")?;
+                        ctx.insert("ledger", row![seq, from, to, amount])?;
+                        Ok(Value::U64(seq))
+                    })
+                    .unwrap(),
+                )
+                .unwrap();
+        }
+        world.add_system(
+            SystemDefinition::new(SystemId::from_u64(0), "sender", 0, |ctx, _| {
+                let from = ctx.partition().as_u64();
+                let target = if from == 1 { 0 } else { 1 };
+                let tick = ctx.tick().as_u64();
+                ctx.send_to(
+                    PartitionId::from_u64(target),
+                    "transfer",
+                    ReducerArgs::new()
+                        .insert("amount", 1i64)
+                        .insert("to", target)
+                        .insert("from", from)
+                        .insert("seq", tick),
+                )?;
+                Ok(())
+            })
+            .unwrap(),
+        )?;
+        Ok(world)
+    })
 }
 
 fn start_partition(runtime: &mut Runtime, world: u64, partition: u64) {
     runtime
-        .create_world(WorldId::from_u64(world), SimulationConfig::new())
+        .create_partition(WorldId::from_u64(world), PartitionConfig::new())
         .unwrap();
     runtime
         .register_partition(PartitionId::from_u64(partition), WorldId::from_u64(world))
         .unwrap();
-    runtime.start_world(WorldId::from_u64(world)).unwrap();
+    runtime.start_partition(WorldId::from_u64(world)).unwrap();
 }
 
 // -------------------------------------------------------------- lifecycle
@@ -204,21 +198,21 @@ fn partition_registration_lifecycle() {
     let mut runtime = Runtime::new(RuntimeConfig::new(mesh_factory())).unwrap();
     let world = WorldId::from_u64(0);
     runtime
-        .create_world(world, SimulationConfig::new())
+        .create_partition(world, PartitionConfig::new())
         .unwrap();
 
     // Binding an unknown world is rejected; the world's default partition is
     // its raw world id.
     assert!(matches!(
         runtime.register_partition(PartitionId::from_u64(5), WorldId::from_u64(9)),
-        Err(RuntimeError::UnknownWorld(_))
+        Err(RuntimeError::UnknownPartition(_))
     ));
     runtime
         .register_partition(PartitionId::from_u64(7), world)
         .unwrap();
     assert_eq!(
         runtime
-            .partition_status(PartitionId::from_u64(7))
+            .routing_status(PartitionId::from_u64(7))
             .unwrap()
             .world,
         world
@@ -226,15 +220,15 @@ fn partition_registration_lifecycle() {
     // Duplicate registration is rejected.
     assert!(matches!(
         runtime.register_partition(PartitionId::from_u64(7), world),
-        Err(RuntimeError::DuplicatePartition(_))
+        Err(RuntimeError::DuplicateRouting(_))
     ));
     // The world's partition id was stamped.
-    assert!(runtime.world_status(world).unwrap().next_tick == TickId::from_u64(0));
+    assert!(runtime.partition_status(world).unwrap().next_tick == TickId::from_u64(0));
 
     // The topology propagates to registered worlds.
     let other = WorldId::from_u64(1);
     runtime
-        .create_world(other, SimulationConfig::new())
+        .create_partition(other, PartitionConfig::new())
         .unwrap();
     runtime
         .register_partition(PartitionId::from_u64(1), other)
@@ -248,8 +242,8 @@ fn partition_registration_lifecycle() {
     let ids: Vec<u64> = runtime.topology().map(|p| p.as_u64()).collect();
     assert_eq!(ids, vec![7]);
     assert!(matches!(
-        runtime.partition_status(PartitionId::from_u64(1)),
-        Err(RuntimeError::UnknownPartition(_))
+        runtime.routing_status(PartitionId::from_u64(1)),
+        Err(RuntimeError::UnknownRouting(_))
     ));
     // Idempotent unregister.
     runtime
@@ -257,10 +251,10 @@ fn partition_registration_lifecycle() {
         .unwrap();
 
     // Destroying the world unregisters its bound partition.
-    runtime.destroy_world(world).unwrap();
+    runtime.destroy_partition(world).unwrap();
     assert!(matches!(
-        runtime.partition_status(PartitionId::from_u64(7)),
-        Err(RuntimeError::UnknownPartition(_))
+        runtime.routing_status(PartitionId::from_u64(7)),
+        Err(RuntimeError::UnknownRouting(_))
     ));
 }
 
@@ -308,7 +302,7 @@ fn external_messages_share_the_same_delivery_path() {
     // Register partition 0 but never start its world, so the only message in
     // flight is the externally injected one (world 0's own sender never runs).
     runtime
-        .create_world(WorldId::from_u64(0), SimulationConfig::new())
+        .create_partition(WorldId::from_u64(0), PartitionConfig::new())
         .unwrap();
     runtime
         .register_partition(PartitionId::from_u64(0), WorldId::from_u64(0))
@@ -335,7 +329,7 @@ fn external_messages_share_the_same_delivery_path() {
             "x",
             ReducerArgs::new()
         ),
-        Err(RuntimeError::UnknownPartition(_))
+        Err(RuntimeError::UnknownRouting(_))
     ));
 
     runtime.step().unwrap(); // tick 0: queued, not yet delivered
@@ -365,10 +359,10 @@ fn external_messages_share_the_same_delivery_path() {
 fn delivery_order_is_deterministic_across_senders() {
     // A factory with three sender systems on world 0, all messaging
     // partition 1 with distinct kinds.
-    let factory: WorldFactory = Box::new(
-        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
+    let factory: PartitionFactory =
+        Box::new(|id: WorldId, mut store: TableStore, sim: PartitionConfig| {
             ensure_ledger(&mut store);
-            let mut world = World::new(id, store, sim)?;
+            let mut world = Partition::new(id, store, sim)?;
             world
                 .native_mut()
                 .register(
@@ -410,8 +404,7 @@ fn delivery_order_is_deterministic_across_senders() {
                 }
             }
             Ok(world)
-        },
-    );
+        });
     let mut runtime = Runtime::new(RuntimeConfig::new(factory)).unwrap();
     start_partition(&mut runtime, 0, 0);
     start_partition(&mut runtime, 1, 1);
@@ -508,15 +501,18 @@ fn failed_handler_aborts_the_destination_tick_atomically() {
     assert_eq!(report.succeeded, 1);
     assert_eq!(report.failed, 1);
     assert_eq!(
-        runtime.world_status(WorldId::from_u64(1)).unwrap().state,
-        crate::WorldLifecycle::Failed
+        runtime
+            .partition_status(WorldId::from_u64(1))
+            .unwrap()
+            .state,
+        crate::PartitionLifecycle::Failed
     );
     // The failed tick produced zero subscription updates.
     assert!(runtime.drain(WorldId::from_u64(1), sub).unwrap().is_empty());
     // The sender's tick committed (its own state is fine).
     assert_eq!(
         runtime
-            .world_status(WorldId::from_u64(0))
+            .partition_status(WorldId::from_u64(0))
             .unwrap()
             .next_tick,
         TickId::from_u64(2)
@@ -529,12 +525,12 @@ fn sender_to_unknown_partition_fails_its_tick_atomically() {
     // system cannot send to partition 1 → its tick fails deterministically.
     let mut runtime = Runtime::new(RuntimeConfig::new(mesh_factory())).unwrap();
     runtime
-        .create_world(WorldId::from_u64(0), SimulationConfig::new())
+        .create_partition(WorldId::from_u64(0), PartitionConfig::new())
         .unwrap();
     runtime
         .register_partition(PartitionId::from_u64(0), WorldId::from_u64(0))
         .unwrap();
-    runtime.start_world(WorldId::from_u64(0)).unwrap();
+    runtime.start_partition(WorldId::from_u64(0)).unwrap();
 
     let report = runtime.step().unwrap();
     assert_eq!(report.failed, 1);
@@ -547,7 +543,7 @@ fn sender_to_unknown_partition_fails_its_tick_atomically() {
 
 #[test]
 fn partition_failure_is_isolated() {
-    // World 1 (partition 1) rejects; worlds 0 and 2 feed it and keep
+    // Partition 1 (partition 1) rejects; worlds 0 and 2 feed it and keep
     // ticking regardless.
     let mut runtime = Runtime::new(RuntimeConfig::new(rejecting_destination_factory())).unwrap();
     start_partition(&mut runtime, 0, 0);
@@ -558,8 +554,11 @@ fn partition_failure_is_isolated() {
     runtime.step().unwrap(); // world 1 fails at tick 1
 
     assert_eq!(
-        runtime.world_status(WorldId::from_u64(1)).unwrap().state,
-        crate::WorldLifecycle::Failed
+        runtime
+            .partition_status(WorldId::from_u64(1))
+            .unwrap()
+            .state,
+        crate::PartitionLifecycle::Failed
     );
     // Worlds 0 and 2 are still running and keep ticking.
     let report = runtime.step().unwrap();
@@ -567,7 +566,7 @@ fn partition_failure_is_isolated() {
     assert_eq!(report.succeeded, 2);
     assert_eq!(
         runtime
-            .world_status(WorldId::from_u64(2))
+            .partition_status(WorldId::from_u64(2))
             .unwrap()
             .next_tick,
         TickId::from_u64(3)
@@ -583,11 +582,11 @@ fn worker_reassignment_preserves_routing() {
 
     // Move world 0 to worker 1; its messages must still reach partition 1.
     runtime
-        .reassign_world(WorldId::from_u64(0), nexum_core::WorkerId::from_u64(1))
+        .reassign_partition(WorldId::from_u64(0), nexum_core::WorkerId::from_u64(1))
         .unwrap();
     assert_eq!(
         runtime
-            .partition_status(PartitionId::from_u64(0))
+            .routing_status(PartitionId::from_u64(0))
             .unwrap()
             .worker
             .as_u64(),
@@ -609,7 +608,7 @@ fn inbound_queue_overflow_drops_deterministically() {
     // Partition 1's world is created but never started: its inbound queue
     // fills and overflows while world 0 keeps sending.
     runtime
-        .create_world(WorldId::from_u64(1), SimulationConfig::new())
+        .create_partition(WorldId::from_u64(1), PartitionConfig::new())
         .unwrap();
     runtime
         .register_partition(PartitionId::from_u64(1), WorldId::from_u64(1))
@@ -629,7 +628,7 @@ fn inbound_queue_overflow_drops_deterministically() {
     // The sender's ticks were never blocked.
     assert_eq!(
         runtime
-            .world_status(WorldId::from_u64(0))
+            .partition_status(WorldId::from_u64(0))
             .unwrap()
             .next_tick,
         TickId::from_u64(3)
@@ -641,7 +640,7 @@ fn stopping_a_partition_accumulates_messages_for_resume() {
     let mut runtime = Runtime::new(RuntimeConfig::new(one_way_factory())).unwrap();
     start_partition(&mut runtime, 0, 0);
     start_partition(&mut runtime, 1, 1);
-    runtime.stop_world(WorldId::from_u64(1)).unwrap();
+    runtime.stop_partition(WorldId::from_u64(1)).unwrap();
 
     runtime.step().unwrap(); // world 0 sends at tick 0; world 1 stopped
     runtime.step().unwrap(); // world 0 sends at tick 1; world 1 still stopped
@@ -651,7 +650,7 @@ fn stopping_a_partition_accumulates_messages_for_resume() {
     // Resume: world 1 never ticked, so it resumes at tick 0; the messages
     // sent at ticks 0 and 1 are delivered when its ticks reach 1 and 2
     // (sent_tick < current). Each queued message is delivered exactly once.
-    runtime.start_world(WorldId::from_u64(1)).unwrap();
+    runtime.start_partition(WorldId::from_u64(1)).unwrap();
     runtime.step().unwrap(); // world 1 tick 0: nothing due
     runtime.step().unwrap(); // world 1 tick 1: delivers the tick-0 message
     runtime.step().unwrap(); // world 1 tick 2: delivers the tick-1 message
@@ -673,14 +672,14 @@ fn stopping_a_partition_accumulates_messages_for_resume() {
 
 #[test]
 fn messages_and_input_frames_coexist_in_one_tick() {
-    // World 0's sender is unconditional; add client input on world 1 to prove
+    // Partition 0's sender is unconditional; add client input on world 1 to prove
     // frames and messages share a tick's transaction.
     let mut runtime = Runtime::new(RuntimeConfig::new(one_way_factory())).unwrap();
     start_partition(&mut runtime, 0, 0);
     start_partition(&mut runtime, 1, 1);
 
     let mut frame = InputFrame::new(TickId::from_u64(0));
-    frame.push(nexum_simulation::InputCommand::simple(7, "hello").unwrap());
+    frame.push(nexum_execution::InputCommand::simple(7, "hello").unwrap());
     runtime.submit_input(WorldId::from_u64(1), frame).unwrap();
     runtime.step().unwrap(); // world 1 tick 0: frame only
     runtime.step().unwrap(); // world 1 tick 1: frame (empty) + delivered msg

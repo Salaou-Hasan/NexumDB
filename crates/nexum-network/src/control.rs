@@ -7,11 +7,11 @@
 //! internals.
 
 use nexum_core::{TickId, WorkerId, WorldId};
+use nexum_execution::{InputFrame, PartitionConfig, TickResult};
 use nexum_runtime::{
-    RecoveryReport, Runtime, RuntimeError, RuntimeMetrics, RuntimeState, RuntimeStepReport,
-    WorkerStatus, WorldStatus,
+    PartitionStatus, RecoveryReport, Runtime, RuntimeError, RuntimeMetrics, RuntimeState,
+    RuntimeStepReport, WorkerStatus,
 };
-use nexum_simulation::{InputFrame, SimulationConfig, TickResult};
 
 /// A point-in-time health summary for operators.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,7 +21,7 @@ pub struct HealthReport {
     /// Worlds registered (any lifecycle).
     pub worlds: usize,
     /// Worlds currently running.
-    pub running_worlds: usize,
+    pub running_partitions: usize,
     /// Configured workers.
     pub workers: usize,
     /// Workers currently running.
@@ -48,47 +48,47 @@ impl<'a> ControlPlane<'a> {
 
     /// Creates a world from the configured factory (deterministic worker
     /// assignment).
-    pub fn create_world(
+    pub fn create_partition(
         &mut self,
         world: WorldId,
-        sim: SimulationConfig,
+        sim: PartitionConfig,
     ) -> Result<(), RuntimeError> {
-        self.runtime.create_world(world, sim)
+        self.runtime.create_partition(world, sim)
     }
 
     /// Reconstructs a world from persisted state (Phase 5 engine).
-    pub fn recover_world(
+    pub fn recover_partition(
         &mut self,
         world: WorldId,
-        sim: SimulationConfig,
+        sim: PartitionConfig,
         resume_tick: Option<TickId>,
     ) -> Result<RecoveryReport, RuntimeError> {
-        self.runtime.recover_world(world, sim, resume_tick)
+        self.runtime.recover_partition(world, sim, resume_tick)
     }
 
     /// Starts a created/stopped world.
-    pub fn start_world(&mut self, world: WorldId) -> Result<(), RuntimeError> {
-        self.runtime.start_world(world)
+    pub fn start_partition(&mut self, world: WorldId) -> Result<(), RuntimeError> {
+        self.runtime.start_partition(world)
     }
 
     /// Stops a running world (state retained; restarts continue time).
-    pub fn stop_world(&mut self, world: WorldId) -> Result<(), RuntimeError> {
-        self.runtime.stop_world(world)
+    pub fn stop_partition(&mut self, world: WorldId) -> Result<(), RuntimeError> {
+        self.runtime.stop_partition(world)
     }
 
     /// Removes a world from the runtime (committed data remains on disk).
-    pub fn destroy_world(&mut self, world: WorldId) -> Result<(), RuntimeError> {
-        self.runtime.destroy_world(world)
+    pub fn destroy_partition(&mut self, world: WorldId) -> Result<(), RuntimeError> {
+        self.runtime.destroy_partition(world)
     }
 
     /// Returns a world's status.
-    pub fn world_status(&self, world: WorldId) -> Result<WorldStatus, RuntimeError> {
-        self.runtime.world_status(world)
+    pub fn partition_status(&self, world: WorldId) -> Result<PartitionStatus, RuntimeError> {
+        self.runtime.partition_status(world)
     }
 
     /// Returns every world's status in deterministic (world-id) order.
-    pub fn list_worlds(&self) -> Vec<(WorldId, WorldStatus)> {
-        self.runtime.list_worlds()
+    pub fn list_partitions(&self) -> Vec<(WorldId, PartitionStatus)> {
+        self.runtime.list_partitions()
     }
 
     /// Returns a worker's status.
@@ -107,8 +107,8 @@ impl<'a> ControlPlane<'a> {
     }
 
     /// Reassigns a world to another running worker.
-    pub fn reassign_world(&mut self, world: WorldId, to: WorkerId) -> Result<(), RuntimeError> {
-        self.runtime.reassign_world(world, to)
+    pub fn reassign_partition(&mut self, world: WorldId, to: WorkerId) -> Result<(), RuntimeError> {
+        self.runtime.reassign_partition(world, to)
     }
 
     /// Queues an input frame for a running world (bounded, late/capacity
@@ -138,7 +138,7 @@ impl<'a> ControlPlane<'a> {
         HealthReport {
             state: self.runtime.state(),
             worlds: runtime_metrics.worlds,
-            running_worlds: runtime_metrics.running_worlds,
+            running_partitions: runtime_metrics.running_partitions,
             workers: runtime_metrics.workers,
             workers_running: self
                 .runtime

@@ -1,14 +1,15 @@
 //! Nexum runtime — **Phases 10, 12** (ADR-010, ADR-012): the single-process
 //! coordinator.
 //!
-//! The runtime owns and orchestrates [`World`]s (each an authoritative
-//! partition from Phase 9) through logical [`Worker`]s — **without becoming
-//! another state engine**. Worlds own their `TableStore`; `World::tick`
+//! The runtime owns and orchestrates
+//! [`nexum_execution::Partition`]s (each an authoritative partition from
+//! Phase 9) through logical [`Worker`]s — **without becoming another state
+//! engine**. Partitions own their `TableStore`; `Partition::tick`
 //! remains the only commit path; the runtime coordinates durability (WAL
 //! first) and observation (subscriptions second) per successful tick:
 //!
 //! ```text
-//! Runtime → Worker → World → World::tick() → TickResult
+//! Runtime → Worker → Partition → Partition::tick() → TickResult
 //!                                                │
 //!                                    Wal::append (durability first)
 //!                                                │
@@ -33,7 +34,7 @@
 //! - [`RuntimeConfig`] / [`PersistencePolicy`] / [`TickFailurePolicy`] —
 //!   validated operational configuration
 //! - [`Worker`] / [`WorkerState`] — logical execution owners
-//! - [`WorldStatus`] / [`WorldLifecycle`] — world introspection and states
+//! - [`PartitionStatus`] / [`PartitionLifecycle`] — world introspection and states
 //! - [`RuntimeEvent`] / [`RuntimeMetrics`] — operational events and counters
 //! - [`PartitionStatus`] — partition introspection (ADR-012)
 //! - [`RuntimeError`] — the runtime-boundary error taxonomy
@@ -41,7 +42,7 @@
 //! **Still out of scope:** networking, client connections, authentication,
 //! matchmaking, distributed clusters, multi-machine workers, cross-partition
 //! *transactions*, migration, replication, and consensus. Parallel tick
-//! execution lives in `nexum-simulation` (Phase 11), not the runtime.
+//! execution lives in `nexum-execution` (Phase 11), not the runtime.
 
 #![allow(unsafe_code)]
 #![warn(missing_docs)]
@@ -55,15 +56,15 @@ mod runtime;
 mod worker;
 mod world;
 
-pub use config::{PersistencePolicy, RuntimeConfig, TickFailurePolicy, WorldFactory};
+pub use config::{PartitionFactory, PersistencePolicy, RuntimeConfig, TickFailurePolicy};
 pub use error::RuntimeError;
 pub use event::RuntimeEvent;
 pub use metrics::RuntimeMetrics;
 pub use nexum_wal::RecoveryReport;
-pub use partition::PartitionStatus;
+pub use partition::RoutingStatus;
 pub use runtime::{Runtime, RuntimeState, RuntimeStepReport};
 pub use worker::{Worker, WorkerState, WorkerStatus};
-pub use world::{WorldLifecycle, WorldStatus};
+pub use world::{PartitionLifecycle, PartitionStatus};
 
 #[cfg(test)]
 mod partition_tests;

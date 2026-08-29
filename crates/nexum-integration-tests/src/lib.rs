@@ -9,5 +9,5 @@
 //! Each file in `tests/` exercises one real seam of the execution flow:
 //!
 //! ```text
-//! World::tick → Transaction/OCC → Vec<Change> → WAL → SubscriptionRegistry
+//! Partition::tick → Transaction/OCC → Vec<Change> → WAL → SubscriptionRegistry
 //! ```

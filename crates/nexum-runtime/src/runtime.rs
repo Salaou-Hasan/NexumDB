@@ -1,8 +1,8 @@
-﻿//! The [`Runtime`]: the single-process coordinator (ADR-010).
+//! The [`Runtime`]: the single-process coordinator (ADR-010).
 //!
 //! The runtime owns **operational** metadata only — workers, worlds,
 //! ownership, input queues, lifecycle, metrics, events. Authoritative state
-//! stays inside each `World`; `World::tick` remains the only commit path.
+//! stays inside each `Partition`; `Partition::tick` remains the only commit path.
 //! Per successful tick the runtime coordinates **durability first,
 //! observation second** (ADR-010 D4): `Wal::append(tx_id, changes)`, then
 //! `SubscriptionRegistry.apply_changes`. One WAL and one registry per world
@@ -11,20 +11,20 @@
 //! ```rust,no_run
 //! use nexum_core::{WorldId};
 //! use nexum_runtime::{Runtime, RuntimeConfig};
-//! use nexum_simulation::{SimulationConfig, World};
+//! use nexum_execution::{PartitionConfig, Partition};
 //! use nexum_table::TableStore;
 //!
 //! # fn main() -> Result<(), nexum_runtime::RuntimeError> {
-//! let factory = Box::new(|id: WorldId, store: TableStore, sim: SimulationConfig| {
-//!     let mut world = World::new(id, store, sim)?;
-//!     world.add_system(nexum_simulation::SystemDefinition::new(
+//! let factory = Box::new(|id: WorldId, store: TableStore, sim: PartitionConfig| {
+//!     let mut world = Partition::new(id, store, sim)?;
+//!     world.add_system(nexum_execution::SystemDefinition::new(
 //!         nexum_core::SystemId::from_u64(0), "noop", 0, |_ctx, _| Ok(()),
 //!     )?)?;
 //!     Ok(world)
 //! });
 //! let mut runtime = Runtime::new(RuntimeConfig::new(factory))?;
-//! runtime.create_world(WorldId::from_u64(0), SimulationConfig::new())?;
-//! runtime.start_world(WorldId::from_u64(0))?;
+//! runtime.create_partition(WorldId::from_u64(0), PartitionConfig::new())?;
+//! runtime.start_partition(WorldId::from_u64(0))?;
 //! let _report = runtime.step()?;
 //! runtime.shutdown()?;
 //! # Ok(())
@@ -37,8 +37,8 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use nexum_core::{Error, PartitionId, WorkerId, WorldId};
+use nexum_execution::{PartitionMessage, ReducerCall};
 use nexum_reducer::ReducerArgs;
-use nexum_simulation::{PartitionMessage, ReducerCall};
 use nexum_subscription::{Query, SubscriptionId, SubscriptionUpdate};
 use nexum_table::TableStore;
 use nexum_wal::{RecoveryReport, Snapshot, Wal, recover};
@@ -47,9 +47,9 @@ use crate::config::{RuntimeConfig, TickFailurePolicy};
 use crate::error::RuntimeError;
 use crate::event::RuntimeEvent;
 use crate::metrics::RuntimeMetrics;
-use crate::partition::{PartitionEntry, PartitionStatus};
+use crate::partition::{PartitionEntry, RoutingStatus};
 use crate::worker::{Worker, WorkerState, WorkerStatus};
-use crate::world::{WorldEntry, WorldLifecycle, WorldStatus};
+use crate::world::{PartitionLifecycle, PartitionStatus, WorldEntry};
 
 /// The lifecycle state of the runtime itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100,7 +100,7 @@ pub struct RuntimeStepReport {
 #[derive(Debug)]
 struct TickOutcome {
     /// The tick's result (or the runtime error it produced).
-    result: Result<nexum_simulation::TickResult, RuntimeError>,
+    result: Result<nexum_execution::TickResult, RuntimeError>,
     /// Runtime events emitted by this tick, in emission order.
     events: Vec<RuntimeEvent>,
     /// Outbound cross-partition messages, in `send_to` order.
@@ -113,7 +113,7 @@ struct TickOutcome {
     changes_committed: u64,
     wal_appends: u64,
     wal_failures: u64,
-    world_failures: u64,
+    partition_failures: u64,
     snapshots: u64,
     subscription_evaluations: u64,
     subscription_deltas: u64,
@@ -256,13 +256,13 @@ impl Runtime {
             let entry = self
                 .world_get_mut(world)
                 .expect("worker owns registered worlds");
-            if entry.state != WorldLifecycle::Failed {
-                entry.state = WorldLifecycle::Failed;
-                self.metrics.world_failures += 1;
+            if entry.state != PartitionLifecycle::Failed {
+                entry.state = PartitionLifecycle::Failed;
+                self.metrics.partition_failures += 1;
                 Self::push_event(
                     &mut self.events,
                     self.config.event_log_limit(),
-                    RuntimeEvent::WorldFailed {
+                    RuntimeEvent::PartitionFailed {
                         world,
                         reason: Error::internal(format!("owner worker {worker} failed")),
                     },
@@ -274,7 +274,11 @@ impl Runtime {
 
     /// Reassigns a world to another running worker (ADR-010 D6). The seed
     /// of future partition migration.
-    pub fn reassign_world(&mut self, world_id: WorldId, to: WorkerId) -> Result<(), RuntimeError> {
+    pub fn reassign_partition(
+        &mut self,
+        world_id: WorldId,
+        to: WorkerId,
+    ) -> Result<(), RuntimeError> {
         self.ensure_running()?;
         {
             let target = self
@@ -292,7 +296,7 @@ impl Runtime {
         let from = {
             let entry = self
                 .world_get_mut(world_id)
-                .ok_or(RuntimeError::UnknownWorld(world_id))?;
+                .ok_or(RuntimeError::UnknownPartition(world_id))?;
             entry.worker
         };
         if from == to {
@@ -320,7 +324,7 @@ impl Runtime {
     pub fn assigned_worker(&self, world_id: WorldId) -> Result<WorkerId, RuntimeError> {
         self.world_get(world_id)
             .map(|entry| entry.worker)
-            .ok_or(RuntimeError::UnknownWorld(world_id))
+            .ok_or(RuntimeError::UnknownPartition(world_id))
     }
 
     // ------------------------------------------------------------- worlds
@@ -373,15 +377,15 @@ impl Runtime {
 
     /// Creates a world from the configured factory and assigns it to a
     /// worker (deterministic round-robin). The world starts `Created`; call
-    /// [`start_world`](Self::start_world) to run it.
-    pub fn create_world(
+    /// [`start_partition`](Self::start_partition) to run it.
+    pub fn create_partition(
         &mut self,
         world_id: WorldId,
-        sim_config: nexum_simulation::SimulationConfig,
+        sim_config: nexum_execution::PartitionConfig,
     ) -> Result<(), RuntimeError> {
         self.ensure_running()?;
         if self.world_contains(world_id) {
-            return Err(RuntimeError::DuplicateWorld(world_id));
+            return Err(RuntimeError::DuplicatePartition(world_id));
         }
         let store = TableStore::new();
         let world = (self.config.factory())(world_id, store, sim_config).map_err(|error| {
@@ -396,11 +400,11 @@ impl Runtime {
             .expect("assigned worker exists")
             .add_world(world_id);
         self.world_insert(world_id, WorldEntry::new(world, worker, wal, snapshot_dir));
-        self.metrics.world_creations += 1;
+        self.metrics.partition_creations += 1;
         Self::push_event(
             &mut self.events,
             self.config.event_log_limit(),
-            RuntimeEvent::WorldCreated {
+            RuntimeEvent::PartitionCreated {
                 world: world_id,
                 worker,
             },
@@ -410,21 +414,21 @@ impl Runtime {
 
     /// Reconstructs a world from persisted state (ADR-010 D5): the Phase 5
     /// `recover` engine into a fresh store, then the **same factory** as
-    /// [`create_world`](Self::create_world). `resume_tick` continues the
+    /// [`create_partition`](Self::create_partition). `resume_tick` continues the
     /// world's logical time where it stopped.
     ///
     /// Requires persistence to be enabled and the world's WAL to exist. The
-    /// world starts `Created`; call [`start_world`](Self::start_world) to
+    /// world starts `Created`; call [`start_partition`](Self::start_partition) to
     /// resume ticking.
-    pub fn recover_world(
+    pub fn recover_partition(
         &mut self,
         world_id: WorldId,
-        sim_config: nexum_simulation::SimulationConfig,
+        sim_config: nexum_execution::PartitionConfig,
         resume_tick: Option<nexum_core::TickId>,
     ) -> Result<RecoveryReport, RuntimeError> {
         self.ensure_running()?;
         if self.world_contains(world_id) {
-            return Err(RuntimeError::DuplicateWorld(world_id));
+            return Err(RuntimeError::DuplicatePartition(world_id));
         }
         let durability = self.config.persistence().durability().ok_or_else(|| {
             RuntimeError::Persistence(Error::unsupported(
@@ -487,11 +491,11 @@ impl Runtime {
             WorldEntry::new(world, worker, Some(wal), Some(snapshot_dir)),
         );
         self.metrics.recoveries += 1;
-        self.metrics.world_creations += 1;
+        self.metrics.partition_creations += 1;
         Self::push_event(
             &mut self.events,
             self.config.event_log_limit(),
-            RuntimeEvent::WorldRecovered {
+            RuntimeEvent::PartitionRecovered {
                 world: world_id,
                 replayed_txs: report.replayed_txs,
             },
@@ -501,24 +505,28 @@ impl Runtime {
 
     /// Starts a `Created` or `Stopped` world (idempotent when already
     /// running). A `Failed` world must be destroyed and recreated/recovered.
-    pub fn start_world(&mut self, world_id: WorldId) -> Result<(), RuntimeError> {
+    pub fn start_partition(&mut self, world_id: WorldId) -> Result<(), RuntimeError> {
         self.ensure_running()?;
         let entry = self
             .worlds
             .get_mut(world_id.as_u64() as usize)
             .and_then(|o| o.as_mut())
-            .ok_or(RuntimeError::UnknownWorld(world_id))?;
-        if entry.state == WorldLifecycle::Running {
+            .ok_or(RuntimeError::UnknownPartition(world_id))?;
+        if entry.state == PartitionLifecycle::Running {
             return Ok(());
         }
         if !entry.state.can_start() {
-            return Err(RuntimeError::world_state(world_id, "start", entry.state));
+            return Err(RuntimeError::partition_state(
+                world_id,
+                "start",
+                entry.state,
+            ));
         }
-        entry.state = WorldLifecycle::Running;
+        entry.state = PartitionLifecycle::Running;
         Self::push_event(
             &mut self.events,
             self.config.event_log_limit(),
-            RuntimeEvent::WorldStarted { world: world_id },
+            RuntimeEvent::PartitionStarted { world: world_id },
         );
         Ok(())
     }
@@ -526,24 +534,24 @@ impl Runtime {
     /// Stops a `Created` or `Running` world, retaining its state
     /// (idempotent when already stopped). Inputs are rejected while stopped;
     /// the logical tick counter continues on restart.
-    pub fn stop_world(&mut self, world_id: WorldId) -> Result<(), RuntimeError> {
+    pub fn stop_partition(&mut self, world_id: WorldId) -> Result<(), RuntimeError> {
         self.ensure_running()?;
         let entry = self
             .worlds
             .get_mut(world_id.as_u64() as usize)
             .and_then(|o| o.as_mut())
-            .ok_or(RuntimeError::UnknownWorld(world_id))?;
-        if entry.state == WorldLifecycle::Stopped {
+            .ok_or(RuntimeError::UnknownPartition(world_id))?;
+        if entry.state == PartitionLifecycle::Stopped {
             return Ok(());
         }
         if !entry.state.can_stop() {
-            return Err(RuntimeError::world_state(world_id, "stop", entry.state));
+            return Err(RuntimeError::partition_state(world_id, "stop", entry.state));
         }
-        entry.state = WorldLifecycle::Stopped;
+        entry.state = PartitionLifecycle::Stopped;
         Self::push_event(
             &mut self.events,
             self.config.event_log_limit(),
-            RuntimeEvent::WorldStopped { world: world_id },
+            RuntimeEvent::PartitionStopped { world: world_id },
         );
         Ok(())
     }
@@ -553,14 +561,14 @@ impl Runtime {
     /// unless the application deletes the persistence directory. Any
     /// partition bound to the world is unregistered first, so messages can
     /// no longer be routed to it.
-    pub fn destroy_world(&mut self, world_id: WorldId) -> Result<(), RuntimeError> {
+    pub fn destroy_partition(&mut self, world_id: WorldId) -> Result<(), RuntimeError> {
         self.ensure_running()?;
         if let Some(partition) = self.partition_for_world(world_id) {
             self.unregister_partition(partition)?;
         }
         let entry = self
             .world_remove(world_id)
-            .ok_or(RuntimeError::UnknownWorld(world_id))?;
+            .ok_or(RuntimeError::UnknownPartition(world_id))?;
         self.workers
             .get_mut(&entry.worker)
             .expect("entry worker exists")
@@ -568,21 +576,21 @@ impl Runtime {
         Self::push_event(
             &mut self.events,
             self.config.event_log_limit(),
-            RuntimeEvent::WorldDestroyed { world: world_id },
+            RuntimeEvent::PartitionDestroyed { world: world_id },
         );
         Ok(())
     }
 
     /// Returns a world's status.
-    pub fn world_status(&self, world_id: WorldId) -> Result<WorldStatus, RuntimeError> {
+    pub fn partition_status(&self, world_id: WorldId) -> Result<PartitionStatus, RuntimeError> {
         self.world_get(world_id)
             .map(WorldEntry::status)
-            .ok_or(RuntimeError::UnknownWorld(world_id))
+            .ok_or(RuntimeError::UnknownPartition(world_id))
     }
 
     /// Returns every world's most-recent-tick phase breakdown (Phase 27b
     /// instrumentation), in deterministic (world id) order.
-    pub fn last_tick_breakdowns(&self) -> Vec<(WorldId, nexum_simulation::TickBreakdown)> {
+    pub fn last_tick_breakdowns(&self) -> Vec<(WorldId, nexum_execution::TickBreakdown)> {
         self.worlds
             .iter()
             .enumerate()
@@ -598,7 +606,7 @@ impl Runtime {
     }
 
     /// Returns every world's status in deterministic (world id) order.
-    pub fn list_worlds(&self) -> Vec<(WorldId, WorldStatus)> {
+    pub fn list_partitions(&self) -> Vec<(WorldId, PartitionStatus)> {
         self.worlds
             .iter()
             .enumerate()
@@ -628,12 +636,12 @@ impl Runtime {
 
     /// Snapshot a world's authoritative state at its current WAL LSN
     /// (Phase 5). Requires persistence.
-    pub fn snapshot_world(&mut self, world_id: WorldId) -> Result<(), RuntimeError> {
+    pub fn snapshot_partition(&mut self, world_id: WorldId) -> Result<(), RuntimeError> {
         self.ensure_running()?;
         let (snapshot_dir, lsn) = {
             let entry = self
                 .world_get_mut(world_id)
-                .ok_or(RuntimeError::UnknownWorld(world_id))?;
+                .ok_or(RuntimeError::UnknownPartition(world_id))?;
             let snapshot_dir = entry.snapshot_dir.clone().ok_or_else(|| {
                 RuntimeError::Persistence(Error::unsupported(
                     "snapshots require persistence to be enabled",
@@ -673,14 +681,14 @@ impl Runtime {
     ) -> Result<(), RuntimeError> {
         self.ensure_running()?;
         if self.partitions.contains_key(&partition) {
-            return Err(RuntimeError::DuplicatePartition(partition));
+            return Err(RuntimeError::DuplicateRouting(partition));
         }
         let worker = {
             let entry = self
                 .worlds
                 .get_mut(world_id.as_u64() as usize)
                 .and_then(|o| o.as_mut())
-                .ok_or(RuntimeError::UnknownWorld(world_id))?;
+                .ok_or(RuntimeError::UnknownPartition(world_id))?;
             entry.world.set_partition(partition);
             entry.worker
         };
@@ -722,16 +730,13 @@ impl Runtime {
         Ok(())
     }
 
-    /// Returns a partition's status.
-    pub fn partition_status(
-        &self,
-        partition: PartitionId,
-    ) -> Result<PartitionStatus, RuntimeError> {
+    /// Returns a message-bus routing entry's status.
+    pub fn routing_status(&self, partition: PartitionId) -> Result<RoutingStatus, RuntimeError> {
         let entry = self
             .partitions
             .get(&partition)
-            .ok_or(RuntimeError::UnknownPartition(partition))?;
-        Ok(PartitionStatus {
+            .ok_or(RuntimeError::UnknownRouting(partition))?;
+        Ok(RoutingStatus {
             partition,
             world: entry.world,
             worker: entry.worker,
@@ -772,13 +777,13 @@ impl Runtime {
             let entry = self
                 .partitions
                 .get(&from)
-                .ok_or(RuntimeError::UnknownPartition(from))?;
+                .ok_or(RuntimeError::UnknownRouting(from))?;
             let world = self.world_get(entry.world).expect("partition world exists");
             world.world.tick_number()
         };
         self.partitions
             .get(&to)
-            .ok_or(RuntimeError::UnknownPartition(to))?;
+            .ok_or(RuntimeError::UnknownRouting(to))?;
         let seq = self.sent_seq.entry(from).or_insert(0);
         let message = PartitionMessage::new(from, to, sent_tick, *seq, kind.to_string(), payload)
             .map_err(RuntimeError::Core)?;
@@ -818,9 +823,9 @@ impl Runtime {
                 .worlds
                 .get_mut(world_id.as_u64() as usize)
                 .and_then(|o| o.as_mut())
-                .ok_or(RuntimeError::UnknownWorld(world_id))?;
-            if entry.state != WorldLifecycle::Running {
-                return Err(RuntimeError::world_state(
+                .ok_or(RuntimeError::UnknownPartition(world_id))?;
+            if entry.state != PartitionLifecycle::Running {
+                return Err(RuntimeError::partition_state(
                     world_id,
                     "submit reducer call to",
                     entry.state,
@@ -857,16 +862,16 @@ impl Runtime {
     pub fn submit_input(
         &mut self,
         world_id: WorldId,
-        frame: nexum_simulation::InputFrame,
+        frame: nexum_execution::InputFrame,
     ) -> Result<(), RuntimeError> {
         self.ensure_running()?;
         let entry = self
             .worlds
             .get_mut(world_id.as_u64() as usize)
             .and_then(|o| o.as_mut())
-            .ok_or(RuntimeError::UnknownWorld(world_id))?;
-        if entry.state != WorldLifecycle::Running {
-            return Err(RuntimeError::world_state(
+            .ok_or(RuntimeError::UnknownPartition(world_id))?;
+        if entry.state != PartitionLifecycle::Running {
+            return Err(RuntimeError::partition_state(
                 world_id,
                 "submit input to",
                 entry.state,
@@ -915,14 +920,14 @@ impl Runtime {
     pub fn tick_once(
         &mut self,
         world_id: WorldId,
-    ) -> Result<nexum_simulation::TickResult, RuntimeError> {
+    ) -> Result<nexum_execution::TickResult, RuntimeError> {
         self.ensure_running()?;
         let tick_number = {
             let entry = self
                 .world_get(world_id)
-                .ok_or(RuntimeError::UnknownWorld(world_id))?;
-            if entry.state != WorldLifecycle::Running {
-                return Err(RuntimeError::world_state(world_id, "tick", entry.state));
+                .ok_or(RuntimeError::UnknownPartition(world_id))?;
+            if entry.state != PartitionLifecycle::Running {
+                return Err(RuntimeError::partition_state(world_id, "tick", entry.state));
             }
             entry.world.tick_number()
         };
@@ -973,7 +978,7 @@ impl Runtime {
             .iter()
             .filter(|world| {
                 self.world_get(**world)
-                    .is_some_and(|entry| entry.state == WorldLifecycle::Running)
+                    .is_some_and(|entry| entry.state == PartitionLifecycle::Running)
             })
             .count();
         let mut report = RuntimeStepReport {
@@ -992,7 +997,7 @@ impl Runtime {
             let (running, tick_number) = {
                 let entry = self.world_expect(world_id);
                 (
-                    entry.state == WorldLifecycle::Running,
+                    entry.state == PartitionLifecycle::Running,
                     entry.world.tick_number(),
                 )
             };
@@ -1043,7 +1048,7 @@ impl Runtime {
     /// [`step`](Self::step) (ADR-018 D1) with identical results.
     pub fn step_detailed(
         &mut self,
-    ) -> Result<Vec<(WorldId, nexum_simulation::TickResult)>, RuntimeError> {
+    ) -> Result<Vec<(WorldId, nexum_execution::TickResult)>, RuntimeError> {
         self.ensure_running()?;
         // Reset the per-step sub-phase profile (Phase 21.5): it accumulates
         // across the step's worlds and is read after the step.
@@ -1062,7 +1067,7 @@ impl Runtime {
             let (running, tick_number) = {
                 let entry = self.world_expect(world_id);
                 (
-                    entry.state == WorldLifecycle::Running,
+                    entry.state == PartitionLifecycle::Running,
                     entry.world.tick_number(),
                 )
             };
@@ -1110,7 +1115,7 @@ impl Runtime {
         let mut frame = entry
             .inputs
             .pop_front()
-            .unwrap_or_else(|| nexum_simulation::InputFrame::new(entry.world.tick_number()));
+            .unwrap_or_else(|| nexum_execution::InputFrame::new(entry.world.tick_number()));
         // Phase 27a: merge every queued frame stamped for THIS tick into
         // one, preserving FIFO command order — 1,000 clients of one world
         // each submitting a frame per tick must apply in the same tick, not
@@ -1166,12 +1171,12 @@ impl Runtime {
                 for call in calls.into_iter().rev() {
                     entry.calls.push_front(call);
                 }
-                let mut world_failures = 0;
+                let mut partition_failures = 0;
                 match tick_failure_policy {
                     TickFailurePolicy::FailWorld => {
-                        entry.state = WorldLifecycle::Failed;
-                        world_failures = 1;
-                        events.push(RuntimeEvent::WorldFailed {
+                        entry.state = PartitionLifecycle::Failed;
+                        partition_failures = 1;
+                        events.push(RuntimeEvent::PartitionFailed {
                             world: world_id,
                             reason: tick_error.error().clone(),
                         });
@@ -1192,7 +1197,7 @@ impl Runtime {
                     changes_committed: 0,
                     wal_appends: 0,
                     wal_failures: 0,
-                    world_failures,
+                    partition_failures,
                     snapshots: 0,
                     subscription_evaluations: 0,
                     subscription_deltas: 0,
@@ -1210,7 +1215,7 @@ impl Runtime {
         });
         let mut wal_appends = 0;
         let mut wal_failures = 0;
-        let mut world_failures = 0;
+        let mut partition_failures = 0;
         let mut snapshots = 0;
 
         // Durability first (ADR-010 D4).
@@ -1224,8 +1229,8 @@ impl Runtime {
                 }
                 Err(error) => {
                     wal_failures += 1;
-                    entry.state = WorldLifecycle::Failed;
-                    world_failures += 1;
+                    entry.state = PartitionLifecycle::Failed;
+                    partition_failures += 1;
                     events.push(RuntimeEvent::PersistenceFailure {
                         world: world_id,
                         tick: result.tick(),
@@ -1242,7 +1247,7 @@ impl Runtime {
                         changes_committed: result.changes().len() as u64,
                         wal_appends,
                         wal_failures,
-                        world_failures,
+                        partition_failures,
                         snapshots,
                         subscription_evaluations: 0,
                         subscription_deltas: 0,
@@ -1314,7 +1319,7 @@ impl Runtime {
             changes_committed,
             wal_appends,
             wal_failures,
-            world_failures,
+            partition_failures,
             snapshots,
             subscription_evaluations,
             subscription_deltas,
@@ -1330,7 +1335,7 @@ impl Runtime {
     fn apply_outcome(
         &mut self,
         outcome: TickOutcome,
-    ) -> (Result<nexum_simulation::TickResult, RuntimeError>, u64) {
+    ) -> (Result<nexum_execution::TickResult, RuntimeError>, u64) {
         let TickOutcome {
             result,
             events,
@@ -1342,7 +1347,7 @@ impl Runtime {
             changes_committed,
             wal_appends,
             wal_failures,
-            world_failures,
+            partition_failures,
             snapshots,
             subscription_evaluations,
             subscription_deltas,
@@ -1358,7 +1363,7 @@ impl Runtime {
         self.metrics.changes_committed += changes_committed;
         self.metrics.wal_appends += wal_appends;
         self.metrics.wal_failures += wal_failures;
-        self.metrics.world_failures += world_failures;
+        self.metrics.partition_failures += partition_failures;
         self.metrics.snapshots += snapshots;
         self.metrics.subscription_evaluations += subscription_evaluations;
         self.metrics.subscription_deltas += subscription_deltas;
@@ -1405,7 +1410,7 @@ impl Runtime {
             .iter()
             .filter(|world| {
                 self.world_get(**world)
-                    .is_some_and(|entry| entry.state == WorldLifecycle::Running)
+                    .is_some_and(|entry| entry.state == PartitionLifecycle::Running)
             })
             .count();
         if running <= 1 || self.config.worker_count() <= 1 {
@@ -1413,7 +1418,7 @@ impl Runtime {
             let mut outcomes = Vec::with_capacity(order.len());
             for world_id in order {
                 let entry = self.world_expect_mut(*world_id);
-                if entry.state != WorldLifecycle::Running {
+                if entry.state != PartitionLifecycle::Running {
                     outcomes.push(None);
                     continue;
                 }
@@ -1465,7 +1470,7 @@ impl Runtime {
                                 // serial path. Failed/Created/Stopped worlds
                                 // keep an empty outcome slot.
                                 if let Some(entry) = slot.as_mut()
-                                    && entry.state == WorldLifecycle::Running
+                                    && entry.state == PartitionLifecycle::Running
                                 {
                                     let batch: &[PartitionMessage] =
                                         delivered.get(world_id).map(Vec::as_slice).unwrap_or(&[]);
@@ -1512,7 +1517,7 @@ impl Runtime {
         self.ensure_running()?;
         let entry = self
             .world_get_mut(world_id)
-            .ok_or(RuntimeError::UnknownWorld(world_id))?;
+            .ok_or(RuntimeError::UnknownPartition(world_id))?;
         entry
             .subscriptions
             .subscribe(entry.world.store(), query)
@@ -1528,7 +1533,7 @@ impl Runtime {
         self.ensure_running()?;
         let entry = self
             .world_get_mut(world_id)
-            .ok_or(RuntimeError::UnknownWorld(world_id))?;
+            .ok_or(RuntimeError::UnknownPartition(world_id))?;
         entry
             .subscriptions
             .drain(subscription)
@@ -1545,7 +1550,7 @@ impl Runtime {
         self.ensure_running()?;
         let entry = self
             .world_get_mut(world_id)
-            .ok_or(RuntimeError::UnknownWorld(world_id))?;
+            .ok_or(RuntimeError::UnknownPartition(world_id))?;
         Ok(entry.subscriptions.drain_all_pending())
     }
 
@@ -1558,7 +1563,7 @@ impl Runtime {
         self.ensure_running()?;
         let entry = self
             .world_get(world_id)
-            .ok_or(RuntimeError::UnknownWorld(world_id))?;
+            .ok_or(RuntimeError::UnknownPartition(world_id))?;
         entry
             .subscriptions
             .has_pending(subscription)
@@ -1574,7 +1579,7 @@ impl Runtime {
         self.ensure_running()?;
         let entry = self
             .world_get_mut(world_id)
-            .ok_or(RuntimeError::UnknownWorld(world_id))?;
+            .ok_or(RuntimeError::UnknownPartition(world_id))?;
         entry
             .subscriptions
             .unsubscribe(subscription)
@@ -1590,7 +1595,7 @@ impl Runtime {
         self.ensure_running()?;
         let entry = self
             .world_get_mut(world_id)
-            .ok_or(RuntimeError::UnknownWorld(world_id))?;
+            .ok_or(RuntimeError::UnknownPartition(world_id))?;
         entry
             .subscriptions
             .resync(entry.world.store(), subscription)
@@ -1605,7 +1610,7 @@ impl Runtime {
     ) -> Result<bool, RuntimeError> {
         let entry = self
             .world_get(world_id)
-            .ok_or(RuntimeError::UnknownWorld(world_id))?;
+            .ok_or(RuntimeError::UnknownPartition(world_id))?;
         entry
             .subscriptions
             .is_stale(subscription)
@@ -1629,11 +1634,11 @@ impl Runtime {
         let mut metrics = self.metrics.clone();
         metrics.workers = self.config.worker_count();
         metrics.worlds = self.worlds.iter().filter(|o| o.is_some()).count();
-        metrics.running_worlds = self
+        metrics.running_partitions = self
             .worlds
             .iter()
             .filter_map(|opt| opt.as_ref())
-            .filter(|entry| entry.state == WorldLifecycle::Running)
+            .filter(|entry| entry.state == PartitionLifecycle::Running)
             .count();
         metrics.subscriptions = self
             .worlds
@@ -1691,8 +1696,8 @@ impl Runtime {
                 );
                 flush_error = Some(RuntimeError::Persistence(error));
             }
-            if entry.state == WorldLifecycle::Running {
-                entry.state = WorldLifecycle::Stopped;
+            if entry.state == PartitionLifecycle::Running {
+                entry.state = PartitionLifecycle::Stopped;
             }
         }
         for worker in self.workers.values_mut() {
@@ -1846,8 +1851,8 @@ impl Runtime {
     /// Opens (or creates) the per-world WAL and snapshot directory when
     /// persistence is enabled.
     ///
-    /// A `create_world` over an id that already has a WAL is rejected:
-    /// `Wal::create` would truncate durable history that `recover_world`
+    /// A `create_partition` over an id that already has a WAL is rejected:
+    /// `Wal::create` would truncate durable history that `recover_partition`
     /// could restore, so the caller must recover instead (ADR-010 D5).
     fn open_persistence(
         &mut self,
@@ -1870,7 +1875,7 @@ impl Runtime {
         let wal_path = world_dir.join("log.wal");
         if wal_path.exists() {
             return Err(RuntimeError::Persistence(Error::already_exists(format!(
-                "world {world_id} already has a WAL at '{}'; use recover_world instead of create_world",
+                "world {world_id} already has a WAL at '{}'; use recover_partition instead of create_partition",
                 wal_path.display()
             ))));
         }

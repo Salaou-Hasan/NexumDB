@@ -12,7 +12,7 @@ nexum-storage.workspace = true
 nexum-table.workspace = true
 nexum-wal.workspace = true
 nexum-subscription.workspace = true
-nexum-simulation.workspace = true
+nexum-execution.workspace = true
 nexum-reducer.workspace = true
 rayon.workspace = true
 
@@ -23,7 +23,7 @@ nexum-table.workspace = true
 nexum-tx.workspace = true
 nexum-wal.workspace = true
 nexum-subscription.workspace = true
-nexum-simulation.workspace = true
+nexum-execution.workspace = true
 nexum-wasm.workspace = true
 wat = "1.256"
 

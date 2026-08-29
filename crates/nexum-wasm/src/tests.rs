@@ -125,7 +125,7 @@ fn register(registry: &mut WasmModuleRegistry, name: &str, body: &str) {
 
 /// Breaks the post-linker-cache `instantiate` stage (~5.9 µs/call) into its
 /// component costs and measures how the declared linear-memory size affects
-/// instantiation (wasmi allocates + zeroes initial pages eagerly).
+/// instantiation (wasmtime allocates + zeroes initial pages eagerly).
 ///
 /// Not part of CI; run explicitly with:
 /// `cargo test --release -p nexum-wasm -- --ignored --nocapture instantiate_stage_breakdown`
@@ -134,17 +134,15 @@ fn register(registry: &mut WasmModuleRegistry, name: &str, body: &str) {
 fn instantiate_stage_breakdown() {
     use std::time::{Duration, Instant};
 
-    use wasmi::{Config, EnforcedLimits, Engine, StackLimits, Store};
+    use wasmtime::{Config, Engine, Store};
 
     use crate::host::HostState;
     use crate::linker_cache::clone_cached_linker;
 
     let limits = WasmLimits::default();
-    let mut config = Config::default();
+    let mut config = Config::new();
     config.consume_fuel(true);
-    config.set_stack_limits(StackLimits::new(32, 65_536, 1_024).unwrap());
-    config.enforced_limits(EnforcedLimits::strict());
-    let engine = Engine::new(&config);
+    let engine = Engine::new(&config).unwrap();
 
     const N: usize = 20_000;
 
@@ -153,7 +151,7 @@ fn instantiate_stage_breakdown() {
     let mut build = Duration::ZERO;
     for _ in 0..n_build {
         let s = Instant::now();
-        let mut linker = wasmi::Linker::new(&engine);
+        let mut linker = wasmtime::Linker::new(&engine);
         crate::host::define_host(&mut linker).unwrap();
         build += s.elapsed();
     }
@@ -182,13 +180,21 @@ fn instantiate_stage_breakdown() {
         .unwrap();
         let mut total = Duration::ZERO;
         for _ in 0..N {
-            let mut store = Store::new(&engine, HostState::new(None, &limits));
+            let host_state = HostState::new(None, &limits);
+            let mut store: Store<HostState<'static, 'static>> = unsafe {
+                Store::new(
+                    &engine,
+                    std::mem::transmute::<HostState<'_, '_>, HostState<'static, 'static>>(
+                        host_state,
+                    ),
+                )
+            };
             store.limiter(|state: &mut HostState<'_, '_>| &mut state.memory_limiter);
             store.set_fuel(limits.max_fuel).unwrap();
-            let linker: wasmi::Linker<HostState<'_, '_>> = clone_cached_linker(&engine);
+            let linker: wasmtime::Linker<HostState<'static, 'static>> =
+                clone_cached_linker(&engine);
             let s = Instant::now();
-            let pre = linker.instantiate(&mut store, module.compiled()).unwrap();
-            pre.start(&mut store).unwrap();
+            let _instance = linker.instantiate(&mut store, module.compiled()).unwrap();
             total += s.elapsed();
         }
         println!(
@@ -208,34 +214,38 @@ fn instantiate_stage_breakdown() {
         .unwrap();
 
         // Warm the per-thread linker cache before timing.
-        let _: wasmi::Linker<HostState<'_, '_>> = clone_cached_linker(&engine);
+        let _: wasmtime::Linker<HostState<'static, 'static>> = clone_cached_linker(&engine);
 
         let (mut store_setup, mut linker_clone) = (Duration::ZERO, Duration::ZERO);
-        let (mut instantiate, mut start_fn, mut export_lookup) =
-            (Duration::ZERO, Duration::ZERO, Duration::ZERO);
+        let (mut instantiate, mut export_lookup) = (Duration::ZERO, Duration::ZERO);
 
         for _ in 0..N {
             let s = Instant::now();
-            let mut store = Store::new(&engine, HostState::new(None, &limits));
+            let host_state = HostState::new(None, &limits);
+            let mut store: Store<HostState<'static, 'static>> = unsafe {
+                Store::new(
+                    &engine,
+                    std::mem::transmute::<HostState<'_, '_>, HostState<'static, 'static>>(
+                        host_state,
+                    ),
+                )
+            };
             store.limiter(|state: &mut HostState<'_, '_>| &mut state.memory_limiter);
             store.set_fuel(limits.max_fuel).unwrap();
             store_setup += s.elapsed();
 
             let s = Instant::now();
-            let linker: wasmi::Linker<HostState<'_, '_>> = clone_cached_linker(&engine);
+            let linker: wasmtime::Linker<HostState<'static, 'static>> =
+                clone_cached_linker(&engine);
             linker_clone += s.elapsed();
 
             let s = Instant::now();
-            let pre = linker.instantiate(&mut store, module.compiled()).unwrap();
+            let instance = linker.instantiate(&mut store, module.compiled()).unwrap();
             instantiate += s.elapsed();
 
             let s = Instant::now();
-            let instance = pre.start(&mut store).unwrap();
-            start_fn += s.elapsed();
-
-            let s = Instant::now();
             let _memory = instance
-                .get_export(&store, "memory")
+                .get_export(&mut store, "memory")
                 .and_then(|e| e.into_memory());
             export_lookup += s.elapsed();
         }
@@ -256,16 +266,12 @@ fn instantiate_stage_breakdown() {
             ns(instantiate)
         );
         println!(
-            "  InstancePre::start                 {:>8.0} ns",
-            ns(start_fn)
-        );
-        println!(
             "  memory export lookup               {:>8.0} ns",
             ns(export_lookup)
         );
         println!(
             "  ------------------------------------------\n  total                              {:>8.0} ns",
-            ns(store_setup + linker_clone + instantiate + start_fn + export_lookup)
+            ns(store_setup + linker_clone + instantiate + export_lookup)
         );
     }
 }

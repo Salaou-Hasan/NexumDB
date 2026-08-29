@@ -482,8 +482,8 @@ fn scale_at_large(rows: u64) {
 /// stay flat as the table grows.
 pub fn large_state_tick(total_rows: u64, active: u64) {
     use nexum_core::{ReducerId, SystemId, WorldId};
-    use nexum_runtime::WorldFactory;
-    use nexum_simulation::{InputFrame, SimulationConfig, SystemDefinition, World};
+    use nexum_execution::{InputFrame, Partition, PartitionConfig, SystemDefinition};
+    use nexum_runtime::PartitionFactory;
 
     println!(
         "================ large-state tick: {total_rows} rows, {active} active ================"
@@ -500,8 +500,8 @@ pub fn large_state_tick(total_rows: u64, active: u64) {
 
     // The system is a plain `fn` (no captures), so the active row ids are
     // carried in a small `active` table the system scans each tick.
-    let factory: WorldFactory = Box::new(
-        move |id: WorldId, mut s: TableStore, sim: SimulationConfig| {
+    let factory: PartitionFactory = Box::new(
+        move |id: WorldId, mut s: TableStore, sim: PartitionConfig| {
             s.create_table(
                 nexum_core::TableSchema::builder("active")
                     .column("id", nexum_core::ColumnType::U64)
@@ -521,7 +521,7 @@ pub fn large_state_tick(total_rows: u64, active: u64) {
                 }
                 t.commit(&mut s).unwrap();
             }
-            let mut world = World::new(id, s, sim)?;
+            let mut world = Partition::new(id, s, sim)?;
             world
                 .add_system(
                     SystemDefinition::new(SystemId::from_u64(1), "touch-active", 1, touch_active)
@@ -535,9 +535,9 @@ pub fn large_state_tick(total_rows: u64, active: u64) {
         nexum_runtime::Runtime::new(nexum_runtime::RuntimeConfig::new(factory)).unwrap();
     let world = WorldId::from_u64(0);
     runtime
-        .create_world(world, SimulationConfig::new())
+        .create_partition(world, PartitionConfig::new())
         .unwrap();
-    runtime.start_world(world).unwrap();
+    runtime.start_partition(world).unwrap();
     runtime
         .submit_input(world, InputFrame::new(nexum_core::TickId::from_u64(0)))
         .unwrap();
@@ -559,8 +559,8 @@ pub fn large_state_tick(total_rows: u64, active: u64) {
 /// Reads the `active` table and PK-looks-up each id in `players`: the
 /// "few active entities in a huge authoritative dataset" tick.
 fn touch_active(
-    ctx: &mut nexum_simulation::SimulationContext,
-    _frame: &nexum_simulation::InputFrame,
+    ctx: &mut nexum_execution::ExecutionContext,
+    _frame: &nexum_execution::InputFrame,
 ) -> nexum_core::Result<()> {
     for (_rid, row) in ctx.scan("active")? {
         if let Some(nexum_core::Value::U64(id)) = row.get(0) {

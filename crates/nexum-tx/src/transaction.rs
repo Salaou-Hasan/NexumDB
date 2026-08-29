@@ -187,14 +187,15 @@ impl Transaction {
     /// Takes a lightweight snapshot of mutable state for fast reducer
     /// execution without the branch/absorb cycle.
     ///
-    /// The WriteSet is an Arc clone (O(1)); the ReadSet and provisional
-    /// counters are cloned separately. On success the caller simply
-    /// continues — the reducer's writes are already in this transaction.
-    /// On failure, call [`rollback`](Self::rollback) to restore state.
+    /// The WriteSet is an Arc clone (O(1)); the read-set watermark records
+    /// the current entry count (O(1)); the provisional counters are cloned
+    /// separately (small BTreeMap). On success the caller simply continues
+    /// — the reducer's writes are already in this transaction. On failure,
+    /// call [`rollback`](Self::rollback) to restore state.
     pub fn snapshot(&self) -> TxSnapshot {
         TxSnapshot {
             writes: self.writes.clone(),
-            reads: self.reads.clone(),
+            read_watermark: self.reads.entry_count(),
             provisional: self.provisional.clone(),
         }
     }
@@ -203,10 +204,12 @@ impl Transaction {
     /// made since the snapshot was taken.
     ///
     /// Used to rollback a failed reducer invocation without the
-    /// branch/absorb overhead.
+    /// branch/absorb overhead. Truncates the read set back to the
+    /// watermark in O(delta) time — only entries added after the
+    /// snapshot are removed.
     pub fn rollback(&mut self, snapshot: TxSnapshot) {
         self.writes = snapshot.writes;
-        self.reads = snapshot.reads;
+        self.reads.truncate_to(snapshot.read_watermark);
         self.provisional = snapshot.provisional;
     }
 

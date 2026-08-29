@@ -12,7 +12,7 @@ nexum-core.workspace = true
 nexum-table.workspace = true
 nexum-tx.workspace = true
 nexum-reducer.workspace = true
-wasmi = "0.38"
+wasmtime = "48"
 
 [dev-dependencies]
 nexum-core.workspace = true

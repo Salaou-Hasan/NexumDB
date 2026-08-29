@@ -9,7 +9,7 @@
 //! call, produce a correlated protocol error, and never mutate state.
 
 use nexum_core::WorldId;
-use nexum_simulation::InputFrame;
+use nexum_execution::InputFrame;
 
 use crate::auth::Principal;
 

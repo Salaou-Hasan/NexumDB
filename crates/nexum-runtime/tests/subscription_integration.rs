@@ -6,8 +6,8 @@ use std::path::PathBuf;
 
 use nexum_core::row;
 use nexum_core::{ColumnType, SystemId, TickId, WorldId};
-use nexum_runtime::{PersistencePolicy, Runtime, RuntimeConfig, WorldFactory};
-use nexum_simulation::{SimulationConfig, SystemDefinition, World};
+use nexum_execution::{Partition, PartitionConfig, SystemDefinition};
+use nexum_runtime::{PartitionFactory, PersistencePolicy, Runtime, RuntimeConfig};
 use nexum_subscription::{Query, SubscriptionUpdate};
 use nexum_table::TableStore;
 
@@ -26,25 +26,23 @@ fn players_table(store: &mut TableStore) {
 }
 
 /// A factory whose single system inserts one player per tick.
-fn writer_factory() -> WorldFactory {
-    Box::new(
-        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-            if store.table("players").is_none() {
-                players_table(&mut store);
-            }
-            let mut world = World::new(id, store, sim)?;
-            world
-                .add_system(
-                    SystemDefinition::new(SystemId::from_u64(0), "writer", 0, |ctx, _| {
-                        ctx.insert("players", row![ctx.tick().as_u64(), 10u64, 100i32])?;
-                        Ok(())
-                    })
-                    .unwrap(),
-                )
-                .unwrap();
-            Ok(world)
-        },
-    )
+fn writer_factory() -> PartitionFactory {
+    Box::new(|id: WorldId, mut store: TableStore, sim: PartitionConfig| {
+        if store.table("players").is_none() {
+            players_table(&mut store);
+        }
+        let mut world = Partition::new(id, store, sim)?;
+        world
+            .add_system(
+                SystemDefinition::new(SystemId::from_u64(0), "writer", 0, |ctx, _| {
+                    ctx.insert("players", row![ctx.tick().as_u64(), 10u64, 100i32])?;
+                    Ok(())
+                })
+                .unwrap(),
+            )
+            .unwrap();
+        Ok(world)
+    })
 }
 
 fn temp_dir(name: &str) -> PathBuf {
@@ -60,9 +58,9 @@ fn subscriptions_observe_only_their_own_world_s_commits() {
         Runtime::new(RuntimeConfig::new(writer_factory()).with_worker_count(2)).unwrap();
     for w in 0..2u64 {
         runtime
-            .create_world(WorldId::from_u64(w), SimulationConfig::new())
+            .create_partition(WorldId::from_u64(w), PartitionConfig::new())
             .unwrap();
-        runtime.start_world(WorldId::from_u64(w)).unwrap();
+        runtime.start_partition(WorldId::from_u64(w)).unwrap();
     }
     let sub_a = runtime
         .subscribe(
@@ -102,9 +100,9 @@ fn recovered_history_is_a_snapshot_not_live_updates() {
         )
         .unwrap();
         runtime
-            .create_world(world, SimulationConfig::new())
+            .create_partition(world, PartitionConfig::new())
             .unwrap();
-        runtime.start_world(world).unwrap();
+        runtime.start_partition(world).unwrap();
         for _ in 0..3 {
             runtime.step().unwrap();
         }
@@ -117,9 +115,9 @@ fn recovered_history_is_a_snapshot_not_live_updates() {
     )
     .unwrap();
     runtime
-        .recover_world(world, SimulationConfig::new(), Some(TickId::from_u64(3)))
+        .recover_partition(world, PartitionConfig::new(), Some(TickId::from_u64(3)))
         .unwrap();
-    runtime.start_world(world).unwrap();
+    runtime.start_partition(world).unwrap();
 
     // A subscription created after recovery sees exactly one Initial
     // snapshot: the 3 historical rows are not replayed as live inserts.

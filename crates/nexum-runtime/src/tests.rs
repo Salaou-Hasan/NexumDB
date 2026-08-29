@@ -4,18 +4,18 @@ use std::path::PathBuf;
 
 use nexum_core::row;
 use nexum_core::{ColumnType, Error, PartitionId, ReducerId, SystemId, TickId, Value, WorldId};
-use nexum_reducer::{ReducerArgs, ReducerDefinition};
-use nexum_simulation::{
-    InputCommand, InputFrame, PartitionMessage, SimulationConfig, SystemDefinition, World,
+use nexum_execution::{
+    InputCommand, InputFrame, Partition, PartitionConfig, PartitionMessage, SystemDefinition,
 };
+use nexum_reducer::{ReducerArgs, ReducerDefinition};
 use nexum_subscription::{Query, SubscriptionUpdate};
 use nexum_table::TableStore;
 
-use crate::config::{PersistencePolicy, RuntimeConfig, TickFailurePolicy, WorldFactory};
+use crate::config::{PartitionFactory, PersistencePolicy, RuntimeConfig, TickFailurePolicy};
 use crate::error::RuntimeError;
 use crate::runtime::{Runtime, RuntimeState};
 use crate::worker::WorkerState;
-use crate::world::WorldLifecycle;
+use crate::world::PartitionLifecycle;
 
 fn players_table(store: &mut TableStore) {
     store
@@ -40,72 +40,66 @@ fn ensure_players(store: &mut TableStore) {
 }
 
 /// A factory whose worlds run a single writer system (one player per tick).
-fn writer_factory() -> WorldFactory {
-    Box::new(
-        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-            ensure_players(&mut store);
-            let mut world = World::new(id, store, sim)?;
-            world.add_system(
-                SystemDefinition::new(SystemId::from_u64(0), "writer", 0, |ctx, _| {
-                    let tick = ctx.tick().as_u64();
-                    ctx.insert("players", row![tick, 10u64, 100i32])?;
-                    Ok(())
-                })
-                .unwrap(),
-            )?;
-            Ok(world)
-        },
-    )
+fn writer_factory() -> PartitionFactory {
+    Box::new(|id: WorldId, mut store: TableStore, sim: PartitionConfig| {
+        ensure_players(&mut store);
+        let mut world = Partition::new(id, store, sim)?;
+        world.add_system(
+            SystemDefinition::new(SystemId::from_u64(0), "writer", 0, |ctx, _| {
+                let tick = ctx.tick().as_u64();
+                ctx.insert("players", row![tick, 10u64, 100i32])?;
+                Ok(())
+            })
+            .unwrap(),
+        )?;
+        Ok(world)
+    })
 }
 
 /// A factory where world 1 additionally runs a failing system (after the
 /// writer), for failure-isolation tests.
-fn failing_factory() -> WorldFactory {
-    Box::new(
-        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-            ensure_players(&mut store);
-            let mut world = World::new(id, store, sim)?;
+fn failing_factory() -> PartitionFactory {
+    Box::new(|id: WorldId, mut store: TableStore, sim: PartitionConfig| {
+        ensure_players(&mut store);
+        let mut world = Partition::new(id, store, sim)?;
+        world.add_system(
+            SystemDefinition::new(SystemId::from_u64(0), "writer", 0, |ctx, _| {
+                ctx.insert("players", row![ctx.tick().as_u64(), 10u64, 100i32])?;
+                Ok(())
+            })
+            .unwrap(),
+        )?;
+        if id.as_u64() == 1 {
             world.add_system(
-                SystemDefinition::new(SystemId::from_u64(0), "writer", 0, |ctx, _| {
-                    ctx.insert("players", row![ctx.tick().as_u64(), 10u64, 100i32])?;
-                    Ok(())
+                SystemDefinition::new(SystemId::from_u64(1), "fails", 10, |_ctx, _| {
+                    Err(Error::invalid_argument("boom"))
                 })
                 .unwrap(),
             )?;
-            if id.as_u64() == 1 {
-                world.add_system(
-                    SystemDefinition::new(SystemId::from_u64(1), "fails", 10, |_ctx, _| {
-                        Err(Error::invalid_argument("boom"))
-                    })
-                    .unwrap(),
-                )?;
-            }
-            Ok(world)
-        },
-    )
+        }
+        Ok(world)
+    })
 }
 
 /// A factory whose system consumes input commands as player rows.
-fn input_factory() -> WorldFactory {
-    Box::new(
-        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-            ensure_players(&mut store);
-            let mut world = World::new(id, store, sim)?;
-            world.add_system(
-                SystemDefinition::new(SystemId::from_u64(0), "consumer", 0, |ctx, frame| {
-                    for command in frame.commands() {
-                        if command.kind() == "spawn" {
-                            let id = command.payload().and_then(Value::as_u64).unwrap();
-                            ctx.insert("players", row![id, 10u64, 100i32])?;
-                        }
+fn input_factory() -> PartitionFactory {
+    Box::new(|id: WorldId, mut store: TableStore, sim: PartitionConfig| {
+        ensure_players(&mut store);
+        let mut world = Partition::new(id, store, sim)?;
+        world.add_system(
+            SystemDefinition::new(SystemId::from_u64(0), "consumer", 0, |ctx, frame| {
+                for command in frame.commands() {
+                    if command.kind() == "spawn" {
+                        let id = command.payload().and_then(Value::as_u64).unwrap();
+                        ctx.insert("players", row![id, 10u64, 100i32])?;
                     }
-                    Ok(())
-                })
-                .unwrap(),
-            )?;
-            Ok(world)
-        },
-    )
+                }
+                Ok(())
+            })
+            .unwrap(),
+        )?;
+        Ok(world)
+    })
 }
 
 fn temp_dir(name: &str) -> PathBuf {
@@ -118,9 +112,9 @@ fn temp_dir(name: &str) -> PathBuf {
 fn start_worlds(runtime: &mut Runtime, ids: &[u64]) {
     for id in ids {
         runtime
-            .create_world(WorldId::from_u64(*id), SimulationConfig::new())
+            .create_partition(WorldId::from_u64(*id), PartitionConfig::new())
             .unwrap();
-        runtime.start_world(WorldId::from_u64(*id)).unwrap();
+        runtime.start_partition(WorldId::from_u64(*id)).unwrap();
     }
 }
 
@@ -131,34 +125,34 @@ fn world_lifecycle_transitions() {
     let mut runtime = Runtime::new(RuntimeConfig::new(writer_factory())).unwrap();
     let world = WorldId::from_u64(0);
     runtime
-        .create_world(world, SimulationConfig::new())
+        .create_partition(world, PartitionConfig::new())
         .unwrap();
 
     assert_eq!(
-        runtime.world_status(world).unwrap().state,
-        WorldLifecycle::Created
+        runtime.partition_status(world).unwrap().state,
+        PartitionLifecycle::Created
     );
-    runtime.start_world(world).unwrap();
+    runtime.start_partition(world).unwrap();
     assert_eq!(
-        runtime.world_status(world).unwrap().state,
-        WorldLifecycle::Running
+        runtime.partition_status(world).unwrap().state,
+        PartitionLifecycle::Running
     );
-    runtime.stop_world(world).unwrap();
+    runtime.stop_partition(world).unwrap();
     assert_eq!(
-        runtime.world_status(world).unwrap().state,
-        WorldLifecycle::Stopped
+        runtime.partition_status(world).unwrap().state,
+        PartitionLifecycle::Stopped
     );
     // Restart continues logical time.
-    runtime.start_world(world).unwrap();
+    runtime.start_partition(world).unwrap();
     assert_eq!(
-        runtime.world_status(world).unwrap().state,
-        WorldLifecycle::Running
+        runtime.partition_status(world).unwrap().state,
+        PartitionLifecycle::Running
     );
 
     // Idempotent start/stop.
-    runtime.start_world(world).unwrap();
-    runtime.stop_world(world).unwrap();
-    runtime.stop_world(world).unwrap();
+    runtime.start_partition(world).unwrap();
+    runtime.stop_partition(world).unwrap();
+    runtime.stop_partition(world).unwrap();
 }
 
 #[test]
@@ -166,25 +160,25 @@ fn duplicate_and_unknown_worlds() {
     let mut runtime = Runtime::new(RuntimeConfig::new(writer_factory())).unwrap();
     let world = WorldId::from_u64(0);
     runtime
-        .create_world(world, SimulationConfig::new())
+        .create_partition(world, PartitionConfig::new())
         .unwrap();
     assert!(matches!(
-        runtime.create_world(world, SimulationConfig::new()),
-        Err(RuntimeError::DuplicateWorld(_))
+        runtime.create_partition(world, PartitionConfig::new()),
+        Err(RuntimeError::DuplicatePartition(_))
     ));
     assert!(matches!(
-        runtime.world_status(WorldId::from_u64(9)),
-        Err(RuntimeError::UnknownWorld(_))
+        runtime.partition_status(WorldId::from_u64(9)),
+        Err(RuntimeError::UnknownPartition(_))
     ));
     assert!(matches!(
-        runtime.start_world(WorldId::from_u64(9)),
-        Err(RuntimeError::UnknownWorld(_))
+        runtime.start_partition(WorldId::from_u64(9)),
+        Err(RuntimeError::UnknownPartition(_))
     ));
 
-    runtime.destroy_world(world).unwrap();
+    runtime.destroy_partition(world).unwrap();
     assert!(matches!(
-        runtime.world_status(world),
-        Err(RuntimeError::UnknownWorld(_))
+        runtime.partition_status(world),
+        Err(RuntimeError::UnknownPartition(_))
     ));
 }
 
@@ -193,19 +187,19 @@ fn stopping_a_created_world_is_allowed_but_starting_a_failed_one_is_not() {
     let mut runtime = Runtime::new(RuntimeConfig::new(failing_factory())).unwrap();
     let world = WorldId::from_u64(1);
     runtime
-        .create_world(world, SimulationConfig::new())
+        .create_partition(world, PartitionConfig::new())
         .unwrap();
-    runtime.stop_world(world).unwrap(); // Created -> Stopped
+    runtime.stop_partition(world).unwrap(); // Created -> Stopped
 
-    runtime.start_world(world).unwrap();
+    runtime.start_partition(world).unwrap();
     runtime.step().unwrap(); // world 1 fails
     assert_eq!(
-        runtime.world_status(world).unwrap().state,
-        WorldLifecycle::Failed
+        runtime.partition_status(world).unwrap().state,
+        PartitionLifecycle::Failed
     );
     assert!(matches!(
-        runtime.start_world(world),
-        Err(RuntimeError::InvalidWorldState { .. })
+        runtime.start_partition(world),
+        Err(RuntimeError::InvalidPartitionState { .. })
     ));
 }
 
@@ -232,7 +226,7 @@ fn step_ticks_every_running_world_once_in_deterministic_order() {
     assert_eq!(ticked, vec![0, 1, 2]);
 
     // Stopped worlds are not ticked.
-    runtime.stop_world(WorldId::from_u64(1)).unwrap();
+    runtime.stop_partition(WorldId::from_u64(1)).unwrap();
     let report = runtime.step().unwrap();
     assert_eq!(report.worlds, 2);
     assert_eq!(report.ticks, 2);
@@ -267,10 +261,10 @@ fn tick_once_ticks_a_single_world() {
     let result = runtime.tick_once(WorldId::from_u64(0)).unwrap();
     assert_eq!(result.tick(), TickId::from_u64(0));
     assert_eq!(result.changes().len(), 1);
-    // World 1 was not ticked.
+    // Partition 1 was not ticked.
     assert_eq!(
         runtime
-            .world_status(WorldId::from_u64(1))
+            .partition_status(WorldId::from_u64(1))
             .unwrap()
             .next_tick,
         TickId::from_u64(0)
@@ -297,7 +291,7 @@ fn worlds_are_assigned_round_robin_and_reassignable() {
 
     // Reassign world 0 from worker 0 to worker 2.
     runtime
-        .reassign_world(WorldId::from_u64(0), worker_id2())
+        .reassign_partition(WorldId::from_u64(0), worker_id2())
         .unwrap();
     assert_eq!(
         runtime
@@ -317,7 +311,7 @@ fn worlds_are_assigned_round_robin_and_reassignable() {
     // Reassign to a failed worker is rejected.
     runtime.fail_worker(worker_id0()).unwrap();
     assert!(matches!(
-        runtime.reassign_world(WorldId::from_u64(3), worker_id0()),
+        runtime.reassign_partition(WorldId::from_u64(3), worker_id0()),
         Err(RuntimeError::InvalidWorkerState { .. })
     ));
 }
@@ -341,7 +335,7 @@ fn new_worlds_skip_failed_workers() {
 
     // A new world must not be assigned to the failed worker.
     runtime
-        .create_world(WorldId::from_u64(2), SimulationConfig::new())
+        .create_partition(WorldId::from_u64(2), PartitionConfig::new())
         .unwrap();
     assert_eq!(
         runtime
@@ -356,7 +350,7 @@ fn new_worlds_skip_failed_workers() {
         .fail_worker(nexum_core::WorkerId::from_u64(1))
         .unwrap();
     assert!(matches!(
-        runtime.create_world(WorldId::from_u64(3), SimulationConfig::new()),
+        runtime.create_partition(WorldId::from_u64(3), PartitionConfig::new()),
         Err(RuntimeError::Internal(_))
     ));
 }
@@ -373,21 +367,21 @@ fn create_world_over_an_existing_wal_is_rejected() {
 
     // First world commits one durable transaction, then is destroyed.
     runtime
-        .create_world(world, SimulationConfig::new())
+        .create_partition(world, PartitionConfig::new())
         .unwrap();
-    runtime.start_world(world).unwrap();
+    runtime.start_partition(world).unwrap();
     runtime.step().unwrap();
-    // destroy_world leaves the durable WAL intact...
-    runtime.destroy_world(world).unwrap();
+    // destroy_partition leaves the durable WAL intact...
+    runtime.destroy_partition(world).unwrap();
 
-    // ...so a fresh create_world for the same id must not wipe it.
+    // ...so a fresh create_partition for the same id must not wipe it.
     assert!(matches!(
-        runtime.create_world(world, SimulationConfig::new()),
+        runtime.create_partition(world, PartitionConfig::new()),
         Err(RuntimeError::Persistence(Error::AlreadyExists(_)))
     ));
-    // recover_world restores the durable state instead.
+    // recover_partition restores the durable state instead.
     let report = runtime
-        .recover_world(world, SimulationConfig::new(), Some(TickId::from_u64(1)))
+        .recover_partition(world, PartitionConfig::new(), Some(TickId::from_u64(1)))
         .unwrap();
     assert_eq!(report.replayed_txs, 1);
     runtime.shutdown().unwrap();
@@ -407,17 +401,26 @@ fn fail_worker_isolates_its_worlds() {
     );
     // Worker 0's worlds are failed and recoverable...
     assert_eq!(
-        runtime.world_status(WorldId::from_u64(0)).unwrap().state,
-        WorldLifecycle::Failed
+        runtime
+            .partition_status(WorldId::from_u64(0))
+            .unwrap()
+            .state,
+        PartitionLifecycle::Failed
     );
     assert_eq!(
-        runtime.world_status(WorldId::from_u64(2)).unwrap().state,
-        WorldLifecycle::Failed
+        runtime
+            .partition_status(WorldId::from_u64(2))
+            .unwrap()
+            .state,
+        PartitionLifecycle::Failed
     );
     // ...while worker 1's world is untouched.
     assert_eq!(
-        runtime.world_status(WorldId::from_u64(1)).unwrap().state,
-        WorldLifecycle::Running
+        runtime
+            .partition_status(WorldId::from_u64(1))
+            .unwrap()
+            .state,
+        PartitionLifecycle::Running
     );
 
     // A step only ticks worker 1's world.
@@ -433,9 +436,9 @@ fn inputs_are_routed_and_consumed_in_order() {
     let mut runtime = Runtime::new(RuntimeConfig::new(input_factory())).unwrap();
     let world = WorldId::from_u64(0);
     runtime
-        .create_world(world, SimulationConfig::new())
+        .create_partition(world, PartitionConfig::new())
         .unwrap();
-    runtime.start_world(world).unwrap();
+    runtime.start_partition(world).unwrap();
 
     let mut frame = InputFrame::new(TickId::from_u64(0));
     frame.push(InputCommand::new(7, "spawn", Some(Value::U64(1))).unwrap());
@@ -446,7 +449,7 @@ fn inputs_are_routed_and_consumed_in_order() {
     assert_eq!(runtime.metrics().inputs_accepted, 1);
     // Two commands -> two rows.
     assert_eq!(runtime.metrics().ticks_succeeded, 1);
-    let status = runtime.world_status(world).unwrap();
+    let status = runtime.partition_status(world).unwrap();
     assert_eq!(status.next_tick, TickId::from_u64(1));
 }
 
@@ -456,9 +459,9 @@ fn late_and_over_limit_inputs_are_rejected() {
     let mut runtime = Runtime::new(config).unwrap();
     let world = WorldId::from_u64(0);
     runtime
-        .create_world(world, SimulationConfig::new())
+        .create_partition(world, PartitionConfig::new())
         .unwrap();
-    runtime.start_world(world).unwrap();
+    runtime.start_partition(world).unwrap();
 
     // Queue bound: second frame for the same tick is rejected (capacity).
     runtime
@@ -489,17 +492,17 @@ fn inputs_to_unknown_or_stopped_worlds_are_rejected() {
     let mut runtime = Runtime::new(RuntimeConfig::new(input_factory())).unwrap();
     let world = WorldId::from_u64(0);
     runtime
-        .create_world(world, SimulationConfig::new())
+        .create_partition(world, PartitionConfig::new())
         .unwrap();
-    runtime.stop_world(world).unwrap();
+    runtime.stop_partition(world).unwrap();
 
     assert!(matches!(
         runtime.submit_input(WorldId::from_u64(9), InputFrame::new(TickId::from_u64(0))),
-        Err(RuntimeError::UnknownWorld(_))
+        Err(RuntimeError::UnknownPartition(_))
     ));
     assert!(matches!(
         runtime.submit_input(world, InputFrame::new(TickId::from_u64(0))),
-        Err(RuntimeError::InvalidWorldState { .. })
+        Err(RuntimeError::InvalidPartitionState { .. })
     ));
 }
 
@@ -510,9 +513,9 @@ fn out_of_order_frames_fail_the_tick_deterministically() {
     let mut runtime = Runtime::new(config).unwrap();
     let world = WorldId::from_u64(0);
     runtime
-        .create_world(world, SimulationConfig::new())
+        .create_partition(world, PartitionConfig::new())
         .unwrap();
-    runtime.start_world(world).unwrap();
+    runtime.start_partition(world).unwrap();
 
     // A frame for tick 5 is accepted (not yet passed) but the world is at
     // tick 0: the world's own gate rejects it at execution.
@@ -527,8 +530,8 @@ fn out_of_order_frames_fail_the_tick_deterministically() {
     let result = runtime.tick_once(world).unwrap();
     assert_eq!(result.tick(), TickId::from_u64(0));
     assert_eq!(
-        runtime.world_status(world).unwrap().state,
-        WorldLifecycle::Running
+        runtime.partition_status(world).unwrap().state,
+        PartitionLifecycle::Running
     );
 }
 
@@ -542,9 +545,9 @@ fn wal_append_and_recovery_restores_world_state() {
     let mut runtime = Runtime::new(config).unwrap();
     let world = WorldId::from_u64(0);
     runtime
-        .create_world(world, SimulationConfig::new())
+        .create_partition(world, PartitionConfig::new())
         .unwrap();
-    runtime.start_world(world).unwrap();
+    runtime.start_partition(world).unwrap();
     for _ in 0..3 {
         runtime.step().unwrap();
     }
@@ -560,11 +563,11 @@ fn wal_append_and_recovery_restores_world_state() {
     )
     .unwrap();
     let report = runtime
-        .recover_world(world, SimulationConfig::new(), Some(TickId::from_u64(3)))
+        .recover_partition(world, PartitionConfig::new(), Some(TickId::from_u64(3)))
         .unwrap();
     assert_eq!(report.replayed_txs, 3);
     assert_eq!(
-        runtime.world_status(world).unwrap().next_tick,
+        runtime.partition_status(world).unwrap().next_tick,
         TickId::from_u64(3)
     );
 
@@ -579,11 +582,11 @@ fn wal_append_and_recovery_restores_world_state() {
     }
 
     // Resume ticking from tick 3.
-    runtime.start_world(world).unwrap();
+    runtime.start_partition(world).unwrap();
     let report = runtime.step().unwrap();
     assert_eq!(report.succeeded, 1);
     assert_eq!(
-        runtime.world_status(world).unwrap().next_tick,
+        runtime.partition_status(world).unwrap().next_tick,
         TickId::from_u64(4)
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -594,7 +597,7 @@ fn recovery_requires_persistence_and_an_existing_wal() {
     let dir = temp_dir("nexum-runtime-norecover");
     let mut runtime = Runtime::new(RuntimeConfig::new(writer_factory())).unwrap();
     assert!(matches!(
-        runtime.recover_world(WorldId::from_u64(0), SimulationConfig::new(), None),
+        runtime.recover_partition(WorldId::from_u64(0), PartitionConfig::new(), None),
         Err(RuntimeError::Persistence(Error::Unsupported(_)))
     ));
     drop(runtime);
@@ -606,7 +609,7 @@ fn recovery_requires_persistence_and_an_existing_wal() {
     )
     .unwrap();
     assert!(matches!(
-        runtime.recover_world(WorldId::from_u64(0), SimulationConfig::new(), None),
+        runtime.recover_partition(WorldId::from_u64(0), PartitionConfig::new(), None),
         Err(RuntimeError::Persistence(Error::NotFound(_)))
     ));
     let _ = std::fs::remove_dir_all(&dir);
@@ -621,9 +624,9 @@ fn periodic_snapshots_are_written_and_used_by_recovery() {
     let mut runtime = Runtime::new(config).unwrap();
     let world = WorldId::from_u64(0);
     runtime
-        .create_world(world, SimulationConfig::new())
+        .create_partition(world, PartitionConfig::new())
         .unwrap();
-    runtime.start_world(world).unwrap();
+    runtime.start_partition(world).unwrap();
     for _ in 0..4 {
         runtime.step().unwrap();
     }
@@ -637,7 +640,7 @@ fn periodic_snapshots_are_written_and_used_by_recovery() {
     )
     .unwrap();
     let report = runtime
-        .recover_world(world, SimulationConfig::new(), Some(TickId::from_u64(4)))
+        .recover_partition(world, PartitionConfig::new(), Some(TickId::from_u64(4)))
         .unwrap();
     // The snapshot at the end covers everything; the WAL replay is empty.
     assert!(report.snapshot.is_some());
@@ -714,23 +717,21 @@ fn failed_ticks_produce_zero_subscription_updates() {
 
 /// A factory whose writer system commits one row on **every other tick**
 /// (the in-between ticks commit zero changes).
-fn every_other_factory() -> WorldFactory {
-    Box::new(
-        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-            ensure_players(&mut store);
-            let mut world = World::new(id, store, sim)?;
-            world.add_system(
-                SystemDefinition::new(SystemId::from_u64(0), "every-other-writer", 0, |ctx, _| {
-                    if ctx.tick().as_u64() % 2 == 0 {
-                        ctx.insert("players", row![ctx.tick().as_u64(), 10u64, 100i32])?;
-                    }
-                    Ok(())
-                })
-                .unwrap(),
-            )?;
-            Ok(world)
-        },
-    )
+fn every_other_factory() -> PartitionFactory {
+    Box::new(|id: WorldId, mut store: TableStore, sim: PartitionConfig| {
+        ensure_players(&mut store);
+        let mut world = Partition::new(id, store, sim)?;
+        world.add_system(
+            SystemDefinition::new(SystemId::from_u64(0), "every-other-writer", 0, |ctx, _| {
+                if ctx.tick().as_u64() % 2 == 0 {
+                    ctx.insert("players", row![ctx.tick().as_u64(), 10u64, 100i32])?;
+                }
+                Ok(())
+            })
+            .unwrap(),
+        )?;
+        Ok(world)
+    })
 }
 
 #[test]
@@ -781,43 +782,41 @@ fn echo(
 
 /// A factory whose system fails on tick 0 (then succeeds), registering the
 /// `echo` reducer — for failed-tick call-recovery tests.
-fn continue_factory() -> WorldFactory {
-    Box::new(
-        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-            ensure_players(&mut store);
-            let mut world = World::new(id, store, sim)?;
-            world
-                .native_mut()
-                .register(
-                    nexum_reducer::ReducerDefinition::new(
-                        nexum_core::ReducerId::from_u64(1),
-                        "echo",
-                        echo,
-                    )
-                    .unwrap(),
+fn continue_factory() -> PartitionFactory {
+    Box::new(|id: WorldId, mut store: TableStore, sim: PartitionConfig| {
+        ensure_players(&mut store);
+        let mut world = Partition::new(id, store, sim)?;
+        world
+            .native_mut()
+            .register(
+                nexum_reducer::ReducerDefinition::new(
+                    nexum_core::ReducerId::from_u64(1),
+                    "echo",
+                    echo,
                 )
-                .unwrap();
-            world
-                .add_system(
-                    SystemDefinition::new(SystemId::from_u64(0), "flaky", 0, |ctx, _| {
-                        if ctx.tick().as_u64() == 0 {
-                            return Err(Error::invalid_argument("first tick fails"));
-                        }
-                        ctx.insert("players", row![ctx.tick().as_u64(), 10u64, 100i32])?;
-                        Ok(())
-                    })
-                    .unwrap(),
-                )
-                .unwrap();
-            Ok(world)
-        },
-    )
+                .unwrap(),
+            )
+            .unwrap();
+        world
+            .add_system(
+                SystemDefinition::new(SystemId::from_u64(0), "flaky", 0, |ctx, _| {
+                    if ctx.tick().as_u64() == 0 {
+                        return Err(Error::invalid_argument("first tick fails"));
+                    }
+                    ctx.insert("players", row![ctx.tick().as_u64(), 10u64, 100i32])?;
+                    Ok(())
+                })
+                .unwrap(),
+            )
+            .unwrap();
+        Ok(world)
+    })
 }
 
 /// A factory whose worlds register the `echo` reducer and nothing else.
-fn reducer_factory() -> WorldFactory {
-    Box::new(|id: WorldId, store: TableStore, sim: SimulationConfig| {
-        let mut world = World::new(id, store, sim)?;
+fn reducer_factory() -> PartitionFactory {
+    Box::new(|id: WorldId, store: TableStore, sim: PartitionConfig| {
+        let mut world = Partition::new(id, store, sim)?;
         world
             .native_mut()
             .register(
@@ -837,11 +836,11 @@ fn reducer_factory() -> WorldFactory {
 fn reducer_calls_execute_inside_ticks_respecting_the_per_tick_budget_fifo() {
     // Budget 2 per tick: 5 calls execute 2 + 2 + 1 across three ticks, in
     // FIFO (request-id) order. Overflow stays queued; nothing is dropped.
-    let sim = SimulationConfig::new().with_max_reducer_calls_per_tick(2);
+    let sim = PartitionConfig::new().with_max_reducer_calls_per_tick(2);
     let mut runtime = Runtime::new(RuntimeConfig::new(reducer_factory())).unwrap();
     let world = WorldId::from_u64(0);
-    runtime.create_world(world, sim).unwrap();
-    runtime.start_world(world).unwrap();
+    runtime.create_partition(world, sim).unwrap();
+    runtime.start_partition(world).unwrap();
 
     for request_id in 0..5u64 {
         runtime
@@ -897,11 +896,11 @@ fn reducer_calls_beyond_the_per_tick_budget_survive_until_future_ticks() {
     // A single call sits in the queue until the world ticks; a later call
     // behind it executes on the following tick — the queue is strictly FIFO
     // and never drains a call without executing it.
-    let sim = SimulationConfig::new().with_max_reducer_calls_per_tick(1);
+    let sim = PartitionConfig::new().with_max_reducer_calls_per_tick(1);
     let mut runtime = Runtime::new(RuntimeConfig::new(reducer_factory())).unwrap();
     let world = WorldId::from_u64(0);
-    runtime.create_world(world, sim).unwrap();
-    runtime.start_world(world).unwrap();
+    runtime.create_partition(world, sim).unwrap();
+    runtime.start_partition(world).unwrap();
 
     runtime
         .submit_reducer_call(world, 1, "echo", nexum_reducer::ReducerArgs::new())
@@ -946,12 +945,12 @@ fn zero_reducer_call_budget_is_an_invalid_configuration_not_a_hang_or_drop() {
     // `max_reducer_calls_per_tick = 0` is rejected at configuration time:
     // a world cannot be created with it, so calls can never silently
     // disappear into a zero-budget tick.
-    let sim = SimulationConfig::new().with_max_reducer_calls_per_tick(0);
+    let sim = PartitionConfig::new().with_max_reducer_calls_per_tick(0);
     assert!(matches!(sim.validate(), Err(Error::InvalidArgument(_))));
 
     let mut runtime = Runtime::new(RuntimeConfig::new(reducer_factory())).unwrap();
     assert!(matches!(
-        runtime.create_world(WorldId::from_u64(0), sim),
+        runtime.create_partition(WorldId::from_u64(0), sim),
         Err(RuntimeError::Internal(_))
     ));
 }
@@ -961,9 +960,9 @@ fn reducer_calls_to_unknown_or_stopped_worlds_are_rejected_explicitly() {
     let mut runtime = Runtime::new(RuntimeConfig::new(reducer_factory())).unwrap();
     let world = WorldId::from_u64(0);
     runtime
-        .create_world(world, SimulationConfig::new())
+        .create_partition(world, PartitionConfig::new())
         .unwrap();
-    runtime.stop_world(world).unwrap();
+    runtime.stop_partition(world).unwrap();
 
     // Unknown world: explicit error, never queued.
     assert!(matches!(
@@ -973,12 +972,12 @@ fn reducer_calls_to_unknown_or_stopped_worlds_are_rejected_explicitly() {
             "echo",
             nexum_reducer::ReducerArgs::new()
         ),
-        Err(RuntimeError::UnknownWorld(_))
+        Err(RuntimeError::UnknownPartition(_))
     ));
     // Stopped world: explicit error, never queued.
     assert!(matches!(
         runtime.submit_reducer_call(world, 2, "echo", nexum_reducer::ReducerArgs::new()),
-        Err(RuntimeError::InvalidWorldState { .. })
+        Err(RuntimeError::InvalidPartitionState { .. })
     ));
     assert_eq!(runtime.metrics().reducer_calls_accepted, 0);
 }
@@ -989,9 +988,9 @@ fn reducer_call_queue_overflow_is_rejected_explicitly_never_silently_dropped() {
     let mut runtime = Runtime::new(config).unwrap();
     let world = WorldId::from_u64(0);
     runtime
-        .create_world(world, SimulationConfig::new())
+        .create_partition(world, PartitionConfig::new())
         .unwrap();
-    runtime.start_world(world).unwrap();
+    runtime.start_partition(world).unwrap();
 
     runtime
         .submit_reducer_call(world, 1, "echo", nexum_reducer::ReducerArgs::new())
@@ -1029,9 +1028,9 @@ fn calls_drained_into_a_failed_tick_are_requeued_not_lost() {
     let mut runtime = Runtime::new(config).unwrap();
     let world = WorldId::from_u64(0);
     runtime
-        .create_world(world, SimulationConfig::new())
+        .create_partition(world, PartitionConfig::new())
         .unwrap();
-    runtime.start_world(world).unwrap();
+    runtime.start_partition(world).unwrap();
 
     runtime
         .submit_reducer_call(
@@ -1047,8 +1046,8 @@ fn calls_drained_into_a_failed_tick_are_requeued_not_lost() {
     let report = runtime.step().unwrap();
     assert_eq!(report.failed, 1);
     assert_eq!(
-        runtime.world_status(world).unwrap().state,
-        WorldLifecycle::Running
+        runtime.partition_status(world).unwrap().state,
+        PartitionLifecycle::Running
     );
 
     // Tick 1 executes the requeued call (FIFO) alongside the now-healthy
@@ -1106,8 +1105,11 @@ fn failure_isolation_keeps_other_worlds_correct() {
     assert_eq!(report.succeeded, 2);
     assert_eq!(report.failed, 1);
     assert_eq!(
-        runtime.world_status(WorldId::from_u64(1)).unwrap().state,
-        WorldLifecycle::Failed
+        runtime
+            .partition_status(WorldId::from_u64(1))
+            .unwrap()
+            .state,
+        PartitionLifecycle::Failed
     );
 
     // Subsequent steps tick only the healthy worlds.
@@ -1116,14 +1118,14 @@ fn failure_isolation_keeps_other_worlds_correct() {
     assert_eq!(report.succeeded, 2);
     assert_eq!(
         runtime
-            .world_status(WorldId::from_u64(0))
+            .partition_status(WorldId::from_u64(0))
             .unwrap()
             .next_tick,
         TickId::from_u64(2)
     );
     assert_eq!(
         runtime
-            .world_status(WorldId::from_u64(2))
+            .partition_status(WorldId::from_u64(2))
             .unwrap()
             .next_tick,
         TickId::from_u64(2)
@@ -1135,7 +1137,7 @@ fn failure_isolation_keeps_other_worlds_correct() {
         .drain_events()
         .into_iter()
         .filter(
-            |e| matches!(e, crate::RuntimeEvent::WorldFailed { world, .. } if world.as_u64() == 1),
+            |e| matches!(e, crate::RuntimeEvent::PartitionFailed { world, .. } if world.as_u64() == 1),
         )
         .count();
     assert_eq!(failed_events, 1);
@@ -1159,8 +1161,11 @@ fn shutdown_is_deterministic_and_blocks_new_operations() {
         WorkerState::Stopped
     );
     assert_eq!(
-        runtime.world_status(WorldId::from_u64(0)).unwrap().state,
-        WorldLifecycle::Stopped
+        runtime
+            .partition_status(WorldId::from_u64(0))
+            .unwrap()
+            .state,
+        PartitionLifecycle::Stopped
     );
 
     // Everything is rejected after shutdown.
@@ -1170,7 +1175,7 @@ fn shutdown_is_deterministic_and_blocks_new_operations() {
         Err(RuntimeError::Shutdown)
     ));
     assert!(matches!(
-        runtime.create_world(WorldId::from_u64(9), SimulationConfig::new()),
+        runtime.create_partition(WorldId::from_u64(9), PartitionConfig::new()),
         Err(RuntimeError::Shutdown)
     ));
     assert!(matches!(
@@ -1218,9 +1223,9 @@ fn events_are_bounded_and_metrics_count_work() {
         Runtime::new(RuntimeConfig::new(writer_factory()).with_event_log_limit(4)).unwrap();
     let world = WorldId::from_u64(0);
     runtime
-        .create_world(world, SimulationConfig::new())
+        .create_partition(world, PartitionConfig::new())
         .unwrap();
-    runtime.start_world(world).unwrap();
+    runtime.start_partition(world).unwrap();
     for _ in 0..5 {
         runtime.step().unwrap();
     }
@@ -1243,9 +1248,9 @@ fn events_are_bounded_and_metrics_count_work() {
 /// destination handler appends a ledger row. Every world's sender runs
 /// every tick, so outbound collection, cross-partition delivery, and the
 /// handler commit path are all exercised through `step`/`step_detailed`.
-fn ring_factory() -> WorldFactory {
+fn ring_factory() -> PartitionFactory {
     Box::new(
-        move |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
+        move |id: WorldId, mut store: TableStore, sim: PartitionConfig| {
             if store.table("ledger").is_none() {
                 store
                     .create_table(
@@ -1259,7 +1264,7 @@ fn ring_factory() -> WorldFactory {
                     )
                     .unwrap();
             }
-            let mut world = World::new(id, store, sim)?;
+            let mut world = Partition::new(id, store, sim)?;
             world
                 .native_mut()
                 .register(
@@ -1329,12 +1334,12 @@ fn run_ring_scenario(workers: usize, worlds: u64, ticks: u64) -> (RingTrace, Vec
     let mut runtime = Runtime::new(config).unwrap();
     for world in 0..worlds {
         runtime
-            .create_world(WorldId::from_u64(world), SimulationConfig::new())
+            .create_partition(WorldId::from_u64(world), PartitionConfig::new())
             .unwrap();
         runtime
             .register_partition(PartitionId::from_u64(world), WorldId::from_u64(world))
             .unwrap();
-        runtime.start_world(WorldId::from_u64(world)).unwrap();
+        runtime.start_partition(WorldId::from_u64(world)).unwrap();
     }
     let mut changes = vec![Vec::new(); worlds as usize];
     let mut outbound = vec![Vec::new(); worlds as usize];
@@ -1358,7 +1363,7 @@ fn run_ring_scenario(workers: usize, worlds: u64, ticks: u64) -> (RingTrace, Vec
     let next_ticks = (0..worlds)
         .map(|world| {
             runtime
-                .world_status(WorldId::from_u64(world))
+                .partition_status(WorldId::from_u64(world))
                 .unwrap()
                 .next_tick
                 .as_u64()
@@ -1446,7 +1451,9 @@ fn parallel_step_preserves_failure_isolation() {
                 crate::RuntimeEvent::TickFailed { world, tick, .. } => {
                     Some((1u8, world.as_u64(), tick.as_u64()))
                 }
-                crate::RuntimeEvent::WorldFailed { world, .. } => Some((2u8, world.as_u64(), 0)),
+                crate::RuntimeEvent::PartitionFailed { world, .. } => {
+                    Some((2u8, world.as_u64(), 0))
+                }
                 _ => None,
             })
             .collect();
@@ -1455,7 +1462,7 @@ fn parallel_step_preserves_failure_isolation() {
             .iter()
             .map(|world| {
                 runtime
-                    .world_status(WorldId::from_u64(*world))
+                    .partition_status(WorldId::from_u64(*world))
                     .unwrap()
                     .next_tick
                     .as_u64()

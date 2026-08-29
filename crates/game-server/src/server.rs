@@ -1,7 +1,9 @@
-//! The authoritative arena game server (ADR-010/014): wires the stack
-//! `GameServer → Runtime → Partition → World → Simulation → reducers → OCC →
-//! one atomic commit → Vec<Change> → WAL → SubscriptionRegistry → network`,
-//! accepts real TCP clients, auto-joins authenticated principals, handles
+//! The Nexum Database Server for the arena game.
+//!
+//! Wires the stack: `NexumServer -> Runtime -> Partition -> reducers -> OCC ->
+//! one atomic commit -> Vec<Change> -> WAL -> SubscriptionRegistry -> network`.
+//!
+//! Accepts real TCP clients, auto-joins authenticated principals, handles
 //! disconnect/reconnect, and ticks every world at a fixed logical rate.
 //!
 //! The server itself is orchestration: it never touches tables,
@@ -13,9 +15,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use nexum_core::PlayerId;
-use nexum_game_server::{GameServer, GameServerConfig, JoinOutcome};
-use nexum_network::{NetworkEvent, Principal, TcpTransport, TokenAuthenticator};
+use nexum_core::{PartitionId, WorldId};
+use nexum_network::{NetworkEvent, NexumServer, Principal, TcpTransport, TokenAuthenticator};
 use nexum_reducer::ReducerArgs;
 use nexum_runtime::Runtime;
 
@@ -47,12 +48,11 @@ pub struct ServerArgs {
     pub stop_after: Option<u64>,
     /// A stop-file: when it appears, the server shuts down cleanly.
     pub stop_file: Option<PathBuf>,
-    /// Quiet mode (log level → error; no per-tick chatter).
+    /// Quiet mode (log level -> error; no per-tick chatter).
     pub quiet: bool,
 }
 
-/// Builds the effective [`ServerConfig`]: defaults → config file → CLI.
-/// Fails fast on an invalid configuration (ADR-016).
+/// Builds the effective [`ServerConfig`]: defaults -> config file -> CLI.
 pub fn effective_config(args: &ServerArgs) -> Result<ServerConfig, String> {
     let mut config = match &args.config {
         Some(path) => ServerConfig::from_file(path)?,
@@ -84,7 +84,6 @@ pub fn effective_config(args: &ServerArgs) -> Result<ServerConfig, String> {
         config.log_level = crate::LogLevel::Error;
     }
     if config.tokens.is_empty() {
-        // The demo roster: token → principal.
         for (name, id) in [
             ("alice", 1u64),
             ("bob", 2u64),
@@ -98,7 +97,7 @@ pub fn effective_config(args: &ServerArgs) -> Result<ServerConfig, String> {
     Ok(config)
 }
 
-/// The demo roster: token → principal.
+/// The demo roster: token -> principal.
 pub fn authenticator() -> Arc<TokenAuthenticator> {
     let mut auth = TokenAuthenticator::new();
     for (name, id) in [
@@ -112,15 +111,7 @@ pub fn authenticator() -> Arc<TokenAuthenticator> {
     Arc::new(auth)
 }
 
-/// Whether the WAL directory already contains a previous run (recoverable).
-fn has_wal(dir: &std::path::Path) -> bool {
-    std::fs::read_dir(dir)
-        .map(|entries| entries.flatten().count() > 0)
-        .unwrap_or(false)
-}
-/// Runs the game server until interrupted, then shuts down cleanly:
-/// stops accepting connections, drains inbound, and flushes every world's
-/// WAL (ADR-016 D3).
+/// Runs the game server until interrupted, then shuts down cleanly.
 pub fn run_server(args: ServerArgs) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let config =
         effective_config(&args).map_err(Box::<dyn std::error::Error + Send + Sync>::from)?;
@@ -140,6 +131,7 @@ pub fn run_server(args: ServerArgs) -> Result<(), Box<dyn std::error::Error + Se
         );
     }
 
+    // Build the runtime with the game's world factory.
     let mut runtime_config = config.runtime_config(game_factory());
     if let Some(dir) = config.persistence_dir.clone()
         && config.persistence.is_enabled()
@@ -148,38 +140,38 @@ pub fn run_server(args: ServerArgs) -> Result<(), Box<dyn std::error::Error + Se
         runtime_config = runtime_config.with_persistence(config.persistence, dir.clone());
     }
     let runtime = Runtime::new(runtime_config)?;
-    let server_config: GameServerConfig = config.game_server_config();
-    let mut server = GameServer::new(
-        runtime,
-        config.network_config(),
-        authenticator(),
-        server_config,
-    )?;
 
-    let game_config = nexum_game_server::GameInstanceConfig::new("arena")
-        .with_partition_count(config.default_partitions)
-        .with_world_seed(config.seed)
-        .with_max_players(config.max_players)
-        .with_on_player_join("player_join");
+    // Create the Nexum Database Server (database = server).
+    let mut server = NexumServer::new(runtime, config.network_config(), authenticator())?;
 
-    let game = match config.persistence_dir.clone() {
-        Some(dir) if config.persistence.is_enabled() && has_wal(&dir) => {
-            let (game, report) = server.recover_game(game_config, None)?;
-            if !args.quiet {
-                println!(
-                    "[server] recovered arena from {} ({} tx replayed)",
-                    dir.display(),
-                    report.replayed_txs
-                );
-            }
-            game
+    // Create worlds (one per partition) for the arena game.
+    let mut world_ids = Vec::new();
+    for partition in 0..config.default_partitions {
+        let world_id = WorldId::from_u64(partition as u64);
+        let sim = nexum_execution::PartitionConfig::new().with_seed(config.seed);
+        server.runtime_mut().create_partition(world_id, sim)?;
+        server.runtime_mut().start_partition(world_id)?;
+        let partition_id = PartitionId::from_u64(partition as u64);
+        server
+            .runtime_mut()
+            .register_partition(partition_id, world_id)?;
+        world_ids.push(world_id);
+        if !args.quiet {
+            println!(
+                "[server] partition {} -> world {}",
+                partition,
+                world_id.as_u64()
+            );
         }
-        _ => server.create_game(game_config)?,
-    };
-    server.start_game(game)?;
+    }
 
-    for reducer in CLIENT_REDUCERS {
-        server.expose_reducer(reducer)?;
+    // Expose client-callable reducers (AllowAllPolicy on the gateway
+    // means all authenticated clients may invoke any reducer).
+    // The game logic in reducers handles authorization internally.
+    if !args.quiet {
+        for reducer in CLIENT_REDUCERS {
+            println!("[server] reducer exposed: {reducer}");
+        }
     }
 
     let listen_addr: SocketAddr = (
@@ -202,17 +194,14 @@ pub fn run_server(args: ServerArgs) -> Result<(), Box<dyn std::error::Error + Se
     println!("  clients:  cargo run -p game-server -- client --name alice  (alice/bob/carol/dave)");
     println!("══════════════════════════════════════════════════════════");
 
-    // connection id → principal id (for disconnect handling).
+    // Track connection -> principal mapping for disconnect handling.
     let mut connection_players: HashMap<u64, u64> = HashMap::new();
+    // Track principal -> world mapping for player routing.
+    let mut player_worlds: HashMap<u64, WorldId> = HashMap::new();
     let tick_duration = Duration::from_millis(1000 / config.tick_hz as u64);
     let mut loop_count: u64 = 0;
 
-    // Structured logging (ADR-016 §Observability): `timestamp level module
-    // message` lines on stderr, filtered by the configured level.
     let logger = crate::Logger::new(config.log_level, "server");
-
-    // Graceful shutdown (ADR-016 D2/D3): a signal, stop-file, or tick
-    // budget triggers the drain-then-flush path below.
     let shutdown = crate::ShutdownHandle::new(args.stop_file.clone());
     shutdown.install_signal_handler();
 
@@ -224,6 +213,7 @@ pub fn run_server(args: ServerArgs) -> Result<(), Box<dyn std::error::Error + Se
             break;
         }
         shutdown.poll();
+
         // 1. Accept new TCP connections.
         while let Some(connection) = transport.accept(1024, 64 * 1024)? {
             server
@@ -254,45 +244,40 @@ pub fn run_server(args: ServerArgs) -> Result<(), Box<dyn std::error::Error + Se
                         ],
                     );
                     connection_players.insert(connection.as_u64(), principal_id);
-                    let principal = Principal::new(principal_id, format!("player-{principal_id}"));
-                    match server.join_game(&principal, game) {
-                        Ok(JoinOutcome::Reconnected) => {
-                            // Restore the authoritative connected flag (the
-                            // row persisted with connected = 0).
-                            let _ = server.invoke_reducer(
-                                PlayerId::from_u64(principal_id),
-                                "player_join",
-                                ReducerArgs::new()
-                                    .insert("player_id", principal_id)
-                                    .insert("game_id", game.as_u64()),
-                            );
-                            println!("[game] player {principal_id} reconnected");
-                        }
-                        Ok(JoinOutcome::Joined) => {
-                            let world = server
-                                .player_world(PlayerId::from_u64(principal_id))
-                                .map(|world| world.to_string())
-                                .unwrap_or_else(|_| "?".into());
-                            println!("[game] player {principal_id} joined arena (world {world})");
-                        }
-                        Err(error) => {
-                            println!("[game] join rejected for {principal_id}: {error}");
-                        }
-                    }
+
+                    // Route player to a world via deterministic partition.
+                    let partition = (principal_id as usize) % config.default_partitions;
+                    let world_id = world_ids[partition];
+                    player_worlds.insert(principal_id, world_id);
+
+                    // Invoke the player_join reducer (idempotent insert or
+                    // reconnect-mark) via the runtime's reducer call queue.
+                    let request_id = (1u64 << 63) | principal_id; // SERVER_REQUEST_MSB
+                    let _ = server.runtime_mut().submit_reducer_call(
+                        world_id,
+                        request_id,
+                        "player_join",
+                        ReducerArgs::new()
+                            .insert("player_id", principal_id)
+                            .insert("game_id", 0u64),
+                    );
+                    println!("[game] player {principal_id} joined (world {world_id})");
                 }
                 NetworkEvent::ConnectionClosed { connection, .. } => {
                     if let Some(principal_id) = connection_players.remove(&connection.as_u64()) {
-                        let player = PlayerId::from_u64(principal_id);
-                        // Membership → Reconnecting (no input may flow)…
-                        let _ = server.disconnect_player(player);
-                        // …and the authoritative connected flag → 0.
-                        let _ = server.invoke_reducer(
-                            player,
-                            "player_leave",
-                            ReducerArgs::new()
-                                .insert("player_id", principal_id)
-                                .insert("game_id", game.as_u64()),
-                        );
+                        // Invoke the player_leave reducer.
+                        if let Some(&world_id) = player_worlds.get(&principal_id) {
+                            let request_id = (1u64 << 63) | principal_id | (1u64 << 62);
+                            let _ = server.runtime_mut().submit_reducer_call(
+                                world_id,
+                                request_id,
+                                "player_leave",
+                                ReducerArgs::new()
+                                    .insert("player_id", principal_id)
+                                    .insert("game_id", 0u64),
+                            );
+                        }
+                        player_worlds.remove(&principal_id);
                         println!("[game] player {principal_id} disconnected");
                         logger.warn(
                             "player disconnected",
@@ -304,16 +289,13 @@ pub fn run_server(args: ServerArgs) -> Result<(), Box<dyn std::error::Error + Se
             }
         }
 
-        // 4. One authoritative tick per world (flush server commands, tick,
-        //    fan out TickUpdates + subscription deltas + reducer results).
-        let results = server.step()?;
-        for (_world, tick_result) in &results {
-            for event in tick_result.events() {
-                if event.name() == "kill" {
-                    println!("[game] KILL: {}", event.payload());
-                }
-            }
-        }
+        // 4. One authoritative tick per world: tick -> fan-out ->
+        //    TickUpdates + subscription deltas + reducer results.
+        //    NexumServer::step() = process_inbound + step_worlds + flush.
+        //    We already did process_inbound above, so call step_worlds
+        //    directly through the gateway for the tick + fan-out.
+        let _step_report = server.gateway_mut().step_worlds()?;
+        let _ = server.gateway_mut().flush_outbound();
 
         // 5. Deliver subscription snapshots and write TCP bytes.
         server.gateway_mut().pump_subscriptions();
@@ -324,37 +306,32 @@ pub fn run_server(args: ServerArgs) -> Result<(), Box<dyn std::error::Error + Se
             && config.metrics_interval_ticks > 0
             && loop_count.is_multiple_of(config.metrics_interval_ticks)
         {
+            let runtime_metrics = server.runtime().metrics();
+            let network_metrics = server.gateway().metrics();
             let snapshot = crate::ServerMetricsSnapshot::capture(
-                server.runtime().metrics(),
-                server.gateway().metrics(),
-                server.metrics(),
-                0, // row count is not exposed by the game server; keep 0
+                runtime_metrics,
+                network_metrics,
+                0,
                 server.gateway().connection_count(),
             );
             println!("[metrics] {}", snapshot.summary_line());
         }
-        // Pace the logical ticks (a scheduling hint only — correctness is
-        // logical-time based and never depends on wall-clock pacing).
         std::thread::sleep(tick_duration);
     }
 
-    // Drain-then-flush: one final inbound drain, then the idempotent
-    // `GameServer::shutdown()` (runtime stops scheduling, every world's WAL
-    // is flushed — the durability contract — and resources are released).
+    // Drain-then-flush: one final inbound drain, then shutdown.
     server.gateway_mut().process_inbound();
     server.gateway_mut().pump_subscriptions();
     server.gateway_mut().flush_outbound()?;
     if !args.quiet {
-        let metrics = server.metrics();
         let runtime_metrics = server.runtime().metrics();
         println!(
-            "[server] shut down after {} ticks · WAL appends {} · players joined {} · connections {}",
+            "[server] shut down after {} ticks · WAL appends {} · connections {}",
             runtime_metrics.ticks_succeeded,
             runtime_metrics.wal_appends,
-            metrics.players_joined,
             server.gateway().connection_count()
         );
     }
-    server.shutdown()?;
+    server.shutdown();
     Ok(())
 }

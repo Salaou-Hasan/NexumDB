@@ -1,0 +1,24 @@
+[module]
+name = "arena-game"
+version = "0.1.0"
+description = "Authoritative arena game: players move, shoot, and survive"
+authors = ["NexumDB Team"]
+
+[runtime]
+max_fuel = 100000000
+max_memory_bytes = 268435456
+max_instance_bytes = 67108864
+deterministic = true
+max_stack_bytes = 524288
+
+[tables]
+# Tables are defined via #[derive(NexumTable)] in tables.rs
+# players, units, inventory
+
+[reducers]
+# Reducers are defined via #[reducer] in reducers.rs
+# player_join, move_player, fire_weapon_native, reload_weapon, respawn_player
+# unit_move, gather, presence
+
+[subscriptions]
+# Subscriptions defined via #[subscription] (placeholder)

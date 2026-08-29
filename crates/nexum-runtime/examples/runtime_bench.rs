@@ -3,15 +3,15 @@
 //! Run with: `cargo run --release -p nexum-runtime --example runtime_bench
 //! [iterations]`. The runtime is single-threaded by design (Phase 11 will
 //! parallelize); these establish the coordination overhead of worlds,
-//! workers, inputs, durability, and observation on top of `World::tick`.
+//! workers, inputs, durability, and observation on top of `Partition::tick`.
 
 use std::time::Instant;
 
 use nexum_core::row;
 use nexum_core::{ColumnType, ReducerId, SystemId, TickId, WorldId};
+use nexum_execution::{InputCommand, InputFrame, Partition, PartitionConfig, SystemDefinition};
 use nexum_reducer::{ReducerArgs, ReducerDefinition};
-use nexum_runtime::{PersistencePolicy, Runtime, RuntimeConfig, WorldFactory};
-use nexum_simulation::{InputCommand, InputFrame, SimulationConfig, SystemDefinition, World};
+use nexum_runtime::{PartitionFactory, PersistencePolicy, Runtime, RuntimeConfig};
 use nexum_subscription::Query;
 use nexum_table::TableStore;
 use nexum_wasm::{WasmLimits, WasmModuleRegistry};
@@ -49,113 +49,105 @@ fn ensure_players(store: &mut TableStore) {
 }
 
 /// A world with no systems — the empty tick.
-fn noop_factory() -> WorldFactory {
-    Box::new(|id: WorldId, store: TableStore, sim: SimulationConfig| World::new(id, store, sim))
+fn noop_factory() -> PartitionFactory {
+    Box::new(|id: WorldId, store: TableStore, sim: PartitionConfig| Partition::new(id, store, sim))
 }
 
 /// A world whose single system inserts one player row per tick.
-fn writer_factory() -> WorldFactory {
-    Box::new(
-        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-            ensure_players(&mut store);
-            let mut world = World::new(id, store, sim)?;
-            world
-                .add_system(
-                    SystemDefinition::new(SystemId::from_u64(0), "writer", 0, |ctx, _| {
-                        ctx.insert("players", row![ctx.tick().as_u64(), 10u64, 100i32])?;
-                        Ok(())
-                    })
-                    .unwrap(),
-                )
-                .unwrap();
-            Ok(world)
-        },
-    )
+fn writer_factory() -> PartitionFactory {
+    Box::new(|id: WorldId, mut store: TableStore, sim: PartitionConfig| {
+        ensure_players(&mut store);
+        let mut world = Partition::new(id, store, sim)?;
+        world
+            .add_system(
+                SystemDefinition::new(SystemId::from_u64(0), "writer", 0, |ctx, _| {
+                    ctx.insert("players", row![ctx.tick().as_u64(), 10u64, 100i32])?;
+                    Ok(())
+                })
+                .unwrap(),
+            )
+            .unwrap();
+        Ok(world)
+    })
 }
 
 /// A world whose system inserts ten rows per tick.
-fn bulk_factory() -> WorldFactory {
-    Box::new(
-        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-            ensure_players(&mut store);
-            let mut world = World::new(id, store, sim)?;
-            world
-                .add_system(
-                    SystemDefinition::new(SystemId::from_u64(0), "bulk", 0, |ctx, _| {
-                        let base = ctx.tick().as_u64() * 10;
-                        for i in 0..10u64 {
-                            ctx.insert("players", row![base + i, 10u64, 100i32])?;
-                        }
-                        Ok(())
-                    })
-                    .unwrap(),
-                )
-                .unwrap();
-            Ok(world)
-        },
-    )
+fn bulk_factory() -> PartitionFactory {
+    Box::new(|id: WorldId, mut store: TableStore, sim: PartitionConfig| {
+        ensure_players(&mut store);
+        let mut world = Partition::new(id, store, sim)?;
+        world
+            .add_system(
+                SystemDefinition::new(SystemId::from_u64(0), "bulk", 0, |ctx, _| {
+                    let base = ctx.tick().as_u64() * 10;
+                    for i in 0..10u64 {
+                        ctx.insert("players", row![base + i, 10u64, 100i32])?;
+                    }
+                    Ok(())
+                })
+                .unwrap(),
+            )
+            .unwrap();
+        Ok(world)
+    })
 }
 
 /// A world whose system consumes `spawn` input commands as player rows.
-fn input_factory() -> WorldFactory {
-    Box::new(
-        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-            ensure_players(&mut store);
-            let mut world = World::new(id, store, sim)?;
-            world
-                .add_system(
-                    SystemDefinition::new(SystemId::from_u64(0), "consumer", 0, |ctx, frame| {
-                        for command in frame.commands() {
-                            if command.kind() == "spawn" {
-                                let id = command
-                                    .payload()
-                                    .and_then(nexum_core::Value::as_u64)
-                                    .unwrap();
-                                ctx.insert("players", row![id, 10u64, 100i32])?;
-                            }
+fn input_factory() -> PartitionFactory {
+    Box::new(|id: WorldId, mut store: TableStore, sim: PartitionConfig| {
+        ensure_players(&mut store);
+        let mut world = Partition::new(id, store, sim)?;
+        world
+            .add_system(
+                SystemDefinition::new(SystemId::from_u64(0), "consumer", 0, |ctx, frame| {
+                    for command in frame.commands() {
+                        if command.kind() == "spawn" {
+                            let id = command
+                                .payload()
+                                .and_then(nexum_core::Value::as_u64)
+                                .unwrap();
+                            ctx.insert("players", row![id, 10u64, 100i32])?;
                         }
-                        Ok(())
-                    })
-                    .unwrap(),
-                )
-                .unwrap();
-            Ok(world)
-        },
-    )
+                    }
+                    Ok(())
+                })
+                .unwrap(),
+            )
+            .unwrap();
+        Ok(world)
+    })
 }
 
 /// A world whose system invokes a native reducer every tick.
-fn reducer_factory() -> WorldFactory {
-    Box::new(
-        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-            ensure_players(&mut store);
-            let mut world = World::new(id, store, sim)?;
-            world
-                .native_mut()
-                .register(
-                    ReducerDefinition::new(ReducerId::from_u64(0), "spawn", |ctx, args| {
-                        let id = args.require_u64("id")?;
-                        ctx.insert("players", row![id, 10u64, 50i32])?;
-                        Ok(nexum_core::Value::U64(id))
-                    })
-                    .unwrap(),
-                )
-                .unwrap();
-            world
-                .add_system(
-                    SystemDefinition::new(SystemId::from_u64(0), "invoker", 0, |ctx, _| {
-                        ctx.invoke_reducer(
-                            "spawn",
-                            &ReducerArgs::new().insert("id", 1_000_000 + ctx.tick().as_u64()),
-                        )?;
-                        Ok(())
-                    })
-                    .unwrap(),
-                )
-                .unwrap();
-            Ok(world)
-        },
-    )
+fn reducer_factory() -> PartitionFactory {
+    Box::new(|id: WorldId, mut store: TableStore, sim: PartitionConfig| {
+        ensure_players(&mut store);
+        let mut world = Partition::new(id, store, sim)?;
+        world
+            .native_mut()
+            .register(
+                ReducerDefinition::new(ReducerId::from_u64(0), "spawn", |ctx, args| {
+                    let id = args.require_u64("id")?;
+                    ctx.insert("players", row![id, 10u64, 50i32])?;
+                    Ok(nexum_core::Value::U64(id))
+                })
+                .unwrap(),
+            )
+            .unwrap();
+        world
+            .add_system(
+                SystemDefinition::new(SystemId::from_u64(0), "invoker", 0, |ctx, _| {
+                    ctx.invoke_reducer(
+                        "spawn",
+                        &ReducerArgs::new().insert("id", 1_000_000 + ctx.tick().as_u64()),
+                    )?;
+                    Ok(())
+                })
+                .unwrap(),
+            )
+            .unwrap();
+        Ok(world)
+    })
 }
 
 /// The WASM module used by the WASM-heavy scenario: reads its single `id`
@@ -204,12 +196,12 @@ fn wasm_module() -> Vec<u8> {
 }
 
 /// A world whose system invokes a WASM reducer every tick.
-fn wasm_factory() -> WorldFactory {
+fn wasm_factory() -> PartitionFactory {
     let module = wasm_module();
     Box::new(
-        move |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
+        move |id: WorldId, mut store: TableStore, sim: PartitionConfig| {
             ensure_players(&mut store);
-            let mut world = World::new(id, store, sim)?;
+            let mut world = Partition::new(id, store, sim)?;
             let mut wasm = WasmModuleRegistry::new(WasmLimits::default()).unwrap();
             wasm.register("wspawn", 1, module.clone()).unwrap();
             world.set_wasm(wasm);
@@ -256,9 +248,9 @@ fn main() {
     {
         let mut runtime = Runtime::new(RuntimeConfig::new(noop_factory())).unwrap();
         runtime
-            .create_world(WorldId::from_u64(0), SimulationConfig::new())
+            .create_partition(WorldId::from_u64(0), PartitionConfig::new())
             .unwrap();
-        runtime.start_world(WorldId::from_u64(0)).unwrap();
+        runtime.start_partition(WorldId::from_u64(0)).unwrap();
         bench("one world (empty tick)", iterations, || {
             runtime.step().unwrap();
         });
@@ -269,9 +261,9 @@ fn main() {
         let mut runtime = Runtime::new(RuntimeConfig::new(noop_factory())).unwrap();
         for w in 0..count as u64 {
             runtime
-                .create_world(WorldId::from_u64(w), SimulationConfig::new())
+                .create_partition(WorldId::from_u64(w), PartitionConfig::new())
                 .unwrap();
-            runtime.start_world(WorldId::from_u64(w)).unwrap();
+            runtime.start_partition(WorldId::from_u64(w)).unwrap();
         }
         bench(
             &format!("{count} worlds (empty ticks)"),
@@ -287,9 +279,9 @@ fn main() {
         let mut runtime = Runtime::new(RuntimeConfig::new(input_factory())).unwrap();
         let world = WorldId::from_u64(0);
         runtime
-            .create_world(world, SimulationConfig::new())
+            .create_partition(world, PartitionConfig::new())
             .unwrap();
-        runtime.start_world(world).unwrap();
+        runtime.start_partition(world).unwrap();
         let mut tick = 0u64;
         bench("input-heavy tick (10 cmds)", iterations / 2, || {
             let mut frame = InputFrame::new(TickId::from_u64(tick));
@@ -310,9 +302,9 @@ fn main() {
         let mut runtime = Runtime::new(RuntimeConfig::new(bulk_factory())).unwrap();
         let world = WorldId::from_u64(0);
         runtime
-            .create_world(world, SimulationConfig::new())
+            .create_partition(world, PartitionConfig::new())
             .unwrap();
-        runtime.start_world(world).unwrap();
+        runtime.start_partition(world).unwrap();
         bench("transaction-heavy tick (10 rows)", iterations / 2, || {
             runtime.step().unwrap();
         });
@@ -323,9 +315,9 @@ fn main() {
         let mut runtime = Runtime::new(RuntimeConfig::new(reducer_factory())).unwrap();
         let world = WorldId::from_u64(0);
         runtime
-            .create_world(world, SimulationConfig::new())
+            .create_partition(world, PartitionConfig::new())
             .unwrap();
-        runtime.start_world(world).unwrap();
+        runtime.start_partition(world).unwrap();
         bench("reducer-heavy tick (native)", iterations / 2, || {
             runtime.step().unwrap();
         });
@@ -336,9 +328,9 @@ fn main() {
         let mut runtime = Runtime::new(RuntimeConfig::new(wasm_factory())).unwrap();
         let world = WorldId::from_u64(0);
         runtime
-            .create_world(world, SimulationConfig::new())
+            .create_partition(world, PartitionConfig::new())
             .unwrap();
-        runtime.start_world(world).unwrap();
+        runtime.start_partition(world).unwrap();
         bench("reducer-heavy tick (wasm)", iterations / 5, || {
             runtime.step().unwrap();
         });
@@ -354,9 +346,9 @@ fn main() {
         .unwrap();
         let world = WorldId::from_u64(0);
         runtime
-            .create_world(world, SimulationConfig::new())
+            .create_partition(world, PartitionConfig::new())
             .unwrap();
-        runtime.start_world(world).unwrap();
+        runtime.start_partition(world).unwrap();
         bench("tick + WAL append", iterations / 2, || {
             runtime.step().unwrap();
         });
@@ -368,9 +360,9 @@ fn main() {
         let mut runtime = Runtime::new(RuntimeConfig::new(writer_factory())).unwrap();
         let world = WorldId::from_u64(0);
         runtime
-            .create_world(world, SimulationConfig::new())
+            .create_partition(world, PartitionConfig::new())
             .unwrap();
-        runtime.start_world(world).unwrap();
+        runtime.start_partition(world).unwrap();
         let sub = runtime
             .subscribe(world, Query::builder("players").build().unwrap())
             .unwrap();
@@ -381,19 +373,21 @@ fn main() {
         });
     }
 
-    // 12. World creation (create + destroy per iteration).
+    // 12. Partition creation (create + destroy per iteration).
     {
         let mut runtime = Runtime::new(RuntimeConfig::new(writer_factory())).unwrap();
         let mut next = 0u64;
         bench("world creation (create+destroy)", iterations, || {
             let id = WorldId::from_u64(next);
             next += 1;
-            runtime.create_world(id, SimulationConfig::new()).unwrap();
-            runtime.destroy_world(id).unwrap();
+            runtime
+                .create_partition(id, PartitionConfig::new())
+                .unwrap();
+            runtime.destroy_partition(id).unwrap();
         });
     }
 
-    // 13. World recovery from the WAL (destroy + recover per iteration).
+    // 13. Partition recovery from the WAL (destroy + recover per iteration).
     {
         let dir = temp_dir("nexum-runtime-bench-recover");
         let mut runtime = Runtime::new(
@@ -403,14 +397,14 @@ fn main() {
         .unwrap();
         let world = WorldId::from_u64(0);
         runtime
-            .create_world(world, SimulationConfig::new())
+            .create_partition(world, PartitionConfig::new())
             .unwrap();
-        runtime.start_world(world).unwrap();
+        runtime.start_partition(world).unwrap();
         runtime.step().unwrap(); // one durable transaction
         bench("world recovery (WAL replay)", iterations, || {
-            runtime.destroy_world(world).unwrap();
+            runtime.destroy_partition(world).unwrap();
             runtime
-                .recover_world(world, SimulationConfig::new(), Some(TickId::from_u64(1)))
+                .recover_partition(world, PartitionConfig::new(), Some(TickId::from_u64(1)))
                 .unwrap();
         });
         let _ = std::fs::remove_dir_all(&dir);

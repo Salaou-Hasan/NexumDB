@@ -445,23 +445,11 @@ impl ServerConfig {
             .with_rate_limits(self.rate_limits)
     }
 
-    /// Builds the [`nexum_game_server::GameServerConfig`] for this
-    /// configuration.
-    pub fn game_server_config(&self) -> nexum_game_server::GameServerConfig {
-        nexum_game_server::GameServerConfig::new()
-            .with_default_partition_count(self.default_partitions)
-            .with_default_max_players(self.max_players)
-            .with_subscription_limit_per_player(self.subscription_limit_per_player)
-            .with_max_pending_commands_per_world(self.max_pending_commands_per_world)
-            .with_event_log_limit(self.game_event_log_limit)
-            .with_tick_rate_hz(self.tick_hz)
-    }
-
-    /// Builds the [`RuntimeConfig`] for this configuration. The world
+    /// Builds the [`nexum_runtime::RuntimeConfig`] for this configuration. The world
     /// factory is passed through unchanged.
     pub fn runtime_config(
         &self,
-        factory: nexum_runtime::WorldFactory,
+        factory: nexum_runtime::PartitionFactory,
     ) -> nexum_runtime::RuntimeConfig {
         let mut config = nexum_runtime::RuntimeConfig::new(factory)
             .with_worker_count(self.workers)
@@ -557,8 +545,5 @@ mod tests {
             network.max_commands_per_frame(),
             config.max_commands_per_frame
         );
-        let game = config.game_server_config();
-        assert_eq!(game.default_partition_count(), config.default_partitions);
-        assert_eq!(game.tick_rate_hz(), config.tick_hz);
     }
 }

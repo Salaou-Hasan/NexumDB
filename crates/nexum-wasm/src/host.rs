@@ -17,8 +17,7 @@
 
 use nexum_core::{Error, Row, RowId, binary::put_value};
 use nexum_reducer::ReducerContext;
-use wasmi::errors::{MemoryError, TableError};
-use wasmi::{Caller, Error as WasmError, Linker, Memory, ResourceLimiter};
+use wasmtime::{Caller, Linker, Memory, ResourceLimiter};
 
 use crate::abi::{
     OP_CONTAINS, OP_DELETE, OP_EMIT, OP_GET, OP_INDEX_SCAN_GET, OP_INSERT, OP_LOOKUP_GET_UNIQUE,
@@ -30,7 +29,7 @@ use crate::abi::{
 use crate::limits::WasmLimits;
 
 /// The per-invocation host state, borrowed from the invocation's transaction
-/// context. Lives inside the wasmi `Store` for the duration of one run.
+/// context. Lives inside the wasmtime `Store` for the duration of one run.
 ///
 /// `ctx` is `None` only during registration-time module validation, when no
 /// transaction exists and no op can execute (modules with start functions are
@@ -108,16 +107,16 @@ impl ResourceLimiter for MemoryLimiter {
         _current: usize,
         desired: usize,
         _maximum: Option<usize>,
-    ) -> std::result::Result<bool, MemoryError> {
+    ) -> std::result::Result<bool, wasmtime::Error> {
         Ok(desired <= self.max_memory_bytes)
     }
 
     fn table_growing(
         &mut self,
-        _current: u32,
-        desired: u32,
-        _maximum: Option<u32>,
-    ) -> std::result::Result<bool, TableError> {
+        _current: usize,
+        desired: usize,
+        _maximum: Option<usize>,
+    ) -> std::result::Result<bool, wasmtime::Error> {
         Ok(desired <= 1_000_000)
     }
 }
@@ -128,23 +127,30 @@ impl ResourceLimiter for MemoryLimiter {
 /// `Caller` — so it is `Send + Sync + 'static` regardless of the host data
 /// lifetimes, and the same definition works for registration-time validation
 /// and invocation-time execution.
-pub(crate) fn define_host<'a, 'b>(linker: &mut Linker<HostState<'a, 'b>>) -> Result<(), WasmError> {
+pub(crate) fn define_host(
+    linker: &mut Linker<HostState<'static, 'static>>,
+) -> Result<(), wasmtime::Error> {
     linker.func_wrap(
         "nexum",
         "op",
-        |mut caller: Caller<'_, HostState<'a, 'b>>,
+        |mut caller: Caller<'_, HostState<'static, 'static>>,
          op: i32,
          in_ptr: i32,
          in_len: i32,
          out_ptr: i32,
          out_cap: i32|
-         -> Result<i32, WasmError> {
+         -> Result<i32, wasmtime::Error> {
             // The memory handle is owned (an `Extern`), so no borrow of
             // `caller` is held across the `data_mut` calls below.
             let memory = caller
                 .get_export("memory")
                 .and_then(|export| export.into_memory())
-                .ok_or_else(|| WasmError::new("nexum: module does not export memory"))?;
+                .ok_or_else(|| {
+                    wasmtime::Error::new(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "nexum: module does not export memory",
+                    ))
+                })?;
 
             let (op, in_len, out_ptr, out_cap) =
                 (op as u32, in_len as u32, out_ptr as u32, out_cap as u32);
@@ -176,9 +182,12 @@ pub(crate) fn define_host<'a, 'b>(linker: &mut Linker<HostState<'a, 'b>>) -> Res
                 let mut stack_buf = [0u8; STACK_BUF_SIZE];
                 let slice = &mut stack_buf[..in_len as usize];
                 if !slice.is_empty() {
-                    memory
-                        .read(&caller, in_ptr as usize, slice)
-                        .map_err(|e| WasmError::new(format!("nexum: cannot read args: {e}")))?;
+                    memory.read(&caller, in_ptr as usize, slice).map_err(|e| {
+                        wasmtime::Error::new(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            format!("nexum: cannot read args: {e}"),
+                        ))
+                    })?;
                 }
                 let state = caller.data_mut();
                 handle_op(state, op, slice)
@@ -186,7 +195,12 @@ pub(crate) fn define_host<'a, 'b>(linker: &mut Linker<HostState<'a, 'b>>) -> Res
                 let mut heap_buf = vec![0u8; in_len as usize];
                 memory
                     .read(&caller, in_ptr as usize, &mut heap_buf)
-                    .map_err(|e| WasmError::new(format!("nexum: cannot read args: {e}")))?;
+                    .map_err(|e| {
+                        wasmtime::Error::new(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            format!("nexum: cannot read args: {e}"),
+                        ))
+                    })?;
                 let state = caller.data_mut();
                 handle_op(state, op, &heap_buf)
             };
@@ -206,12 +220,17 @@ fn write_envelope(
     envelope: &[u8],
     out_ptr: u32,
     out_cap: u32,
-) -> Result<i32, WasmError> {
+) -> Result<i32, wasmtime::Error> {
     if envelope.len() <= out_cap as usize {
         if !envelope.is_empty() {
             memory
                 .write(caller, out_ptr as usize, envelope)
-                .map_err(|e| WasmError::new(format!("nexum: cannot write result: {e}")))?;
+                .map_err(|e| {
+                    wasmtime::Error::new(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("nexum: cannot write result: {e}"),
+                    ))
+                })?;
         }
         Ok(0)
     } else {

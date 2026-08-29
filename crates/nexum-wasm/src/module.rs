@@ -26,8 +26,7 @@
 //! store with fresh host data.
 
 use nexum_core::{Error, Result};
-use wasmi::core::ValType;
-use wasmi::{Engine, ExternType, Linker, Module as WasmModule, Mutability, Store, Val};
+use wasmtime::{Engine, ExternType, Linker, Module as WasmModule, Mutability, Store, Val, ValType};
 
 use crate::host::{HostState, define_host};
 use crate::limits::{ABI_IN_CAP, ABI_OUT_CAP, WasmLimits};
@@ -149,14 +148,21 @@ fn validate_imports(module: &WasmModule) -> Result<()> {
         )));
     }
     match first.ty() {
-        ExternType::Func(ty)
-            if ty.params() == [ValType::I32; 5] && ty.results() == [ValType::I32] =>
-        {
-            Ok(())
+        ExternType::Func(ty) => {
+            let params: Vec<_> = ty.params().collect();
+            let results: Vec<_> = ty.results().collect();
+            if params.len() == 5
+                && params.iter().all(|p| matches!(p, ValType::I32))
+                && results.len() == 1
+                && matches!(results[0], ValType::I32)
+            {
+                Ok(())
+            } else {
+                Err(Error::invalid_argument(
+                    "the ('nexum','op') import must have signature (i32, i32, i32, i32, i32) -> i32",
+                ))
+            }
         }
-        ExternType::Func(_) => Err(Error::invalid_argument(
-            "the ('nexum','op') import must have signature (i32, i32, i32, i32, i32) -> i32",
-        )),
         _ => Err(Error::invalid_argument(
             "the nexum import must be a function",
         )),
@@ -174,12 +180,17 @@ fn validate_exports(module: &WasmModule) -> Result<()> {
     check_buffer_global(module, IN_PTR_NAME)?;
     check_buffer_global(module, OUT_PTR_NAME)?;
     match module.get_export(ENTRY_NAME) {
-        Some(ExternType::Func(ty)) if ty.params().is_empty() && ty.results() == [ValType::I32] => {
-            Ok(())
+        Some(ExternType::Func(ty)) => {
+            let params: Vec<_> = ty.params().collect();
+            let results: Vec<_> = ty.results().collect();
+            if params.is_empty() && results.len() == 1 && matches!(results[0], ValType::I32) {
+                Ok(())
+            } else {
+                Err(Error::invalid_argument(format!(
+                    "'{ENTRY_NAME}' must have signature () -> i32"
+                )))
+            }
         }
-        Some(ExternType::Func(_)) => Err(Error::invalid_argument(format!(
-            "'{ENTRY_NAME}' must have signature () -> i32"
-        ))),
         _ => Err(Error::invalid_argument(format!(
             "wasm module does not export the '{ENTRY_NAME}' reducer entry function"
         ))),
@@ -188,10 +199,14 @@ fn validate_exports(module: &WasmModule) -> Result<()> {
 
 fn check_buffer_global(module: &WasmModule, name: &str) -> Result<()> {
     match module.get_export(name) {
-        Some(ExternType::Global(ty))
-            if ty.content() == ValType::I32 && ty.mutability() == Mutability::Const =>
-        {
-            Ok(())
+        Some(ExternType::Global(ty)) => {
+            if matches!(ty.content(), ValType::I32) && ty.mutability() == Mutability::Const {
+                Ok(())
+            } else {
+                Err(Error::invalid_argument(format!(
+                    "'{name}' must be an immutable i32 global export"
+                )))
+            }
         }
         _ => Err(Error::invalid_argument(format!(
             "'{name}' must be an immutable i32 global export"
@@ -211,17 +226,25 @@ fn validate_buffers(
     module: &WasmModule,
     limits: &WasmLimits,
 ) -> Result<(u32, u32)> {
-    let mut store = Store::new(engine, HostState::new(None, limits));
+    // SAFETY: Store::new requires T: 'static, but HostState<'a, 'b>
+    // is only used within the function scope and the store is dropped
+    // at the end of the function.
+    let host_state = HostState::new(None, limits);
+    let mut store: Store<HostState<'static, 'static>> = unsafe {
+        Store::new(
+            engine,
+            std::mem::transmute::<HostState<'_, '_>, HostState<'static, 'static>>(host_state),
+        )
+    };
     store.limiter(|state: &mut HostState<'_, '_>| &mut state.memory_limiter);
     store
         .set_fuel(limits.max_fuel)
         .map_err(|e| Error::internal(format!("cannot arm fuel: {e}")))?;
-    let mut linker = Linker::new(engine);
+    let mut linker: Linker<HostState<'static, 'static>> = Linker::new(engine);
     define_host(&mut linker)
         .map_err(|e| Error::internal(format!("cannot define host functions: {e}")))?;
     let instance = linker
         .instantiate(&mut store, module)
-        .and_then(|instance| instance.start(&mut store))
         .map_err(|e| Error::invalid_argument(format!("wasm module failed to instantiate: {e}")))?;
     if let Some(error) = store.data().abi_error() {
         return Err(Error::invalid_argument(format!(
@@ -229,14 +252,14 @@ fn validate_buffers(
         )));
     }
 
-    let in_ptr = read_buffer_global(&instance, &store, IN_PTR_NAME)?;
-    let out_ptr = read_buffer_global(&instance, &store, OUT_PTR_NAME)?;
+    let in_ptr = read_buffer_global(&instance, &mut store, IN_PTR_NAME)?;
+    let out_ptr = read_buffer_global(&instance, &mut store, OUT_PTR_NAME)?;
 
     let memory = instance
-        .get_export(&store, "memory")
+        .get_export(&mut store, "memory")
         .and_then(|export| export.into_memory())
         .ok_or_else(|| Error::internal("validated memory export vanished"))?;
-    let mem_bytes = memory.data_size(&store);
+    let mem_bytes = memory.data_size(&mut store);
 
     let in_end = (in_ptr as usize).checked_add(ABI_IN_CAP);
     let out_end = (out_ptr as usize).checked_add(ABI_OUT_CAP);
@@ -251,14 +274,14 @@ fn validate_buffers(
 }
 
 fn read_buffer_global(
-    instance: &wasmi::Instance,
-    store: &Store<HostState<'_, '_>>,
+    instance: &wasmtime::Instance,
+    store: &mut Store<HostState<'_, '_>>,
     name: &str,
 ) -> Result<u32> {
     let global = instance
-        .get_global(store, name)
+        .get_global(&mut *store, name)
         .ok_or_else(|| Error::internal(format!("validated global '{name}' vanished")))?;
-    match global.get(store) {
+    match global.get(&mut *store) {
         Val::I32(value) => Ok(value as u32),
         _ => Err(Error::internal(format!("global '{name}' is not an i32"))),
     }

@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/nexum-core",
     "crates/nexum-macros",
+    "crates/nexum-manifest",
     "crates/nexum-table",
     "crates/nexum-tx",
     "crates/nexum-storage",
@@ -10,12 +11,10 @@ members = [
     "crates/nexum-reducer",
     "crates/nexum-wasm",
     "crates/nexum-subscription",
-    "crates/nexum-simulation",
+    "crates/nexum-execution",
     "crates/nexum-runtime",
     "crates/nexum-network",
     "crates/nexum-sdk",
-    "crates/nexum-game-server",
-    "crates/nexum-server",
     "crates/game-server",
     "crates/nexum-integration-tests",
     "crates/nexum-alloc-count",
@@ -58,10 +57,9 @@ nexum-wal = { path = "crates/nexum-wal", version = "0.1.0" }
 nexum-reducer = { path = "crates/nexum-reducer", version = "0.1.0" }
 nexum-wasm = { path = "crates/nexum-wasm", version = "0.1.0" }
 nexum-subscription = { path = "crates/nexum-subscription", version = "0.1.0" }
-nexum-simulation = { path = "crates/nexum-simulation", version = "0.1.0" }
+nexum-execution = { path = "crates/nexum-execution", version = "0.1.0" }
 nexum-runtime = { path = "crates/nexum-runtime", version = "0.1.0" }
 nexum-network = { path = "crates/nexum-network", version = "0.1.0" }
 nexum-sdk = { path = "crates/nexum-sdk", version = "0.1.0" }
-nexum-game-server = { path = "crates/nexum-game-server", version = "0.1.0" }
 nexum-alloc-count = { path = "crates/nexum-alloc-count", version = "0.1.0" }
 rayon = "1.10"

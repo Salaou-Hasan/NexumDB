@@ -7,8 +7,8 @@ use nexum_core::{
     ColumnType, ConnectionId, Error, ReducerId, Result, Row, RowId, SubscriptionId, SystemId,
     TableId, TickId, TransactionId, Value, Version, WorldId, row,
 };
-use nexum_runtime::{Runtime, RuntimeConfig, RuntimeState, WorldFactory, WorldLifecycle};
-use nexum_simulation::{InputCommand, InputFrame, SimulationConfig, SystemDefinition, World};
+use nexum_execution::{InputCommand, InputFrame, Partition, PartitionConfig, SystemDefinition};
+use nexum_runtime::{PartitionFactory, PartitionLifecycle, Runtime, RuntimeConfig, RuntimeState};
 use nexum_storage::Change;
 use nexum_subscription::{DeliveredRow, OrderDirection, Query};
 use nexum_table::TableStore;
@@ -48,51 +48,47 @@ fn ensure_players(store: &mut TableStore) {
 }
 
 /// A world whose system consumes `spawn` commands as player rows.
-fn input_factory() -> WorldFactory {
-    Box::new(
-        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-            ensure_players(&mut store);
-            let mut world = World::new(id, store, sim)?;
-            world
-                .add_system(
-                    SystemDefinition::new(SystemId::from_u64(0), "consumer", 0, |ctx, frame| {
-                        for command in frame.commands() {
-                            if command.kind() == "spawn" {
-                                let id = command.payload().and_then(Value::as_u64).unwrap();
-                                ctx.insert("players", row![id, 10u64, 100i32])?;
-                            }
+fn input_factory() -> PartitionFactory {
+    Box::new(|id: WorldId, mut store: TableStore, sim: PartitionConfig| {
+        ensure_players(&mut store);
+        let mut world = Partition::new(id, store, sim)?;
+        world
+            .add_system(
+                SystemDefinition::new(SystemId::from_u64(0), "consumer", 0, |ctx, frame| {
+                    for command in frame.commands() {
+                        if command.kind() == "spawn" {
+                            let id = command.payload().and_then(Value::as_u64).unwrap();
+                            ctx.insert("players", row![id, 10u64, 100i32])?;
                         }
-                        Ok(())
-                    })
-                    .unwrap(),
-                )
-                .unwrap();
-            Ok(world)
-        },
-    )
+                    }
+                    Ok(())
+                })
+                .unwrap(),
+            )
+            .unwrap();
+        Ok(world)
+    })
 }
 
 /// A world whose system stores each command's source in the `id` column
 /// (verifies server-side principal stamping).
-fn source_factory() -> WorldFactory {
-    Box::new(
-        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-            ensure_players(&mut store);
-            let mut world = World::new(id, store, sim)?;
-            world
-                .add_system(
-                    SystemDefinition::new(SystemId::from_u64(0), "sourcer", 0, |ctx, frame| {
-                        for command in frame.commands() {
-                            ctx.insert("players", row![command.source(), 10u64, 0i32])?;
-                        }
-                        Ok(())
-                    })
-                    .unwrap(),
-                )
-                .unwrap();
-            Ok(world)
-        },
-    )
+fn source_factory() -> PartitionFactory {
+    Box::new(|id: WorldId, mut store: TableStore, sim: PartitionConfig| {
+        ensure_players(&mut store);
+        let mut world = Partition::new(id, store, sim)?;
+        world
+            .add_system(
+                SystemDefinition::new(SystemId::from_u64(0), "sourcer", 0, |ctx, frame| {
+                    for command in frame.commands() {
+                        ctx.insert("players", row![command.source(), 10u64, 0i32])?;
+                    }
+                    Ok(())
+                })
+                .unwrap(),
+            )
+            .unwrap();
+        Ok(world)
+    })
 }
 
 /// The `bump` reducer: `+10` to a player's health; emits a `bumped` event.
@@ -125,72 +121,66 @@ fn whoami(_ctx: &mut ReducerContext, args: &ReducerArgs) -> Result<Value> {
         .unwrap_or(Value::U64(0)))
 }
 
-fn reducer_factory() -> WorldFactory {
-    Box::new(
-        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-            ensure_players(&mut store);
-            let mut world = World::new(id, store, sim)?;
-            world
-                .native_mut()
-                .register(ReducerDefinition::new(ReducerId::from_u64(1), "bump", bump).unwrap())
-                .unwrap();
-            world
-                .native_mut()
-                .register(ReducerDefinition::new(ReducerId::from_u64(2), "whoami", whoami).unwrap())
-                .unwrap();
-            Ok(world)
-        },
-    )
+fn reducer_factory() -> PartitionFactory {
+    Box::new(|id: WorldId, mut store: TableStore, sim: PartitionConfig| {
+        ensure_players(&mut store);
+        let mut world = Partition::new(id, store, sim)?;
+        world
+            .native_mut()
+            .register(ReducerDefinition::new(ReducerId::from_u64(1), "bump", bump).unwrap())
+            .unwrap();
+        world
+            .native_mut()
+            .register(ReducerDefinition::new(ReducerId::from_u64(2), "whoami", whoami).unwrap())
+            .unwrap();
+        Ok(world)
+    })
 }
 
 /// A world whose system inserts one player row per tick.
-fn writer_factory() -> WorldFactory {
-    Box::new(
-        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-            ensure_players(&mut store);
-            let mut world = World::new(id, store, sim)?;
-            world
-                .add_system(
-                    SystemDefinition::new(SystemId::from_u64(0), "writer", 0, |ctx, _| {
-                        ctx.insert("players", row![ctx.tick().as_u64(), 10u64, 100i32])?;
-                        Ok(())
-                    })
-                    .unwrap(),
-                )
-                .unwrap();
-            Ok(world)
-        },
-    )
+fn writer_factory() -> PartitionFactory {
+    Box::new(|id: WorldId, mut store: TableStore, sim: PartitionConfig| {
+        ensure_players(&mut store);
+        let mut world = Partition::new(id, store, sim)?;
+        world
+            .add_system(
+                SystemDefinition::new(SystemId::from_u64(0), "writer", 0, |ctx, _| {
+                    ctx.insert("players", row![ctx.tick().as_u64(), 10u64, 100i32])?;
+                    Ok(())
+                })
+                .unwrap(),
+            )
+            .unwrap();
+        Ok(world)
+    })
 }
 
 /// A factory where world 1 fails on its first tick (after its writer).
-fn failing_factory() -> WorldFactory {
-    Box::new(
-        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-            ensure_players(&mut store);
-            let mut world = World::new(id, store, sim)?;
+fn failing_factory() -> PartitionFactory {
+    Box::new(|id: WorldId, mut store: TableStore, sim: PartitionConfig| {
+        ensure_players(&mut store);
+        let mut world = Partition::new(id, store, sim)?;
+        world
+            .add_system(
+                SystemDefinition::new(SystemId::from_u64(0), "writer", 0, |ctx, _| {
+                    ctx.insert("players", row![ctx.tick().as_u64(), 10u64, 100i32])?;
+                    Ok(())
+                })
+                .unwrap(),
+            )
+            .unwrap();
+        if id.as_u64() == 1 {
             world
                 .add_system(
-                    SystemDefinition::new(SystemId::from_u64(0), "writer", 0, |ctx, _| {
-                        ctx.insert("players", row![ctx.tick().as_u64(), 10u64, 100i32])?;
-                        Ok(())
+                    SystemDefinition::new(SystemId::from_u64(1), "fails", 10, |_ctx, _| {
+                        Err(Error::invalid_argument("boom"))
                     })
                     .unwrap(),
                 )
                 .unwrap();
-            if id.as_u64() == 1 {
-                world
-                    .add_system(
-                        SystemDefinition::new(SystemId::from_u64(1), "fails", 10, |_ctx, _| {
-                            Err(Error::invalid_argument("boom"))
-                        })
-                        .unwrap(),
-                    )
-                    .unwrap();
-            }
-            Ok(world)
-        },
-    )
+        }
+        Ok(world)
+    })
 }
 
 fn test_authenticator() -> TokenAuthenticator {
@@ -200,19 +190,19 @@ fn test_authenticator() -> TokenAuthenticator {
     auth
 }
 
-fn gateway_with(factory: WorldFactory, network: NetworkConfig) -> NetworkGateway {
+fn gateway_with(factory: PartitionFactory, network: NetworkConfig) -> NetworkGateway {
     let runtime = Runtime::new(RuntimeConfig::new(factory)).unwrap();
     NetworkGateway::new(runtime, network, Arc::new(test_authenticator())).unwrap()
 }
 
-fn create_world(gateway: &mut NetworkGateway, id: u64) {
+fn create_partition(gateway: &mut NetworkGateway, id: u64) {
     gateway
         .control()
-        .create_world(WorldId::from_u64(id), SimulationConfig::new())
+        .create_partition(WorldId::from_u64(id), PartitionConfig::new())
         .unwrap();
     gateway
         .control()
-        .start_world(WorldId::from_u64(id))
+        .start_partition(WorldId::from_u64(id))
         .unwrap();
 }
 
@@ -537,7 +527,7 @@ fn idle_broadcast_shares_one_frame_allocation_across_clients() {
     // delivered to every attached client as the SAME `Arc<[u8]>` allocation
     // — a refcount bump, never a per-client clone.
     let mut gateway = gateway_with(reducer_factory(), NetworkConfig::new());
-    create_world(&mut gateway, 0);
+    create_partition(&mut gateway, 0);
     let max = gateway.config().max_frame_payload();
     let (_, mut alice) = connect_client(&mut gateway);
     let (_, mut bob) = connect_client(&mut gateway);
@@ -565,7 +555,7 @@ fn attached_index_tracks_attach_detach_and_disconnect() {
     // attachment state — attach adds, detach removes, disconnect removes —
     // so the O(CCU) fan-out path never misses or double-sends a session.
     let mut gateway = gateway_with(reducer_factory(), NetworkConfig::new());
-    create_world(&mut gateway, 0);
+    create_partition(&mut gateway, 0);
     let max = gateway.config().max_frame_payload();
     let (alice_id, mut alice) = connect_client(&mut gateway);
     let (bob_id, mut bob) = connect_client(&mut gateway);
@@ -778,7 +768,7 @@ fn encode_rejects_oversized_messages() {
 #[test]
 fn protocol_violations_disconnect_the_connection() {
     let mut gateway = gateway_with(writer_factory(), NetworkConfig::new());
-    create_world(&mut gateway, 0);
+    create_partition(&mut gateway, 0);
     let (_, mut client) = connect_client(&mut gateway);
     client
         .try_send_frame(Arc::from(b"GARBAGEGARBAGE".to_vec()))
@@ -802,7 +792,7 @@ fn protocol_violations_disconnect_the_connection() {
 fn command_floods_are_rejected() {
     let config = NetworkConfig::new().with_max_commands_per_frame(1);
     let mut gateway = gateway_with(input_factory(), config);
-    create_world(&mut gateway, 0);
+    create_partition(&mut gateway, 0);
     let (_, mut client) = connect_client(&mut gateway);
     let max = gateway.config().max_frame_payload();
     join_world0(&mut gateway, &mut client, max, "alice-token");
@@ -820,7 +810,7 @@ fn command_floods_are_rejected() {
 fn subscription_floods_are_rejected() {
     let config = NetworkConfig::new().with_max_subscriptions_per_session(1);
     let mut gateway = gateway_with(writer_factory(), config);
-    create_world(&mut gateway, 0);
+    create_partition(&mut gateway, 0);
     let (_, mut client) = connect_client(&mut gateway);
     let max = gateway.config().max_frame_payload();
     join_world0(&mut gateway, &mut client, max, "alice-token");
@@ -842,7 +832,7 @@ fn subscription_floods_are_rejected() {
 #[test]
 fn invalid_credentials_are_rejected_and_leave_the_session_unauthenticated() {
     let mut gateway = gateway_with(writer_factory(), NetworkConfig::new());
-    create_world(&mut gateway, 0);
+    create_partition(&mut gateway, 0);
     let (_, mut client) = connect_client(&mut gateway);
     let max = gateway.config().max_frame_payload();
     handshake(&mut gateway, &mut client, max);
@@ -880,7 +870,7 @@ fn invalid_credentials_are_rejected_and_leave_the_session_unauthenticated() {
 #[test]
 fn operations_without_auth_or_attachment_are_rejected() {
     let mut gateway = gateway_with(input_factory(), NetworkConfig::new());
-    create_world(&mut gateway, 0);
+    create_partition(&mut gateway, 0);
     let (_, mut client) = connect_client(&mut gateway);
     let max = gateway.config().max_frame_payload();
     handshake(&mut gateway, &mut client, max);
@@ -917,7 +907,7 @@ fn operations_without_auth_or_attachment_are_rejected() {
 #[test]
 fn session_lifecycle_attach_detach_reconnect() {
     let mut gateway = gateway_with(input_factory(), NetworkConfig::new());
-    create_world(&mut gateway, 0);
+    create_partition(&mut gateway, 0);
     let (conn, mut client) = connect_client(&mut gateway);
     let max = gateway.config().max_frame_payload();
     join_world0(&mut gateway, &mut client, max, "alice-token");
@@ -967,8 +957,8 @@ fn session_lifecycle_attach_detach_reconnect() {
 #[test]
 fn duplicate_attachment_is_idempotent_and_cross_world_attach_is_rejected() {
     let mut gateway = gateway_with(input_factory(), NetworkConfig::new());
-    create_world(&mut gateway, 0);
-    create_world(&mut gateway, 1);
+    create_partition(&mut gateway, 0);
+    create_partition(&mut gateway, 1);
     let (conn, mut client) = connect_client(&mut gateway);
     let max = gateway.config().max_frame_payload();
     join_world0(&mut gateway, &mut client, max, "alice-token");
@@ -1014,7 +1004,7 @@ fn inputs_reach_the_attached_world() {
         // This test asserts the full change list on TickUpdate.
         NetworkConfig::new().with_tick_update_changes(true),
     );
-    create_world(&mut gateway, 0);
+    create_partition(&mut gateway, 0);
     let (_, mut client) = connect_client(&mut gateway);
     let max = gateway.config().max_frame_payload();
     join_world0(&mut gateway, &mut client, max, "alice-token");
@@ -1076,7 +1066,7 @@ fn command_sources_are_stamped_with_the_principal_id() {
         // This test asserts the full change list on TickUpdate.
         NetworkConfig::new().with_tick_update_changes(true),
     );
-    create_world(&mut gateway, 0);
+    create_partition(&mut gateway, 0);
     let (_, mut client) = connect_client(&mut gateway);
     let max = gateway.config().max_frame_payload();
     join_world0(&mut gateway, &mut client, max, "alice-token");
@@ -1106,8 +1096,8 @@ fn inputs_never_reach_another_world() {
         // This test asserts the full change list on TickUpdate.
         NetworkConfig::new().with_tick_update_changes(true),
     );
-    create_world(&mut gateway, 0);
-    create_world(&mut gateway, 1);
+    create_partition(&mut gateway, 0);
+    create_partition(&mut gateway, 1);
     let max = gateway.config().max_frame_payload();
 
     let (_, mut a) = connect_client(&mut gateway);
@@ -1149,7 +1139,7 @@ fn inputs_never_reach_another_world() {
 #[test]
 fn unknown_worlds_are_rejected_at_attach() {
     let mut gateway = gateway_with(writer_factory(), NetworkConfig::new());
-    create_world(&mut gateway, 0);
+    create_partition(&mut gateway, 0);
     let (_, mut client) = connect_client(&mut gateway);
     let max = gateway.config().max_frame_payload();
     handshake(&mut gateway, &mut client, max);
@@ -1176,7 +1166,7 @@ fn unknown_worlds_are_rejected_at_attach() {
 #[test]
 fn failed_worlds_reject_input() {
     let mut gateway = gateway_with(failing_factory(), NetworkConfig::new());
-    create_world(&mut gateway, 1);
+    create_partition(&mut gateway, 1);
     let (_, mut client) = connect_client(&mut gateway);
     let max = gateway.config().max_frame_payload();
     handshake(&mut gateway, &mut client, max);
@@ -1187,10 +1177,10 @@ fn failed_worlds_reject_input() {
     assert_eq!(
         gateway
             .runtime()
-            .world_status(WorldId::from_u64(1))
+            .partition_status(WorldId::from_u64(1))
             .unwrap()
             .state,
-        WorldLifecycle::Failed
+        PartitionLifecycle::Failed
     );
 
     let frame = InputFrame::new(TickId::from_u64(1));
@@ -1206,7 +1196,7 @@ fn failed_worlds_reject_input() {
 #[test]
 fn reducer_call_executes_in_the_next_tick_and_returns_a_correlated_result() {
     let mut gateway = gateway_with(reducer_factory(), NetworkConfig::new());
-    create_world(&mut gateway, 0);
+    create_partition(&mut gateway, 0);
     let (_, mut client) = connect_client(&mut gateway);
     let max = gateway.config().max_frame_payload();
     join_world0(&mut gateway, &mut client, max, "alice-token");
@@ -1258,7 +1248,7 @@ fn reducer_call_executes_in_the_next_tick_and_returns_a_correlated_result() {
 fn reducer_calls_require_auth_and_attachment_and_reject_duplicates() {
     let config = NetworkConfig::new().with_max_pending_calls_per_connection(1);
     let mut gateway = gateway_with(reducer_factory(), config);
-    create_world(&mut gateway, 0);
+    create_partition(&mut gateway, 0);
     let (_, mut client) = connect_client(&mut gateway);
     let max = gateway.config().max_frame_payload();
 
@@ -1389,7 +1379,7 @@ fn concurrent_calls_from_different_clients_do_not_collide_on_request_ids() {
     // the gateway namespaces correlation by its own allocated id and echoes
     // each client's own id back.
     let mut gateway = gateway_with(reducer_factory(), NetworkConfig::new());
-    create_world(&mut gateway, 0);
+    create_partition(&mut gateway, 0);
     let max = gateway.config().max_frame_payload();
     let (_, mut alice) = connect_client(&mut gateway);
     let (_, mut bob) = connect_client(&mut gateway);
@@ -1445,7 +1435,7 @@ fn concurrent_calls_from_different_clients_do_not_collide_on_request_ids() {
 #[test]
 fn stopped_world_answers_pending_reducer_calls_with_a_correlated_failure() {
     let mut gateway = gateway_with(reducer_factory(), NetworkConfig::new());
-    create_world(&mut gateway, 0);
+    create_partition(&mut gateway, 0);
     let (_, mut client) = connect_client(&mut gateway);
     let max = gateway.config().max_frame_payload();
     join_world0(&mut gateway, &mut client, max, "alice-token");
@@ -1463,7 +1453,10 @@ fn stopped_world_answers_pending_reducer_calls_with_a_correlated_failure() {
     gateway.process_inbound();
     assert_eq!(gateway.metrics().reducer_calls_accepted, 1);
 
-    gateway.control().stop_world(WorldId::from_u64(0)).unwrap();
+    gateway
+        .control()
+        .stop_partition(WorldId::from_u64(0))
+        .unwrap();
     gateway.step_worlds().unwrap();
 
     // The pending call is resolved with a correlated failure — never a hang.
@@ -1490,7 +1483,7 @@ fn stopped_world_answers_pending_reducer_calls_with_a_correlated_failure() {
 #[test]
 fn destroyed_world_answers_pending_reducer_calls_with_a_correlated_failure() {
     let mut gateway = gateway_with(reducer_factory(), NetworkConfig::new());
-    create_world(&mut gateway, 0);
+    create_partition(&mut gateway, 0);
     let (_, mut client) = connect_client(&mut gateway);
     let max = gateway.config().max_frame_payload();
     join_world0(&mut gateway, &mut client, max, "alice-token");
@@ -1510,7 +1503,7 @@ fn destroyed_world_answers_pending_reducer_calls_with_a_correlated_failure() {
     // Destroy the world while the call is pending.
     gateway
         .control()
-        .destroy_world(WorldId::from_u64(0))
+        .destroy_partition(WorldId::from_u64(0))
         .unwrap();
     gateway.step_worlds().unwrap();
 
@@ -1531,7 +1524,7 @@ fn destroyed_world_answers_pending_reducer_calls_with_a_correlated_failure() {
 #[test]
 fn calls_to_a_destroyed_world_are_rejected_with_a_correlated_failure() {
     let mut gateway = gateway_with(reducer_factory(), NetworkConfig::new());
-    create_world(&mut gateway, 0);
+    create_partition(&mut gateway, 0);
     let (_, mut client) = connect_client(&mut gateway);
     let max = gateway.config().max_frame_payload();
     join_world0(&mut gateway, &mut client, max, "alice-token");
@@ -1541,7 +1534,7 @@ fn calls_to_a_destroyed_world_are_rejected_with_a_correlated_failure() {
     // (never a generic Error, never a hang, never queued).
     gateway
         .control()
-        .destroy_world(WorldId::from_u64(0))
+        .destroy_partition(WorldId::from_u64(0))
         .unwrap();
     send_client(
         &mut client,
@@ -1568,7 +1561,7 @@ fn calls_to_a_destroyed_world_are_rejected_with_a_correlated_failure() {
 #[test]
 fn disconnecting_cleans_pending_reducer_calls_without_disturbing_the_world() {
     let mut gateway = gateway_with(reducer_factory(), NetworkConfig::new());
-    create_world(&mut gateway, 0);
+    create_partition(&mut gateway, 0);
     let (conn, mut client) = connect_client(&mut gateway);
     let max = gateway.config().max_frame_payload();
     join_world0(&mut gateway, &mut client, max, "alice-token");
@@ -1601,7 +1594,7 @@ fn disconnecting_cleans_pending_reducer_calls_without_disturbing_the_world() {
 #[test]
 fn concurrent_pending_calls_across_clients_never_cross_consume_results() {
     let mut gateway = gateway_with(reducer_factory(), NetworkConfig::new());
-    create_world(&mut gateway, 0);
+    create_partition(&mut gateway, 0);
     let max = gateway.config().max_frame_payload();
     let (_, mut a) = connect_client(&mut gateway);
     join_world0(&mut gateway, &mut a, max, "alice-token");
@@ -1648,7 +1641,7 @@ fn concurrent_pending_calls_across_clients_never_cross_consume_results() {
 #[test]
 fn stopped_world_calls_fail_and_restart_accepts_new_calls() {
     let mut gateway = gateway_with(reducer_factory(), NetworkConfig::new());
-    create_world(&mut gateway, 0);
+    create_partition(&mut gateway, 0);
     let (_, mut client) = connect_client(&mut gateway);
     let max = gateway.config().max_frame_payload();
     join_world0(&mut gateway, &mut client, max, "alice-token");
@@ -1665,7 +1658,10 @@ fn stopped_world_calls_fail_and_restart_accepts_new_calls() {
         max,
     );
     gateway.process_inbound();
-    gateway.control().stop_world(WorldId::from_u64(0)).unwrap();
+    gateway
+        .control()
+        .stop_partition(WorldId::from_u64(0))
+        .unwrap();
     gateway.step_worlds().unwrap();
     let msg = recv_server(&mut client, max);
     assert!(matches!(
@@ -1678,7 +1674,10 @@ fn stopped_world_calls_fail_and_restart_accepts_new_calls() {
     ));
 
     // Restart: a fresh call (new request id) executes on the next tick.
-    gateway.control().start_world(WorldId::from_u64(0)).unwrap();
+    gateway
+        .control()
+        .start_partition(WorldId::from_u64(0))
+        .unwrap();
     send_client(
         &mut client,
         &ClientMessage::CallReducer {
@@ -1706,7 +1705,7 @@ fn stopped_world_calls_fail_and_restart_accepts_new_calls() {
 #[test]
 fn subscription_snapshot_and_delta_delivery_and_unsubscribe() {
     let mut gateway = gateway_with(writer_factory(), NetworkConfig::new());
-    create_world(&mut gateway, 0);
+    create_partition(&mut gateway, 0);
     let (_, mut client) = connect_client(&mut gateway);
     let max = gateway.config().max_frame_payload();
     join_world0(&mut gateway, &mut client, max, "alice-token");
@@ -1748,7 +1747,7 @@ fn subscription_snapshot_and_delta_delivery_and_unsubscribe() {
 #[test]
 fn resync_regenerates_the_exact_view() {
     let mut gateway = gateway_with(writer_factory(), NetworkConfig::new());
-    create_world(&mut gateway, 0);
+    create_partition(&mut gateway, 0);
     let (_, mut client) = connect_client(&mut gateway);
     let max = gateway.config().max_frame_payload();
     join_world0(&mut gateway, &mut client, max, "alice-token");
@@ -1795,7 +1794,7 @@ fn resync_regenerates_the_exact_view() {
 #[test]
 fn failed_ticks_produce_no_updates() {
     let mut gateway = gateway_with(failing_factory(), NetworkConfig::new());
-    create_world(&mut gateway, 1);
+    create_partition(&mut gateway, 1);
     let (_, mut client) = connect_client(&mut gateway);
     let max = gateway.config().max_frame_payload();
     handshake(&mut gateway, &mut client, max);
@@ -1809,10 +1808,10 @@ fn failed_ticks_produce_no_updates() {
     assert_eq!(
         gateway
             .runtime()
-            .world_status(WorldId::from_u64(1))
+            .partition_status(WorldId::from_u64(1))
             .unwrap()
             .state,
-        WorldLifecycle::Failed
+        PartitionLifecycle::Failed
     );
 }
 
@@ -1824,7 +1823,7 @@ fn slow_client_is_marked_stale_without_blocking_the_world() {
         .with_max_queued_outbound_frames(1)
         .with_overflow_policy(OutboundOverflowPolicy::Stale);
     let mut gateway = gateway_with(writer_factory(), config);
-    create_world(&mut gateway, 0);
+    create_partition(&mut gateway, 0);
     let (_, mut client) = connect_client(&mut gateway);
     let max = gateway.config().max_frame_payload();
     join_world0(&mut gateway, &mut client, max, "alice-token");
@@ -1841,7 +1840,7 @@ fn slow_client_is_marked_stale_without_blocking_the_world() {
     assert_eq!(
         gateway
             .runtime()
-            .world_status(WorldId::from_u64(0))
+            .partition_status(WorldId::from_u64(0))
             .unwrap()
             .next_tick,
         TickId::from_u64(2)
@@ -1852,7 +1851,7 @@ fn slow_client_is_marked_stale_without_blocking_the_world() {
     assert_eq!(
         gateway
             .runtime()
-            .world_status(WorldId::from_u64(0))
+            .partition_status(WorldId::from_u64(0))
             .unwrap()
             .next_tick,
         TickId::from_u64(3)
@@ -1879,7 +1878,7 @@ fn overflow_disconnect_policy_closes_slow_connections() {
         .with_max_queued_outbound_frames(1)
         .with_overflow_policy(OutboundOverflowPolicy::Disconnect);
     let mut gateway = gateway_with(writer_factory(), config);
-    create_world(&mut gateway, 0);
+    create_partition(&mut gateway, 0);
     let (_, mut client) = connect_client(&mut gateway);
     let max = gateway.config().max_frame_payload();
     join_world0(&mut gateway, &mut client, max, "alice-token");
@@ -1892,7 +1891,7 @@ fn overflow_disconnect_policy_closes_slow_connections() {
     assert_eq!(
         gateway
             .runtime()
-            .world_status(WorldId::from_u64(0))
+            .partition_status(WorldId::from_u64(0))
             .unwrap()
             .next_tick,
         TickId::from_u64(2)
@@ -1903,7 +1902,7 @@ fn overflow_disconnect_policy_closes_slow_connections() {
 #[test]
 fn slow_client_never_blocks_other_clients() {
     let mut gateway = gateway_with(writer_factory(), NetworkConfig::new());
-    create_world(&mut gateway, 0);
+    create_partition(&mut gateway, 0);
     let max = gateway.config().max_frame_payload();
 
     // Client 1: outbound cap 1 (will fall stale). Client 2: healthy.
@@ -1939,28 +1938,28 @@ fn control_plane_lifecycle_and_health() {
 
     gateway
         .control()
-        .create_world(world, SimulationConfig::new())
+        .create_partition(world, PartitionConfig::new())
         .unwrap();
     assert_eq!(
-        gateway.control().world_status(world).unwrap().state,
-        WorldLifecycle::Created
+        gateway.control().partition_status(world).unwrap().state,
+        PartitionLifecycle::Created
     );
     assert!(
         gateway
             .control()
-            .create_world(world, SimulationConfig::new())
+            .create_partition(world, PartitionConfig::new())
             .is_err()
     );
 
-    gateway.control().start_world(world).unwrap();
+    gateway.control().start_partition(world).unwrap();
     assert_eq!(
-        gateway.control().world_status(world).unwrap().state,
-        WorldLifecycle::Running
+        gateway.control().partition_status(world).unwrap().state,
+        PartitionLifecycle::Running
     );
 
     let health = gateway.control().health();
     assert_eq!(health.worlds, 1);
-    assert_eq!(health.running_worlds, 1);
+    assert_eq!(health.running_partitions, 1);
     assert_eq!(health.workers, 1);
     assert_eq!(health.workers_running, 1);
     assert!(health.uptime_ns > 0);
@@ -1969,9 +1968,9 @@ fn control_plane_lifecycle_and_health() {
     assert_eq!(gateway.control().metrics().ticks_succeeded, 1);
 
     // Control-plane step never bypasses the runtime commit path.
-    gateway.control().stop_world(world).unwrap();
-    gateway.control().destroy_world(world).unwrap();
-    assert!(gateway.control().world_status(world).is_err());
+    gateway.control().stop_partition(world).unwrap();
+    gateway.control().destroy_partition(world).unwrap();
+    assert!(gateway.control().partition_status(world).is_err());
 
     gateway.control().shutdown().unwrap();
     assert_eq!(gateway.runtime().state(), RuntimeState::Stopped);
@@ -1983,7 +1982,7 @@ fn control_plane_lifecycle_and_health() {
 #[test]
 fn metrics_count_connections_sessions_and_frames() {
     let mut gateway = gateway_with(input_factory(), NetworkConfig::new());
-    create_world(&mut gateway, 0);
+    create_partition(&mut gateway, 0);
     let max = gateway.config().max_frame_payload();
 
     let (_, mut client1) = connect_client(&mut gateway);
@@ -2058,7 +2057,7 @@ fn input_frame(tick: u64, kind: &str, payload: Option<Value>) -> InputFrame {
 #[test]
 fn default_policy_preserves_phase_13_behavior() {
     let mut gateway = gateway_with(input_factory(), NetworkConfig::new());
-    create_world(&mut gateway, 0);
+    create_partition(&mut gateway, 0);
     let max = gateway.config().max_frame_payload();
     let (_id, mut client) = connect_client(&mut gateway);
     handshake(&mut gateway, &mut client, max);
@@ -2112,7 +2111,7 @@ fn default_policy_preserves_phase_13_behavior() {
 fn policy_can_deny_attach() {
     let mut gateway = gateway_with(input_factory(), NetworkConfig::new());
     gateway.set_policy(Box::new(DenyAttachPolicy));
-    create_world(&mut gateway, 0);
+    create_partition(&mut gateway, 0);
     let max = gateway.config().max_frame_payload();
     let (_id, mut client) = connect_client(&mut gateway);
     handshake(&mut gateway, &mut client, max);
@@ -2144,7 +2143,7 @@ fn policy_can_deny_attach() {
 fn policy_can_deny_input() {
     let mut gateway = gateway_with(input_factory(), NetworkConfig::new());
     gateway.set_policy(Box::new(DenyInputPolicy));
-    create_world(&mut gateway, 0);
+    create_partition(&mut gateway, 0);
     let max = gateway.config().max_frame_payload();
     let (_id, mut client) = connect_client(&mut gateway);
     handshake(&mut gateway, &mut client, max);
@@ -2171,7 +2170,7 @@ fn policy_can_deny_input() {
 fn policy_denial_echoes_request_id() {
     let mut gateway = gateway_with(input_factory(), NetworkConfig::new());
     gateway.set_policy(Box::new(DenyReducerPolicy));
-    create_world(&mut gateway, 0);
+    create_partition(&mut gateway, 0);
     let max = gateway.config().max_frame_payload();
     let (_id, mut client) = connect_client(&mut gateway);
     handshake(&mut gateway, &mut client, max);
@@ -2211,7 +2210,7 @@ fn policy_denial_echoes_request_id() {
 fn server_reserved_request_ids_are_rejected_from_clients() {
     let config = NetworkConfig::new();
     let mut gateway = gateway_with(reducer_factory(), config);
-    create_world(&mut gateway, 0);
+    create_partition(&mut gateway, 0);
     let (_, mut client) = connect_client(&mut gateway);
     let max = gateway.config().max_frame_payload();
 
@@ -2246,7 +2245,7 @@ fn server_reserved_request_ids_are_rejected_from_clients() {
 #[test]
 fn reducer_calls_stamp_the_authenticated_caller_identity() {
     let mut gateway = gateway_with(reducer_factory(), NetworkConfig::new());
-    create_world(&mut gateway, 0);
+    create_partition(&mut gateway, 0);
     let (_, mut client) = connect_client(&mut gateway);
     let max = gateway.config().max_frame_payload();
     join_world0(&mut gateway, &mut client, max, "alice-token");
@@ -2302,7 +2301,7 @@ fn rate_gateway(limits: crate::rate::RateLimitConfig) -> NetworkGateway {
 #[test]
 fn auth_rate_limit_rejects_after_the_window_budget() {
     let mut gateway = rate_gateway(crate::rate::RateLimitConfig::new().with_auth_per_window(2, 60));
-    create_world(&mut gateway, 0);
+    create_partition(&mut gateway, 0);
     let (_, mut client) = connect_client(&mut gateway);
     let max = gateway.config().max_frame_payload();
 
@@ -2349,7 +2348,7 @@ fn auth_rate_limit_rejects_after_the_window_budget() {
 #[test]
 fn input_rate_limit_rejects_after_the_second_budget() {
     let mut gateway = rate_gateway(crate::rate::RateLimitConfig::new().with_input_per_sec(2));
-    create_world(&mut gateway, 0);
+    create_partition(&mut gateway, 0);
     let (_, mut client) = connect_client(&mut gateway);
     let max = gateway.config().max_frame_payload();
     join_world0(&mut gateway, &mut client, max, "alice-token");
@@ -2382,7 +2381,7 @@ fn input_rate_limit_rejects_after_the_second_budget() {
 #[test]
 fn reducer_rate_limit_rejects_excess_calls() {
     let mut gateway = rate_gateway(crate::rate::RateLimitConfig::new().with_reducer_per_sec(2));
-    create_world(&mut gateway, 0);
+    create_partition(&mut gateway, 0);
     let (_, mut client) = connect_client(&mut gateway);
     let max = gateway.config().max_frame_payload();
     join_world0(&mut gateway, &mut client, max, "alice-token");
@@ -2423,7 +2422,7 @@ fn reducer_rate_limit_rejects_excess_calls() {
 fn subscribe_rate_limit_rejects_excess_subscriptions() {
     let mut gateway =
         rate_gateway(crate::rate::RateLimitConfig::new().with_subscribe_per_window(1, 60));
-    create_world(&mut gateway, 0);
+    create_partition(&mut gateway, 0);
     let (_, mut client) = connect_client(&mut gateway);
     let max = gateway.config().max_frame_payload();
     join_world0(&mut gateway, &mut client, max, "alice-token");
@@ -2469,7 +2468,7 @@ fn subscribe_rate_limit_rejects_excess_subscriptions() {
 fn resync_rate_limit_rejects_excess_resyncs() {
     let mut gateway =
         rate_gateway(crate::rate::RateLimitConfig::new().with_resync_per_window(1, 60));
-    create_world(&mut gateway, 0);
+    create_partition(&mut gateway, 0);
     let (_, mut client) = connect_client(&mut gateway);
     let max = gateway.config().max_frame_payload();
     join_world0(&mut gateway, &mut client, max, "alice-token");
@@ -2515,7 +2514,7 @@ fn resync_rate_limit_rejects_excess_resyncs() {
 fn rate_limits_are_per_connection_not_global() {
     // A tight input budget on one connection must not throttle another.
     let mut gateway = rate_gateway(crate::rate::RateLimitConfig::new().with_input_per_sec(1));
-    create_world(&mut gateway, 0);
+    create_partition(&mut gateway, 0);
     let (_, mut client_a) = connect_client(&mut gateway);
     let (_, mut client_b) = connect_client(&mut gateway);
     let max = gateway.config().max_frame_payload();

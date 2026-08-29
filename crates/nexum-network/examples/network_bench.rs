@@ -11,13 +11,13 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use nexum_core::{ColumnType, SystemId, TickId, WorldId, row};
+use nexum_execution::{InputCommand, InputFrame, Partition, PartitionConfig, SystemDefinition};
 use nexum_network::{
     Connection, MemoryConnection, MemoryTransport, NetworkConfig, NetworkGateway, Principal,
     TokenAuthenticator,
     protocol::{self, ClientMessage, ServerMessage},
 };
-use nexum_runtime::{Runtime, RuntimeConfig, WorldFactory};
-use nexum_simulation::{InputCommand, InputFrame, SimulationConfig, SystemDefinition, World};
+use nexum_runtime::{PartitionFactory, Runtime, RuntimeConfig};
 use nexum_subscription::Query;
 use nexum_table::TableStore;
 
@@ -54,52 +54,48 @@ fn ensure_players(store: &mut TableStore) {
 }
 
 /// A world whose system consumes `spawn` commands as player rows.
-fn input_factory() -> WorldFactory {
-    Box::new(
-        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-            ensure_players(&mut store);
-            let mut world = World::new(id, store, sim)?;
-            world
-                .add_system(
-                    SystemDefinition::new(SystemId::from_u64(0), "consumer", 0, |ctx, frame| {
-                        for command in frame.commands() {
-                            if command.kind() == "spawn" {
-                                let id = command
-                                    .payload()
-                                    .and_then(nexum_core::Value::as_u64)
-                                    .unwrap();
-                                ctx.insert("players", row![id, 10u64, 100i32])?;
-                            }
+fn input_factory() -> PartitionFactory {
+    Box::new(|id: WorldId, mut store: TableStore, sim: PartitionConfig| {
+        ensure_players(&mut store);
+        let mut world = Partition::new(id, store, sim)?;
+        world
+            .add_system(
+                SystemDefinition::new(SystemId::from_u64(0), "consumer", 0, |ctx, frame| {
+                    for command in frame.commands() {
+                        if command.kind() == "spawn" {
+                            let id = command
+                                .payload()
+                                .and_then(nexum_core::Value::as_u64)
+                                .unwrap();
+                            ctx.insert("players", row![id, 10u64, 100i32])?;
                         }
-                        Ok(())
-                    })
-                    .unwrap(),
-                )
-                .unwrap();
-            Ok(world)
-        },
-    )
+                    }
+                    Ok(())
+                })
+                .unwrap(),
+            )
+            .unwrap();
+        Ok(world)
+    })
 }
 
 /// A world whose system inserts one player row per tick (for subscription
 /// fan-out and slow-client scenarios).
-fn writer_factory() -> WorldFactory {
-    Box::new(
-        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-            ensure_players(&mut store);
-            let mut world = World::new(id, store, sim)?;
-            world
-                .add_system(
-                    SystemDefinition::new(SystemId::from_u64(0), "writer", 0, |ctx, _| {
-                        ctx.insert("players", row![ctx.tick().as_u64(), 10u64, 100i32])?;
-                        Ok(())
-                    })
-                    .unwrap(),
-                )
-                .unwrap();
-            Ok(world)
-        },
-    )
+fn writer_factory() -> PartitionFactory {
+    Box::new(|id: WorldId, mut store: TableStore, sim: PartitionConfig| {
+        ensure_players(&mut store);
+        let mut world = Partition::new(id, store, sim)?;
+        world
+            .add_system(
+                SystemDefinition::new(SystemId::from_u64(0), "writer", 0, |ctx, _| {
+                    ctx.insert("players", row![ctx.tick().as_u64(), 10u64, 100i32])?;
+                    Ok(())
+                })
+                .unwrap(),
+            )
+            .unwrap();
+        Ok(world)
+    })
 }
 
 fn auth() -> Arc<TokenAuthenticator> {
@@ -108,7 +104,7 @@ fn auth() -> Arc<TokenAuthenticator> {
     Arc::new(auth)
 }
 
-fn gateway_with(factory: WorldFactory) -> NetworkGateway {
+fn gateway_with(factory: PartitionFactory) -> NetworkGateway {
     let runtime = Runtime::new(RuntimeConfig::new(factory)).unwrap();
     NetworkGateway::new(runtime, NetworkConfig::new(), auth()).unwrap()
 }
@@ -204,9 +200,12 @@ fn main() {
         let mut gateway = gateway_with(writer_factory());
         gateway
             .control()
-            .create_world(WorldId::from_u64(0), SimulationConfig::new())
+            .create_partition(WorldId::from_u64(0), PartitionConfig::new())
             .unwrap();
-        gateway.control().start_world(WorldId::from_u64(0)).unwrap();
+        gateway
+            .control()
+            .start_partition(WorldId::from_u64(0))
+            .unwrap();
         bench("session creation (h+a+a)", iterations, || {
             let mut client = open_client(&mut gateway, 4096);
             join_world(&mut gateway, &mut client, max);
@@ -218,9 +217,12 @@ fn main() {
         let mut gateway = gateway_with(input_factory());
         gateway
             .control()
-            .create_world(WorldId::from_u64(0), SimulationConfig::new())
+            .create_partition(WorldId::from_u64(0), PartitionConfig::new())
             .unwrap();
-        gateway.control().start_world(WorldId::from_u64(0)).unwrap();
+        gateway
+            .control()
+            .start_partition(WorldId::from_u64(0))
+            .unwrap();
         let mut client = open_client(&mut gateway, 4096);
         join_world(&mut gateway, &mut client, max);
         let mut tick = 0u64;
@@ -242,9 +244,12 @@ fn main() {
         let mut gateway = gateway_with(writer_factory());
         gateway
             .control()
-            .create_world(WorldId::from_u64(0), SimulationConfig::new())
+            .create_partition(WorldId::from_u64(0), PartitionConfig::new())
             .unwrap();
-        gateway.control().start_world(WorldId::from_u64(0)).unwrap();
+        gateway
+            .control()
+            .start_partition(WorldId::from_u64(0))
+            .unwrap();
         let mut client = open_client(&mut gateway, 4096);
         join_world(&mut gateway, &mut client, max);
         // Subscribe once; drain the Initial snapshot so future deltas land.
@@ -272,9 +277,12 @@ fn main() {
         let mut gateway = gateway_with(writer_factory());
         gateway
             .control()
-            .create_world(WorldId::from_u64(0), SimulationConfig::new())
+            .create_partition(WorldId::from_u64(0), PartitionConfig::new())
             .unwrap();
-        gateway.control().start_world(WorldId::from_u64(0)).unwrap();
+        gateway
+            .control()
+            .start_partition(WorldId::from_u64(0))
+            .unwrap();
         let mut client = open_client(&mut gateway, 100_000);
         join_world(&mut gateway, &mut client, max);
         let update = ServerMessage::Pong { nonce: 7 };
@@ -289,9 +297,12 @@ fn main() {
         let mut gateway = gateway_with(writer_factory());
         gateway
             .control()
-            .create_world(WorldId::from_u64(0), SimulationConfig::new())
+            .create_partition(WorldId::from_u64(0), PartitionConfig::new())
             .unwrap();
-        gateway.control().start_world(WorldId::from_u64(0)).unwrap();
+        gateway
+            .control()
+            .start_partition(WorldId::from_u64(0))
+            .unwrap();
         let mut clients = Vec::new();
         for _ in 0..count {
             let mut client = open_client(&mut gateway, 4096);
@@ -317,9 +328,12 @@ fn main() {
         let mut gateway = NetworkGateway::new(runtime, config, auth()).unwrap();
         gateway
             .control()
-            .create_world(WorldId::from_u64(0), SimulationConfig::new())
+            .create_partition(WorldId::from_u64(0), PartitionConfig::new())
             .unwrap();
-        gateway.control().start_world(WorldId::from_u64(0)).unwrap();
+        gateway
+            .control()
+            .start_partition(WorldId::from_u64(0))
+            .unwrap();
         let mut client = open_client(&mut gateway, 100_000);
         join_world(&mut gateway, &mut client, max);
         for i in 0..500 {
@@ -354,9 +368,12 @@ fn main() {
         let mut gateway = gateway_with(writer_factory());
         gateway
             .control()
-            .create_world(WorldId::from_u64(0), SimulationConfig::new())
+            .create_partition(WorldId::from_u64(0), PartitionConfig::new())
             .unwrap();
-        gateway.control().start_world(WorldId::from_u64(0)).unwrap();
+        gateway
+            .control()
+            .start_partition(WorldId::from_u64(0))
+            .unwrap();
         let mut client = open_client(&mut gateway, 4096);
         join_world(&mut gateway, &mut client, max);
         let mut request = 0u64;
@@ -399,9 +416,12 @@ fn main() {
         let mut gateway = gateway_with(writer_factory());
         gateway
             .control()
-            .create_world(WorldId::from_u64(0), SimulationConfig::new())
+            .create_partition(WorldId::from_u64(0), PartitionConfig::new())
             .unwrap();
-        gateway.control().start_world(WorldId::from_u64(0)).unwrap();
+        gateway
+            .control()
+            .start_partition(WorldId::from_u64(0))
+            .unwrap();
         let mut slow = open_client(&mut gateway, 1);
         join_world(&mut gateway, &mut slow, max);
         let mut fast = open_client(&mut gateway, 100_000);

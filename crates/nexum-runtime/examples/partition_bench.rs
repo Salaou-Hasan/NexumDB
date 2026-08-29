@@ -11,9 +11,9 @@ use std::time::Instant;
 
 use nexum_core::row;
 use nexum_core::{ColumnType, PartitionId, ReducerId, SystemId, WorldId};
+use nexum_execution::{Partition, PartitionConfig, SystemDefinition};
 use nexum_reducer::{ReducerArgs, ReducerDefinition};
-use nexum_runtime::{PersistencePolicy, Runtime, RuntimeConfig, WorldFactory};
-use nexum_simulation::{SimulationConfig, SystemDefinition, World};
+use nexum_runtime::{PartitionFactory, PersistencePolicy, Runtime, RuntimeConfig};
 use nexum_subscription::Query;
 use nexum_table::TableStore;
 
@@ -61,23 +61,57 @@ fn transfer_handler(
 
 /// A partition world with a `transfer` handler and a ring sender (1 message
 /// per tick to the next partition). Capture-free.
-fn partition_factory() -> WorldFactory {
-    Box::new(
-        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-            ensure_ledger(&mut store);
-            let mut world = World::new(id, store, sim)?;
-            world
-                .native_mut()
-                .register(
-                    ReducerDefinition::new(ReducerId::from_u64(0), "transfer", transfer_handler)
-                        .unwrap(),
-                )
-                .unwrap();
-            world.add_system(
-                SystemDefinition::new(SystemId::from_u64(0), "sender", 0, |ctx, _| {
-                    let from = ctx.partition().as_u64();
-                    let target = (from + 1) % 4;
-                    let tick = ctx.tick().as_u64();
+fn partition_factory() -> PartitionFactory {
+    Box::new(|id: WorldId, mut store: TableStore, sim: PartitionConfig| {
+        ensure_ledger(&mut store);
+        let mut world = Partition::new(id, store, sim)?;
+        world
+            .native_mut()
+            .register(
+                ReducerDefinition::new(ReducerId::from_u64(0), "transfer", transfer_handler)
+                    .unwrap(),
+            )
+            .unwrap();
+        world.add_system(
+            SystemDefinition::new(SystemId::from_u64(0), "sender", 0, |ctx, _| {
+                let from = ctx.partition().as_u64();
+                let target = (from + 1) % 4;
+                let tick = ctx.tick().as_u64();
+                ctx.send_to(
+                    PartitionId::from_u64(target),
+                    "transfer",
+                    ReducerArgs::new()
+                        .insert("amount", 10i64)
+                        .insert("to", target)
+                        .insert("from", from)
+                        .insert("seq", tick),
+                )?;
+                Ok(())
+            })
+            .unwrap(),
+        )?;
+        Ok(world)
+    })
+}
+
+/// A message-heavy variant: 10 messages per tick per sender. Capture-free.
+fn partition_bulk_factory() -> PartitionFactory {
+    Box::new(|id: WorldId, mut store: TableStore, sim: PartitionConfig| {
+        ensure_ledger(&mut store);
+        let mut world = Partition::new(id, store, sim)?;
+        world
+            .native_mut()
+            .register(
+                ReducerDefinition::new(ReducerId::from_u64(0), "transfer", transfer_handler)
+                    .unwrap(),
+            )
+            .unwrap();
+        world.add_system(
+            SystemDefinition::new(SystemId::from_u64(0), "bulk", 0, |ctx, _| {
+                let from = ctx.partition().as_u64();
+                let target = (from + 1) % 4;
+                let tick = ctx.tick().as_u64();
+                for i in 0..10u64 {
                     ctx.send_to(
                         PartitionId::from_u64(target),
                         "transfer",
@@ -85,53 +119,15 @@ fn partition_factory() -> WorldFactory {
                             .insert("amount", 10i64)
                             .insert("to", target)
                             .insert("from", from)
-                            .insert("seq", tick),
+                            .insert("seq", tick * 10 + i),
                     )?;
-                    Ok(())
-                })
-                .unwrap(),
-            )?;
-            Ok(world)
-        },
-    )
-}
-
-/// A message-heavy variant: 10 messages per tick per sender. Capture-free.
-fn partition_bulk_factory() -> WorldFactory {
-    Box::new(
-        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-            ensure_ledger(&mut store);
-            let mut world = World::new(id, store, sim)?;
-            world
-                .native_mut()
-                .register(
-                    ReducerDefinition::new(ReducerId::from_u64(0), "transfer", transfer_handler)
-                        .unwrap(),
-                )
-                .unwrap();
-            world.add_system(
-                SystemDefinition::new(SystemId::from_u64(0), "bulk", 0, |ctx, _| {
-                    let from = ctx.partition().as_u64();
-                    let target = (from + 1) % 4;
-                    let tick = ctx.tick().as_u64();
-                    for i in 0..10u64 {
-                        ctx.send_to(
-                            PartitionId::from_u64(target),
-                            "transfer",
-                            ReducerArgs::new()
-                                .insert("amount", 10i64)
-                                .insert("to", target)
-                                .insert("from", from)
-                                .insert("seq", tick * 10 + i),
-                        )?;
-                    }
-                    Ok(())
-                })
-                .unwrap(),
-            )?;
-            Ok(world)
-        },
-    )
+                }
+                Ok(())
+            })
+            .unwrap(),
+        )?;
+        Ok(world)
+    })
 }
 
 fn temp_dir(name: &str) -> std::path::PathBuf {
@@ -152,12 +148,12 @@ fn main() {
         let mut runtime = Runtime::new(RuntimeConfig::new(partition_factory())).unwrap();
         for p in 0..count as u64 {
             runtime
-                .create_world(WorldId::from_u64(p), SimulationConfig::new())
+                .create_partition(WorldId::from_u64(p), PartitionConfig::new())
                 .unwrap();
             runtime
                 .register_partition(PartitionId::from_u64(p), WorldId::from_u64(p))
                 .unwrap();
-            runtime.start_world(WorldId::from_u64(p)).unwrap();
+            runtime.start_partition(WorldId::from_u64(p)).unwrap();
         }
         bench(
             &format!("{count} partitions, 1 msg/tick (step)"),
@@ -173,12 +169,12 @@ fn main() {
         let mut runtime = Runtime::new(RuntimeConfig::new(partition_bulk_factory())).unwrap();
         for p in 0..4u64 {
             runtime
-                .create_world(WorldId::from_u64(p), SimulationConfig::new())
+                .create_partition(WorldId::from_u64(p), PartitionConfig::new())
                 .unwrap();
             runtime
                 .register_partition(PartitionId::from_u64(p), WorldId::from_u64(p))
                 .unwrap();
-            runtime.start_world(WorldId::from_u64(p)).unwrap();
+            runtime.start_partition(WorldId::from_u64(p)).unwrap();
         }
         bench("4 partitions, 10 msg/tick (step)", iterations / 2, || {
             runtime.step().unwrap();
@@ -191,12 +187,12 @@ fn main() {
         let mut runtime = Runtime::new(RuntimeConfig::new(partition_factory())).unwrap();
         for p in 0..4u64 {
             runtime
-                .create_world(WorldId::from_u64(p), SimulationConfig::new())
+                .create_partition(WorldId::from_u64(p), PartitionConfig::new())
                 .unwrap();
             runtime
                 .register_partition(PartitionId::from_u64(p), WorldId::from_u64(p))
                 .unwrap();
-            runtime.start_world(WorldId::from_u64(p)).unwrap();
+            runtime.start_partition(WorldId::from_u64(p)).unwrap();
         }
         let mut seq = 0u64;
         bench("external send_message (routed)", iterations, || {
@@ -221,12 +217,12 @@ fn main() {
         let mut runtime = Runtime::new(RuntimeConfig::new(partition_factory())).unwrap();
         for p in 0..2u64 {
             runtime
-                .create_world(WorldId::from_u64(p), SimulationConfig::new())
+                .create_partition(WorldId::from_u64(p), PartitionConfig::new())
                 .unwrap();
             runtime
                 .register_partition(PartitionId::from_u64(p), WorldId::from_u64(p))
                 .unwrap();
-            runtime.start_world(WorldId::from_u64(p)).unwrap();
+            runtime.start_partition(WorldId::from_u64(p)).unwrap();
         }
         bench(
             "2 partitions, delivery + commit (2 steps)",
@@ -248,12 +244,12 @@ fn main() {
         .unwrap();
         for p in 0..2u64 {
             runtime
-                .create_world(WorldId::from_u64(p), SimulationConfig::new())
+                .create_partition(WorldId::from_u64(p), PartitionConfig::new())
                 .unwrap();
             runtime
                 .register_partition(PartitionId::from_u64(p), WorldId::from_u64(p))
                 .unwrap();
-            runtime.start_world(WorldId::from_u64(p)).unwrap();
+            runtime.start_partition(WorldId::from_u64(p)).unwrap();
         }
         bench("partition tick + WAL append", iterations / 2, || {
             runtime.step().unwrap();
@@ -266,19 +262,19 @@ fn main() {
         let mut runtime = Runtime::new(RuntimeConfig::new(partition_factory())).unwrap();
         let world = WorldId::from_u64(1);
         runtime
-            .create_world(WorldId::from_u64(0), SimulationConfig::new())
+            .create_partition(WorldId::from_u64(0), PartitionConfig::new())
             .unwrap();
         runtime
             .register_partition(PartitionId::from_u64(0), WorldId::from_u64(0))
             .unwrap();
-        runtime.start_world(WorldId::from_u64(0)).unwrap();
+        runtime.start_partition(WorldId::from_u64(0)).unwrap();
         runtime
-            .create_world(world, SimulationConfig::new())
+            .create_partition(world, PartitionConfig::new())
             .unwrap();
         runtime
             .register_partition(PartitionId::from_u64(1), world)
             .unwrap();
-        runtime.start_world(world).unwrap();
+        runtime.start_partition(world).unwrap();
         let sub = runtime
             .subscribe(world, Query::builder("ledger").build().unwrap())
             .unwrap();

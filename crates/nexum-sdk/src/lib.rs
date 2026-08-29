@@ -12,7 +12,7 @@
 //!
 //! ```text
 //! Client ──▶ ClientTransport ──▶ protocol frames ──▶ NetworkGateway ──▶ Runtime
-//!                                                                         │ World::tick
+//!                                                                         │ Partition::tick
 //!                                                                         ▼
 //!                                                                   Vec<Change>
 //! ```

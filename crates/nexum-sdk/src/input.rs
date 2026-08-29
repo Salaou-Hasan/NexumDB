@@ -7,7 +7,7 @@
 //! (client-supplied sources are ignored, so identity can never be forged).
 
 use nexum_core::{Result, TickId};
-use nexum_simulation::{InputCommand, InputFrame};
+use nexum_execution::{InputCommand, InputFrame};
 
 use crate::client::Client;
 use crate::error::SdkError;

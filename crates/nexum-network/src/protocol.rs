@@ -21,8 +21,8 @@ use nexum_core::binary::{
 use nexum_core::{
     Error, Row, RowId, SubscriptionId, TickId, TransactionId, Value, Version, WorldId,
 };
+use nexum_execution::{InputCommand, InputFrame};
 use nexum_reducer::{ReducerArgs, ReducerEvent};
-use nexum_simulation::{InputCommand, InputFrame};
 use nexum_storage::Change;
 use nexum_subscription::{ComparisonOp, DeliveredRow, OrderDirection, Query};
 

@@ -9,13 +9,15 @@ use std::sync::Arc;
 use nexum_core::{
     ColumnType, Error, ReducerId, Result, Row, RowId, SystemId, TickId, Value, WorldId, row,
 };
+use nexum_execution::{InputCommand, InputFrame, Partition, PartitionConfig, SystemDefinition};
 use nexum_network::{NetworkConfig, NetworkGateway, Principal, TokenAuthenticator};
 use nexum_reducer::{ReducerArgs, ReducerContext, ReducerDefinition};
-use nexum_runtime::{PersistencePolicy, Runtime, RuntimeConfig, WorldFactory, WorldLifecycle};
+use nexum_runtime::{
+    PartitionFactory, PartitionLifecycle, PersistencePolicy, Runtime, RuntimeConfig,
+};
 use nexum_sdk::{
     Client, SdkConfig, ServerEvent, protocol::PROTOCOL_VERSION, transport::ClientTransport,
 };
-use nexum_simulation::{InputCommand, InputFrame, SimulationConfig, SystemDefinition, World};
 use nexum_subscription::Query;
 use nexum_table::TableStore;
 use nexum_wasm::{WasmLimits, WasmModuleRegistry};
@@ -65,90 +67,84 @@ fn bump(ctx: &mut ReducerContext, args: &ReducerArgs) -> Result<Value> {
 
 /// A world whose system consumes `spawn` commands as player rows, with the
 /// native `bump` reducer registered.
-fn input_factory() -> WorldFactory {
-    Box::new(
-        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-            ensure_players(&mut store);
-            let mut world = World::new(id, store, sim)?;
-            world
-                .add_system(
-                    SystemDefinition::new(SystemId::from_u64(0), "consumer", 0, |ctx, frame| {
-                        for command in frame.commands() {
-                            if command.kind() == "spawn" {
-                                let id = command.payload().and_then(Value::as_u64).unwrap();
-                                ctx.insert("players", row![id, 10u64, 100i32])?;
-                            }
+fn input_factory() -> PartitionFactory {
+    Box::new(|id: WorldId, mut store: TableStore, sim: PartitionConfig| {
+        ensure_players(&mut store);
+        let mut world = Partition::new(id, store, sim)?;
+        world
+            .add_system(
+                SystemDefinition::new(SystemId::from_u64(0), "consumer", 0, |ctx, frame| {
+                    for command in frame.commands() {
+                        if command.kind() == "spawn" {
+                            let id = command.payload().and_then(Value::as_u64).unwrap();
+                            ctx.insert("players", row![id, 10u64, 100i32])?;
                         }
-                        Ok(())
-                    })
-                    .unwrap(),
-                )
-                .unwrap();
-            world
-                .native_mut()
-                .register(ReducerDefinition::new(ReducerId::from_u64(1), "bump", bump).unwrap())
-                .unwrap();
-            Ok(world)
-        },
-    )
+                    }
+                    Ok(())
+                })
+                .unwrap(),
+            )
+            .unwrap();
+        world
+            .native_mut()
+            .register(ReducerDefinition::new(ReducerId::from_u64(1), "bump", bump).unwrap())
+            .unwrap();
+        Ok(world)
+    })
 }
 
 /// A world that additionally registers a WASM reducer returning 42.
-fn wasm_factory() -> WorldFactory {
-    Box::new(
-        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-            ensure_players(&mut store);
-            let mut world = World::new(id, store, sim)?;
-            world
-                .add_system(
-                    SystemDefinition::new(SystemId::from_u64(0), "consumer", 0, |ctx, frame| {
-                        for command in frame.commands() {
-                            if command.kind() == "spawn" {
-                                let id = command.payload().and_then(Value::as_u64).unwrap();
-                                ctx.insert("players", row![id, 10u64, 100i32])?;
-                            }
+fn wasm_factory() -> PartitionFactory {
+    Box::new(|id: WorldId, mut store: TableStore, sim: PartitionConfig| {
+        ensure_players(&mut store);
+        let mut world = Partition::new(id, store, sim)?;
+        world
+            .add_system(
+                SystemDefinition::new(SystemId::from_u64(0), "consumer", 0, |ctx, frame| {
+                    for command in frame.commands() {
+                        if command.kind() == "spawn" {
+                            let id = command.payload().and_then(Value::as_u64).unwrap();
+                            ctx.insert("players", row![id, 10u64, 100i32])?;
                         }
-                        Ok(())
-                    })
-                    .unwrap(),
-                )
-                .unwrap();
-            let mut wasm = WasmModuleRegistry::new(WasmLimits::default()).unwrap();
-            wasm.register("ping_wasm", 1, ping_module()).unwrap();
-            world.set_wasm(wasm);
-            Ok(world)
-        },
-    )
+                    }
+                    Ok(())
+                })
+                .unwrap(),
+            )
+            .unwrap();
+        let mut wasm = WasmModuleRegistry::new(WasmLimits::default()).unwrap();
+        wasm.register("ping_wasm", 1, ping_module()).unwrap();
+        world.set_wasm(wasm);
+        Ok(world)
+    })
 }
 
 /// A factory where world 1 fails on its first tick.
-fn failing_factory() -> WorldFactory {
-    Box::new(
-        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-            ensure_players(&mut store);
-            let mut world = World::new(id, store, sim)?;
+fn failing_factory() -> PartitionFactory {
+    Box::new(|id: WorldId, mut store: TableStore, sim: PartitionConfig| {
+        ensure_players(&mut store);
+        let mut world = Partition::new(id, store, sim)?;
+        world
+            .add_system(
+                SystemDefinition::new(SystemId::from_u64(0), "writer", 0, |ctx, _| {
+                    ctx.insert("players", row![ctx.tick().as_u64(), 10u64, 100i32])?;
+                    Ok(())
+                })
+                .unwrap(),
+            )
+            .unwrap();
+        if id.as_u64() == 1 {
             world
                 .add_system(
-                    SystemDefinition::new(SystemId::from_u64(0), "writer", 0, |ctx, _| {
-                        ctx.insert("players", row![ctx.tick().as_u64(), 10u64, 100i32])?;
-                        Ok(())
+                    SystemDefinition::new(SystemId::from_u64(1), "fails", 10, |_ctx, _| {
+                        Err(Error::invalid_argument("boom"))
                     })
                     .unwrap(),
                 )
                 .unwrap();
-            if id.as_u64() == 1 {
-                world
-                    .add_system(
-                        SystemDefinition::new(SystemId::from_u64(1), "fails", 10, |_ctx, _| {
-                            Err(Error::invalid_argument("boom"))
-                        })
-                        .unwrap(),
-                    )
-                    .unwrap();
-            }
-            Ok(world)
-        },
-    )
+        }
+        Ok(world)
+    })
 }
 
 fn test_auth() -> Arc<TokenAuthenticator> {
@@ -205,7 +201,7 @@ fn connect(gateway: &mut NetworkGateway, token: &str, world: WorldId) -> Client 
     client
 }
 
-fn gateway_with(factory: WorldFactory) -> NetworkGateway {
+fn gateway_with(factory: PartitionFactory) -> NetworkGateway {
     let runtime = Runtime::new(RuntimeConfig::new(factory)).unwrap();
     // These tests assert the full change list on the Tick event.
     NetworkGateway::new(
@@ -235,9 +231,9 @@ fn full_sdk_pipeline_input_tick_subscription_and_reducer_call() {
     let world = WorldId::from_u64(0);
     gateway
         .control()
-        .create_world(world, SimulationConfig::new())
+        .create_partition(world, PartitionConfig::new())
         .unwrap();
-    gateway.control().start_world(world).unwrap();
+    gateway.control().start_partition(world).unwrap();
     let mut client = connect(&mut gateway, "alice-token", world);
 
     // Subscribe: the initial snapshot of the empty table.
@@ -332,9 +328,9 @@ fn one_commit_with_many_rows_applies_all_deltas_without_a_false_gap() {
     let world = WorldId::from_u64(0);
     gateway
         .control()
-        .create_world(world, SimulationConfig::new())
+        .create_partition(world, PartitionConfig::new())
         .unwrap();
-    gateway.control().start_world(world).unwrap();
+    gateway.control().start_partition(world).unwrap();
     let mut client = connect(&mut gateway, "alice-token", world);
 
     let local = client
@@ -381,9 +377,9 @@ fn failed_tick_produces_no_updates_and_correlated_call_failure() {
     let world = WorldId::from_u64(1); // fails on its first tick
     gateway
         .control()
-        .create_world(world, SimulationConfig::new())
+        .create_partition(world, PartitionConfig::new())
         .unwrap();
-    gateway.control().start_world(world).unwrap();
+    gateway.control().start_partition(world).unwrap();
     let mut client = connect(&mut gateway, "alice-token", world);
 
     let local = client
@@ -401,8 +397,8 @@ fn failed_tick_produces_no_updates_and_correlated_call_failure() {
     client.pump().unwrap();
 
     assert_eq!(
-        gateway.runtime().world_status(world).unwrap().state,
-        WorldLifecycle::Failed
+        gateway.runtime().partition_status(world).unwrap().state,
+        PartitionLifecycle::Failed
     );
     assert_eq!(gateway.runtime().metrics().wal_appends, 0);
     assert_eq!(gateway.runtime().metrics().ticks_succeeded, 0);
@@ -435,14 +431,14 @@ fn worlds_are_isolated_across_sessions() {
     let world_b = WorldId::from_u64(1);
     gateway
         .control()
-        .create_world(world_a, SimulationConfig::new())
+        .create_partition(world_a, PartitionConfig::new())
         .unwrap();
     gateway
         .control()
-        .create_world(world_b, SimulationConfig::new())
+        .create_partition(world_b, PartitionConfig::new())
         .unwrap();
-    gateway.control().start_world(world_a).unwrap();
-    gateway.control().start_world(world_b).unwrap();
+    gateway.control().start_partition(world_a).unwrap();
+    gateway.control().start_partition(world_b).unwrap();
 
     let mut client_a = connect(&mut gateway, "alice-token", world_a);
     let mut client_b = connect(&mut gateway, "bob-token", world_b);
@@ -518,9 +514,9 @@ fn wasm_reducer_call_round_trips_through_the_network() {
     let world = WorldId::from_u64(0);
     gateway
         .control()
-        .create_world(world, SimulationConfig::new())
+        .create_partition(world, PartitionConfig::new())
         .unwrap();
-    gateway.control().start_world(world).unwrap();
+    gateway.control().start_partition(world).unwrap();
     let mut client = connect(&mut gateway, "alice-token", world);
 
     let request = client
@@ -571,9 +567,9 @@ fn recovery_restores_state_without_replaying_history_to_the_sdk() {
         let world = WorldId::from_u64(0);
         gateway
             .control()
-            .create_world(world, SimulationConfig::new())
+            .create_partition(world, PartitionConfig::new())
             .unwrap();
-        gateway.control().start_world(world).unwrap();
+        gateway.control().start_partition(world).unwrap();
         let mut client = connect(&mut gateway, "alice-token", world);
         let mut frame = InputFrame::new(TickId::from_u64(0));
         frame.push(InputCommand::new(0, "spawn", Some(Value::U64(1))).unwrap());
@@ -608,10 +604,10 @@ fn recovery_restores_state_without_replaying_history_to_the_sdk() {
         let world = WorldId::from_u64(0);
         let report = gateway
             .control()
-            .recover_world(world, SimulationConfig::new(), Some(TickId::from_u64(1)))
+            .recover_partition(world, PartitionConfig::new(), Some(TickId::from_u64(1)))
             .unwrap();
         assert_eq!(report.replayed_txs, 1);
-        gateway.control().start_world(world).unwrap();
+        gateway.control().start_partition(world).unwrap();
 
         let mut client = connect(&mut gateway, "alice-token", world);
         let local = client
@@ -664,9 +660,9 @@ fn mismatched_protocol_version_is_rejected_and_closes_cleanly() {
     let world = WorldId::from_u64(0);
     gateway
         .control()
-        .create_world(world, SimulationConfig::new())
+        .create_partition(world, PartitionConfig::new())
         .unwrap();
-    gateway.control().start_world(world).unwrap();
+    gateway.control().start_partition(world).unwrap();
 
     let (transport, server) = ClientTransport::memory_pair(16, 16);
     gateway.register_connection(Box::new(server)).unwrap();
@@ -713,9 +709,9 @@ fn slow_client_falls_stale_and_resync_restores_the_exact_view() {
     let world = WorldId::from_u64(0);
     gateway
         .control()
-        .create_world(world, SimulationConfig::new())
+        .create_partition(world, PartitionConfig::new())
         .unwrap();
-    gateway.control().start_world(world).unwrap();
+    gateway.control().start_partition(world).unwrap();
 
     let (transport, server) = ClientTransport::memory_pair(256, 1);
     gateway.register_connection(Box::new(server)).unwrap();

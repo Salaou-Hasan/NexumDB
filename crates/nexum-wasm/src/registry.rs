@@ -24,8 +24,7 @@ use nexum_core::{Error, Result, Value, binary::get_value};
 use nexum_reducer::{ReducerArgs, ReducerContext, ReducerEvent, ReducerResult, finish_invocation};
 use nexum_table::TableStore;
 use nexum_tx::Transaction;
-use wasmi::core::TrapCode;
-use wasmi::{Config, EnforcedLimits, Engine, StackLimits, Store};
+use wasmtime::{Config, Engine, Store};
 
 use crate::abi::{RET_REJECT, encode_args};
 use crate::host::HostState;
@@ -47,14 +46,17 @@ impl WasmModuleRegistry {
     /// interpreter stack, and strict compile limits for hostile modules.
     pub fn new(limits: WasmLimits) -> Result<Self> {
         limits.validate()?;
-        let mut config = Config::default();
+        let mut config = Config::new();
+        // Enable fuel metering for deterministic execution budgeting
         config.consume_fuel(true);
-        config.set_stack_limits(
-            StackLimits::new(32, 65_536, 1_024)
-                .map_err(|e| Error::invalid_argument(format!("invalid stack limits: {e}")))?,
-        );
-        config.enforced_limits(EnforcedLimits::strict());
-        let engine = Engine::new(&config);
+        // Configure memory limits
+        config.memory_init_cow(true);
+        config.memory_guaranteed_dense_image_size(0);
+        // Configure compilation settings
+        config.cranelift_opt_level(wasmtime::OptLevel::Speed);
+        // Create the engine
+        let engine = Engine::new(&config)
+            .map_err(|e| Error::invalid_argument(format!("invalid wasm config: {e}")))?;
         Ok(Self {
             modules: BTreeMap::new(),
             engine,
@@ -287,14 +289,16 @@ struct PooledInvocation {
     store: Store<HostState<'static, 'static>>,
     /// Kept for the lifetime of the pooled unit; exports resolve through it.
     #[allow(dead_code)]
-    instance: wasmi::Instance,
-    memory: wasmi::Memory,
-    run: wasmi::TypedFunc<(), i32>,
+    instance: wasmtime::Instance,
+    memory: wasmtime::Memory,
+    run: wasmtime::TypedFunc<(), i32>,
 }
 
 impl PooledInvocation {
     fn matches(&self, engine: &Engine, module_key: usize) -> bool {
-        Engine::same(&self.engine, engine) && self.module_key == module_key
+        // Compare engines by pointer identity (same Arc-backed Engine)
+        std::ptr::eq(&self.engine as *const Engine, engine as *const Engine)
+            && self.module_key == module_key
     }
 }
 
@@ -321,7 +325,18 @@ fn run_module_pooled(
         stale_or_none => {
             let _ = stale_or_none; // mismatched engine/module: dropped here
             let stage_start = std::time::Instant::now();
-            let mut store = Store::new(engine, HostState::new(None, limits));
+            // SAFETY: Store::new requires T: 'static, but HostState<'a, 'b>
+            // is only used within the function scope and the store is dropped
+            // at the end of the function (or returned to the pool with ctx: None).
+            let host_state = HostState::new(None, limits);
+            let mut store: Store<HostState<'static, 'static>> = unsafe {
+                Store::new(
+                    engine,
+                    std::mem::transmute::<HostState<'_, '_>, HostState<'static, 'static>>(
+                        host_state,
+                    ),
+                )
+            };
             store.limiter(|state: &mut HostState<'_, '_>| &mut state.memory_limiter);
             store
                 .set_fuel(limits.max_fuel)
@@ -330,14 +345,13 @@ fn run_module_pooled(
             let linker = crate::linker_cache::clone_cached_linker(engine);
             let instance = linker
                 .instantiate(&mut store, module.compiled())
-                .and_then(|pre| pre.start(&mut store))
                 .map_err(|e| Error::internal(format!("cannot instantiate module: {e}")))?;
             let memory = instance
-                .get_export(&store, "memory")
+                .get_export(&mut store, "memory")
                 .and_then(|export| export.into_memory())
                 .ok_or_else(|| Error::internal("validated module has no memory export"))?;
             let run = instance
-                .get_typed_func::<(), i32>(&store, ENTRY_NAME)
+                .get_typed_func::<(), i32>(&mut store, ENTRY_NAME)
                 .map_err(|e| {
                     Error::internal(format!("cannot access the reducer entry point: {e}"))
                 })?;
@@ -345,11 +359,6 @@ fn run_module_pooled(
                 t.store_setup_ns = (instantiate_start - stage_start).as_nanos() as u64;
                 t.instantiate_ns = instantiate_start.elapsed().as_nanos() as u64;
             }
-            // SAFETY: the stashed state holds `ctx: None` and a limits
-            // reference that is overwritten by `reset_for_call` before any
-            // use, so no borrowed data outlives its referent (same argument
-            // as the per-thread Linker cache).
-            let store: Store<HostState<'static, 'static>> = unsafe { std::mem::transmute(store) };
             PooledInvocation {
                 engine: engine.clone(),
                 module_key,
@@ -367,7 +376,16 @@ fn run_module_pooled(
         let store: &mut Store<HostState<'_, '_>> = unsafe {
             &mut *(&mut pooled.store as *mut Store<HostState<'static, 'static>> as *mut _)
         };
-        store.data_mut().reset_for_call(Some(ctx), limits);
+        // SAFETY: the ctx and limits references are used only within this
+        // closure and cleared by release_ctx at the end. The store is
+        // transmuted back to 'static at the end of the closure.
+        unsafe {
+            let ctx_static: &mut ReducerContext<'static> = std::mem::transmute(ctx);
+            let limits_static: &WasmLimits = std::mem::transmute(limits);
+            store
+                .data_mut()
+                .reset_for_call(Some(ctx_static), limits_static);
+        }
         store
             .set_fuel(limits.max_fuel)
             .map_err(|e| Error::internal(format!("cannot arm fuel: {e}")))?;
@@ -396,12 +414,16 @@ fn run_module_pooled(
         let exec_start = std::time::Instant::now();
         let returned = match pooled.run.call(&mut *store, ()) {
             Ok(returned) => returned,
-            Err(error) if error.as_trap_code() == Some(TrapCode::OutOfFuel) => {
-                return Err(Error::capacity(
-                    "wasm reducer exhausted its fuel budget (max_fuel exceeded)",
-                ));
-            }
             Err(error) => {
+                // Check if this is a fuel exhaustion trap
+                if error.is::<wasmtime::Trap>() {
+                    let trap = error.downcast_ref::<wasmtime::Trap>().unwrap();
+                    if matches!(trap, wasmtime::Trap::OutOfFuel) {
+                        return Err(Error::capacity(
+                            "wasm reducer exhausted its fuel budget (max_fuel exceeded)",
+                        ));
+                    }
+                }
                 return Err(Error::invalid_argument(format!(
                     "wasm reducer trapped during execution: {error}"
                 )));
@@ -488,7 +510,16 @@ fn run_module_fresh(
 ) -> Result<Value> {
     let total_start = std::time::Instant::now();
     let stage_start = total_start;
-    let mut store = Store::new(engine, HostState::new(Some(ctx), limits));
+    // SAFETY: Store::new requires T: 'static, but HostState<'a, 'b>
+    // is only used within the function scope and the store is dropped
+    // at the end of the function.
+    let host_state = HostState::new(Some(ctx), limits);
+    let mut store: Store<HostState<'static, 'static>> = unsafe {
+        Store::new(
+            engine,
+            std::mem::transmute::<HostState<'_, '_>, HostState<'static, 'static>>(host_state),
+        )
+    };
     store.limiter(|state: &mut HostState<'_, '_>| &mut state.memory_limiter);
     // Arm the fuel budget before instantiation: a module start function (if
     // any) runs at `InstancePre::start` under the same deterministic budget.
@@ -500,18 +531,17 @@ fn run_module_fresh(
     }
     let instantiate_start = std::time::Instant::now();
     // Phase 22.5: reuse a pre-configured Linker per thread. The host ABI
-    // definition ("nexum","op") is identical across all invocations and the
+    // definition ("nexum","op") is identical for every invocation and the
     // closure captures nothing  it is Send + Sync + 'static regardless of
     // HostState lifetimes (see host.rs docs). Caching eliminates Linker::new
     // + define_host (~2-3s) per WASM call; the clone is ~200ns.
     let linker = crate::linker_cache::clone_cached_linker(engine);
     let instance = linker
         .instantiate(&mut store, module.compiled())
-        .and_then(|pre| pre.start(&mut store))
         .map_err(|e| Error::internal(format!("cannot instantiate module: {e}")))?;
 
     let memory = instance
-        .get_export(&store, "memory")
+        .get_export(&mut store, "memory")
         .and_then(|export| export.into_memory())
         .ok_or_else(|| Error::internal("validated module has no memory export"))?;
     if let Some(ref mut t) = times {
@@ -538,7 +568,7 @@ fn run_module_fresh(
         })?;
 
     let run = instance
-        .get_typed_func::<(), i32>(&store, ENTRY_NAME)
+        .get_typed_func::<(), i32>(&mut store, ENTRY_NAME)
         .map_err(|e| Error::internal(format!("cannot access the reducer entry point: {e}")))?;
     if let Some(ref mut t) = times {
         t.encode_ns = encode_start.elapsed().as_nanos() as u64;
@@ -547,12 +577,16 @@ fn run_module_fresh(
     let exec_start = std::time::Instant::now();
     let returned = match run.call(&mut store, ()) {
         Ok(returned) => returned,
-        Err(error) if error.as_trap_code() == Some(TrapCode::OutOfFuel) => {
-            return Err(Error::capacity(
-                "wasm reducer exhausted its fuel budget (max_fuel exceeded)",
-            ));
-        }
         Err(error) => {
+            // Check if this is a fuel exhaustion trap
+            if error.is::<wasmtime::Trap>() {
+                let trap = error.downcast_ref::<wasmtime::Trap>().unwrap();
+                if matches!(trap, wasmtime::Trap::OutOfFuel) {
+                    return Err(Error::capacity(
+                        "wasm reducer exhausted its fuel budget (max_fuel exceeded)",
+                    ));
+                }
+            }
             return Err(Error::invalid_argument(format!(
                 "wasm reducer trapped during execution: {error}"
             )));
@@ -572,7 +606,7 @@ fn run_module_fresh(
     if returned == RET_REJECT as i32 {
         let mut len_bytes = [0u8; 4];
         memory
-            .read(&store, module.out_ptr() as usize, &mut len_bytes)
+            .read(&mut store, module.out_ptr() as usize, &mut len_bytes)
             .map_err(|e| Error::internal(format!("cannot read rejection message length: {e}")))?;
         let msg_len = u32::from_le_bytes(len_bytes) as usize;
         if msg_len > limits.max_result_bytes.saturating_sub(4) {
@@ -582,7 +616,7 @@ fn run_module_fresh(
         }
         let mut msg = vec![0u8; msg_len];
         memory
-            .read(&store, module.out_ptr() as usize + 4, &mut msg)
+            .read(&mut store, module.out_ptr() as usize + 4, &mut msg)
             .map_err(|e| Error::internal(format!("cannot read rejection message: {e}")))?;
         let msg = String::from_utf8(msg)
             .map_err(|_| Error::invalid_argument("rejection message is not valid UTF-8"))?;
@@ -600,7 +634,7 @@ fn run_module_fresh(
     }
     let mut buf = vec![0u8; n];
     memory
-        .read(&store, module.out_ptr() as usize, &mut buf)
+        .read(&mut store, module.out_ptr() as usize, &mut buf)
         .map_err(|e| Error::internal(format!("cannot read reducer return value: {e}")))?;
     let mut cursor: &[u8] = &buf;
     let value = get_value(&mut cursor)

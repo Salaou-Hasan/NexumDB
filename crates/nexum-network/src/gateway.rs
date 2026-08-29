@@ -1,10 +1,10 @@
-﻿//! The [`NetworkGateway`]: the realtime adapter around the runtime
+//! The [`NetworkGateway`]: the realtime adapter around the runtime
 //! (ADR-011 D1).
 //!
 //! The gateway owns the runtime and orchestrates it, but every
 //! authoritative operation flows through the existing runtime boundary:
 //! `submit_input` (inputs), `subscribe`/`drain`/`unsubscribe`/`resync`
-//! (observation), `step_detailed` (scheduling), `recover_world`
+//! (observation), `step_detailed` (scheduling), `recover_partition`
 //! (durability). It never touches tables, transactions, the WAL, or the
 //! subscription registries directly.
 //!
@@ -17,9 +17,9 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 
 use nexum_core::{ConnectionId, Error, SessionId, SubscriptionId, WorldId};
+use nexum_execution::{InputCommand, InputFrame};
 use nexum_reducer::ReducerArgs;
 use nexum_runtime::{Runtime, RuntimeError};
-use nexum_simulation::{InputCommand, InputFrame};
 use nexum_subscription::SubscriptionUpdate;
 
 use crate::auth::Authenticator;
@@ -567,7 +567,7 @@ impl NetworkGateway {
                     }
                     return;
                 }
-                let world_exists = self.runtime.world_status(world).is_ok();
+                let world_exists = self.runtime.partition_status(world).is_ok();
                 if !world_exists {
                     let _ = self.send(
                         connection,
@@ -1267,7 +1267,7 @@ impl NetworkGateway {
     /// own `step_detailed` so they can observe the committed results too.
     pub fn fan_out_results(
         &mut self,
-        results: &[(WorldId, nexum_simulation::TickResult)],
+        results: &[(WorldId, nexum_execution::TickResult)],
     ) -> StepReport {
         let mut report = StepReport::default();
         let fanout_started = std::time::Instant::now();
@@ -1411,8 +1411,8 @@ impl NetworkGateway {
         // skip the O(pending) health sweep entirely.
         let has_unhealthy = !self.pending_calls.is_empty()
             && self.pending_calls.keys().any(|(world, _)| {
-                match self.runtime.world_status(*world) {
-                    Ok(status) => status.state != nexum_runtime::WorldLifecycle::Running,
+                match self.runtime.partition_status(*world) {
+                    Ok(status) => status.state != nexum_runtime::PartitionLifecycle::Running,
                     Err(_) => true,
                 }
             });
@@ -1421,8 +1421,8 @@ impl NetworkGateway {
                 .pending_calls
                 .iter()
                 .filter_map(|((world, gateway_id), pending)| {
-                    let dead = match self.runtime.world_status(*world) {
-                        Ok(status) => status.state != nexum_runtime::WorldLifecycle::Running,
+                    let dead = match self.runtime.partition_status(*world) {
+                        Ok(status) => status.state != nexum_runtime::PartitionLifecycle::Running,
                         Err(_) => true,
                     };
                     dead.then_some((*world, *gateway_id, *pending))

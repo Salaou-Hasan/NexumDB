@@ -13,7 +13,7 @@ pub struct RuntimeMetrics {
     /// Worlds currently registered (any lifecycle).
     pub worlds: usize,
     /// Worlds currently running.
-    pub running_worlds: usize,
+    pub running_partitions: usize,
     /// Partitions currently registered.
     pub partitions: usize,
     /// Total tick attempts.
@@ -59,11 +59,11 @@ pub struct RuntimeMetrics {
     /// Changes committed across all worlds (for per-change metrics).
     pub changes_committed: u64,
     /// Worlds created.
-    pub world_creations: u64,
+    pub partition_creations: u64,
     /// Worlds recovered from persisted state.
     pub recoveries: u64,
     /// Worlds that failed.
-    pub world_failures: u64,
+    pub partition_failures: u64,
     /// Runtime uptime in nanoseconds.
     pub uptime_ns: u64,
     /// Sub-phase timing of the last tick (world_tick_ns, wal_ns, subscription_apply_ns).
@@ -77,7 +77,7 @@ impl RuntimeMetrics {
         Self {
             workers: 0,
             worlds: 0,
-            running_worlds: 0,
+            running_partitions: 0,
             partitions: 0,
             ticks_total: 0,
             ticks_succeeded: 0,
@@ -98,9 +98,9 @@ impl RuntimeMetrics {
             subscription_deltas: 0,
             subscription_views: 0,
             changes_committed: 0,
-            world_creations: 0,
+            partition_creations: 0,
             recoveries: 0,
-            world_failures: 0,
+            partition_failures: 0,
             uptime_ns: 0,
             last_tick_profile: (0, 0, 0),
         }

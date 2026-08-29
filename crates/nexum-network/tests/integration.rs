@@ -7,13 +7,15 @@
 use std::sync::Arc;
 
 use nexum_core::{ColumnType, Error, SystemId, TickId, Value, WorldId, row};
+use nexum_execution::{InputCommand, InputFrame, Partition, PartitionConfig, SystemDefinition};
 use nexum_network::{
     Connection, MemoryConnection, MemoryTransport, NetworkConfig, NetworkGateway, Principal,
     TokenAuthenticator,
     protocol::{self, ClientMessage, DeltaKind, PROTOCOL_VERSION, ServerMessage},
 };
-use nexum_runtime::{PersistencePolicy, Runtime, RuntimeConfig, WorldFactory, WorldLifecycle};
-use nexum_simulation::{InputCommand, InputFrame, SimulationConfig, SystemDefinition, World};
+use nexum_runtime::{
+    PartitionFactory, PartitionLifecycle, PersistencePolicy, Runtime, RuntimeConfig,
+};
 use nexum_subscription::Query;
 use nexum_table::TableStore;
 
@@ -38,58 +40,54 @@ fn ensure_players(store: &mut TableStore) {
 }
 
 /// A world whose system consumes `spawn` commands as player rows.
-fn input_factory() -> WorldFactory {
-    Box::new(
-        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-            ensure_players(&mut store);
-            let mut world = World::new(id, store, sim)?;
-            world
-                .add_system(
-                    SystemDefinition::new(SystemId::from_u64(0), "consumer", 0, |ctx, frame| {
-                        for command in frame.commands() {
-                            if command.kind() == "spawn" {
-                                let id = command.payload().and_then(Value::as_u64).unwrap();
-                                ctx.insert("players", row![id, 10u64, 100i32])?;
-                            }
+fn input_factory() -> PartitionFactory {
+    Box::new(|id: WorldId, mut store: TableStore, sim: PartitionConfig| {
+        ensure_players(&mut store);
+        let mut world = Partition::new(id, store, sim)?;
+        world
+            .add_system(
+                SystemDefinition::new(SystemId::from_u64(0), "consumer", 0, |ctx, frame| {
+                    for command in frame.commands() {
+                        if command.kind() == "spawn" {
+                            let id = command.payload().and_then(Value::as_u64).unwrap();
+                            ctx.insert("players", row![id, 10u64, 100i32])?;
                         }
-                        Ok(())
-                    })
-                    .unwrap(),
-                )
-                .unwrap();
-            Ok(world)
-        },
-    )
+                    }
+                    Ok(())
+                })
+                .unwrap(),
+            )
+            .unwrap();
+        Ok(world)
+    })
 }
 
 /// A factory where world 1 fails on its first tick.
-fn failing_factory() -> WorldFactory {
-    Box::new(
-        |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
-            ensure_players(&mut store);
-            let mut world = World::new(id, store, sim)?;
+fn failing_factory() -> PartitionFactory {
+    Box::new(|id: WorldId, mut store: TableStore, sim: PartitionConfig| {
+        ensure_players(&mut store);
+        let mut world = Partition::new(id, store, sim)?;
+        world
+            .add_system(
+                SystemDefinition::new(SystemId::from_u64(0), "writer", 0, |ctx, _| {
+                    ctx.insert("players", row![ctx.tick().as_u64(), 10u64, 100i32])?;
+                    Ok(())
+                })
+                .unwrap(),
+            )
+            .unwrap();
+        if id.as_u64() == 1 {
             world
                 .add_system(
-                    SystemDefinition::new(SystemId::from_u64(0), "writer", 0, |ctx, _| {
-                        ctx.insert("players", row![ctx.tick().as_u64(), 10u64, 100i32])?;
-                        Ok(())
+                    SystemDefinition::new(SystemId::from_u64(1), "fails", 10, |_ctx, _| {
+                        Err(Error::invalid_argument("boom"))
                     })
                     .unwrap(),
                 )
                 .unwrap();
-            if id.as_u64() == 1 {
-                world
-                    .add_system(
-                        SystemDefinition::new(SystemId::from_u64(1), "fails", 10, |_ctx, _| {
-                            Err(Error::invalid_argument("boom"))
-                        })
-                        .unwrap(),
-                    )
-                    .unwrap();
-            }
-            Ok(world)
-        },
-    )
+        }
+        Ok(world)
+    })
 }
 
 fn test_auth() -> Arc<TokenAuthenticator> {
@@ -203,9 +201,9 @@ fn full_client_to_wal_to_subscription_path() {
     let world = WorldId::from_u64(0);
     gateway
         .control()
-        .create_world(world, SimulationConfig::new())
+        .create_partition(world, PartitionConfig::new())
         .unwrap();
-    gateway.control().start_world(world).unwrap();
+    gateway.control().start_partition(world).unwrap();
     let max = gateway.config().max_frame_payload();
 
     let mut client = connect_client(&mut gateway);
@@ -265,9 +263,9 @@ fn failed_tick_produces_no_wal_no_subscription_delta_no_realtime_update() {
     let world = WorldId::from_u64(1); // fails on its first tick
     gateway
         .control()
-        .create_world(world, SimulationConfig::new())
+        .create_partition(world, PartitionConfig::new())
         .unwrap();
-    gateway.control().start_world(world).unwrap();
+    gateway.control().start_partition(world).unwrap();
     let max = gateway.config().max_frame_payload();
 
     let mut client = connect_client(&mut gateway);
@@ -276,8 +274,8 @@ fn failed_tick_produces_no_wal_no_subscription_delta_no_realtime_update() {
 
     gateway.step_worlds().unwrap();
     assert_eq!(
-        gateway.runtime().world_status(world).unwrap().state,
-        WorldLifecycle::Failed
+        gateway.runtime().partition_status(world).unwrap().state,
+        PartitionLifecycle::Failed
     );
 
     // No WAL append, no subscription delta, no realtime update.
@@ -305,9 +303,9 @@ fn recovery_restores_state_without_replaying_history_as_live_updates() {
         let world = WorldId::from_u64(0);
         gateway
             .control()
-            .create_world(world, SimulationConfig::new())
+            .create_partition(world, PartitionConfig::new())
             .unwrap();
-        gateway.control().start_world(world).unwrap();
+        gateway.control().start_partition(world).unwrap();
         let max = gateway.config().max_frame_payload();
 
         let mut client = connect_client(&mut gateway);
@@ -338,10 +336,10 @@ fn recovery_restores_state_without_replaying_history_as_live_updates() {
         let world = WorldId::from_u64(0);
         let report = gateway
             .control()
-            .recover_world(world, SimulationConfig::new(), Some(TickId::from_u64(1)))
+            .recover_partition(world, PartitionConfig::new(), Some(TickId::from_u64(1)))
             .unwrap();
         assert_eq!(report.replayed_txs, 1);
-        gateway.control().start_world(world).unwrap();
+        gateway.control().start_partition(world).unwrap();
         let max = gateway.config().max_frame_payload();
 
         // The client reattaches and resubscribes: it sees an Initial

@@ -12,7 +12,7 @@
 //!
 //! ```text
 //! Client ──versioned binary protocol──▶ NetworkGateway ──▶ Runtime
-//!                                                           │ World::tick
+//!                                                           │ Partition::tick
 //!                                                           ▼
 //!                                                     Vec<Change>
 //!                                                WAL  ◄──┴──► SubscriptionRegistry
@@ -48,6 +48,7 @@ pub mod metrics;
 pub mod policy;
 pub mod protocol;
 pub mod rate;
+pub mod server;
 pub mod session;
 pub mod spsc;
 pub mod transport;
@@ -63,6 +64,7 @@ pub use metrics::NetworkMetrics;
 pub use policy::{AllowAllPolicy, GamePolicy};
 pub use protocol::{DeltaKind, PROTOCOL_VERSION};
 pub use rate::RateLimitConfig;
+pub use server::NexumServer;
 pub use session::Session;
 pub use transport::{
     Connection, MemoryConnection, MemoryTransport, TcpConnection, TcpTransport, WsConnection,

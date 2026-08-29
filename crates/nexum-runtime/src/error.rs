@@ -10,7 +10,7 @@ use std::fmt;
 use nexum_core::{Error, PartitionId, WorkerId, WorldId};
 
 use crate::worker::WorkerState;
-use crate::world::WorldLifecycle;
+use crate::world::PartitionLifecycle;
 
 /// A failure at the runtime boundary.
 //
@@ -21,24 +21,24 @@ use crate::world::WorldLifecycle;
 pub enum RuntimeError {
     /// The runtime configuration was invalid.
     InvalidConfig(String),
-    /// A referenced world does not exist.
-    UnknownWorld(WorldId),
+    /// A referenced world (execution partition) does not exist.
+    UnknownPartition(WorldId),
     /// A referenced worker does not exist.
     UnknownWorker(WorkerId),
-    /// A world with this id already exists.
-    DuplicateWorld(WorldId),
-    /// A referenced partition does not exist.
-    UnknownPartition(PartitionId),
-    /// A partition with this id already exists.
-    DuplicatePartition(PartitionId),
+    /// A world (execution partition) with this id already exists.
+    DuplicatePartition(WorldId),
+    /// A referenced partition (message-bus address) does not exist.
+    UnknownRouting(PartitionId),
+    /// A partition (message-bus address) with this id already exists.
+    DuplicateRouting(PartitionId),
     /// An ownership operation was invalid (e.g. duplicate owner, unknown
     /// worker).
     OwnershipConflict(WorldId, WorkerId),
     /// An operation required a different world lifecycle state.
-    InvalidWorldState {
+    InvalidPartitionState {
         world: WorldId,
         operation: &'static str,
-        state: WorldLifecycle,
+        state: PartitionLifecycle,
     },
     /// An operation required a different worker state.
     InvalidWorkerState {
@@ -71,8 +71,12 @@ pub enum RuntimeError {
 
 impl RuntimeError {
     /// Builds an invalid-world-state error.
-    pub fn world_state(world: WorldId, operation: &'static str, state: WorldLifecycle) -> Self {
-        Self::InvalidWorldState {
+    pub fn partition_state(
+        world: WorldId,
+        operation: &'static str,
+        state: PartitionLifecycle,
+    ) -> Self {
+        Self::InvalidPartitionState {
             world,
             operation,
             state,
@@ -105,17 +109,17 @@ impl fmt::Display for RuntimeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidConfig(message) => write!(f, "invalid runtime configuration: {message}"),
-            Self::UnknownWorld(world) => write!(f, "world {world} does not exist"),
+            Self::UnknownPartition(world) => write!(f, "partition {world} does not exist"),
             Self::UnknownWorker(worker) => write!(f, "worker {worker} does not exist"),
-            Self::DuplicateWorld(world) => write!(f, "world {world} already exists"),
-            Self::UnknownPartition(partition) => write!(f, "partition {partition} does not exist"),
-            Self::DuplicatePartition(partition) => {
-                write!(f, "partition {partition} already exists")
+            Self::DuplicatePartition(world) => write!(f, "partition {world} already exists"),
+            Self::UnknownRouting(partition) => write!(f, "routing {partition} does not exist"),
+            Self::DuplicateRouting(partition) => {
+                write!(f, "routing {partition} already exists")
             }
             Self::OwnershipConflict(world, worker) => {
                 write!(f, "ownership conflict for world {world} on worker {worker}")
             }
-            Self::InvalidWorldState {
+            Self::InvalidPartitionState {
                 world,
                 operation,
                 state,

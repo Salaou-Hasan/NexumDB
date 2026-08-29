@@ -1,16 +1,16 @@
-//! The runtime's partition registry (ADR-012 D1, D3).
+//! The runtime's message-bus partition registry (ADR-012 D1, D3).
 //!
-//! A partition is the message-bus address of an existing authoritative
-//! [`World`]. The registry owns **only** routing metadata: the world a
-//! partition addresses, its owning worker, and its bounded inbound message
-//! queue. It owns no state — the world's `TableStore` remains the sole
-//! authoritative state, and `World::tick_messages` remains the only commit
-//! path.
+//! A partition (see [`nexum_core::PartitionId`]) is the message-bus address
+//! of an existing authoritative [`nexum_execution::Partition`]. The registry
+//! owns **only** routing metadata: the partition a world is addressed under,
+//! its owning worker, and its bounded inbound message queue. It owns no
+//! state — the world's `TableStore` remains the sole authoritative state,
+//! and `Partition::tick_messages` remains the only commit path.
 
 use std::collections::VecDeque;
 
 use nexum_core::{PartitionId, WorkerId, WorldId};
-use nexum_simulation::PartitionMessage;
+use nexum_execution::PartitionMessage;
 
 /// The runtime's internal per-partition entry (operational metadata only).
 #[derive(Debug)]
@@ -34,10 +34,10 @@ impl PartitionEntry {
     }
 }
 
-/// A point-in-time view of a partition for introspection.
+/// A point-in-time view of a message-bus routing entry for introspection.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PartitionStatus {
-    /// The partition id.
+pub struct RoutingStatus {
+    /// The partition (message-bus address) id.
     pub partition: PartitionId,
     /// The world this partition addresses.
     pub world: WorldId,

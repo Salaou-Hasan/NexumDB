@@ -16,17 +16,17 @@ use nexum_core::{Error, PartitionId, TickId, WorkerId, WorldId};
 #[allow(missing_docs)]
 pub enum RuntimeEvent {
     /// A world was created and assigned to a worker.
-    WorldCreated { world: WorldId, worker: WorkerId },
+    PartitionCreated { world: WorldId, worker: WorkerId },
     /// A world entered the running state.
-    WorldStarted { world: WorldId },
+    PartitionStarted { world: WorldId },
     /// A world was stopped.
-    WorldStopped { world: WorldId },
+    PartitionStopped { world: WorldId },
     /// A world failed (tick or persistence failure) and stopped ticking.
-    WorldFailed { world: WorldId, reason: Error },
+    PartitionFailed { world: WorldId, reason: Error },
     /// A world was removed from the runtime.
-    WorldDestroyed { world: WorldId },
+    PartitionDestroyed { world: WorldId },
     /// A world was reconstructed from persisted state.
-    WorldRecovered { world: WorldId, replayed_txs: usize },
+    PartitionRecovered { world: WorldId, replayed_txs: usize },
     /// A worker failed; its worlds are recoverable.
     WorkerFailed { worker: WorkerId },
     /// A successful tick of one world, with its measured duration.

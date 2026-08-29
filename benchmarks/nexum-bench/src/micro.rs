@@ -6,9 +6,9 @@
 use std::time::Instant;
 
 use nexum_core::{ReducerId, RowId, SystemId, TickId, WorldId};
+use nexum_execution::{InputFrame, Partition, PartitionConfig, SystemDefinition};
 use nexum_reducer::{ReducerArgs, ReducerContext, ReducerDefinition};
-use nexum_runtime::{Runtime, RuntimeConfig, WorldFactory};
-use nexum_simulation::{InputFrame, SimulationConfig, SystemDefinition, World};
+use nexum_runtime::{PartitionFactory, Runtime, RuntimeConfig};
 use nexum_subscription::Query;
 use nexum_tx::Transaction;
 use nexum_wal::{DurabilityPolicy, Wal};
@@ -318,11 +318,11 @@ const WASM_BUMP_WAT: &str = r#"(module
 )"#;
 
 /// A world factory registering the native `bump` reducer.
-fn reducer_factory() -> WorldFactory {
+fn reducer_factory() -> PartitionFactory {
     Box::new(
-        |id: WorldId, mut store: nexum_table::TableStore, sim: SimulationConfig| {
+        |id: WorldId, mut store: nexum_table::TableStore, sim: PartitionConfig| {
             ensure_players(&mut store);
-            let mut world = World::new(id, store, sim)?;
+            let mut world = Partition::new(id, store, sim)?;
             world
                 .native_mut()
                 .register(ReducerDefinition::new(ReducerId::from_u64(1), "bump", bump).unwrap())
@@ -333,11 +333,11 @@ fn reducer_factory() -> WorldFactory {
 }
 
 /// A world factory registering `bump` as a WASM reducer.
-fn wasm_factory() -> WorldFactory {
+fn wasm_factory() -> PartitionFactory {
     Box::new(
-        |id: WorldId, mut store: nexum_table::TableStore, sim: SimulationConfig| {
+        |id: WorldId, mut store: nexum_table::TableStore, sim: PartitionConfig| {
             ensure_players(&mut store);
-            let mut world = World::new(id, store, sim)?;
+            let mut world = Partition::new(id, store, sim)?;
             let mut wasm = WasmModuleRegistry::new(WasmLimits::default()).unwrap();
             wasm.register("bump", 1, wat::parse_str(WASM_BUMP_WAT).unwrap())
                 .unwrap();
@@ -350,7 +350,7 @@ fn wasm_factory() -> WorldFactory {
 fn reducers(wasm_mode: bool) {
     let label = if wasm_mode { "WASM" } else { "native" };
     println!("== reducers ({label}) ==");
-    let factory: WorldFactory = if wasm_mode {
+    let factory: PartitionFactory = if wasm_mode {
         wasm_factory()
     } else {
         reducer_factory()
@@ -358,9 +358,9 @@ fn reducers(wasm_mode: bool) {
     let mut runtime = Runtime::new(RuntimeConfig::new(factory)).unwrap();
     let world = WorldId::from_u64(0);
     runtime
-        .create_world(world, SimulationConfig::new())
+        .create_partition(world, PartitionConfig::new())
         .unwrap();
-    runtime.start_world(world).unwrap();
+    runtime.start_partition(world).unwrap();
 
     // Seed the world with one player via a first tick.
     runtime
@@ -639,19 +639,19 @@ fn simulation() {
     let mut runtime = Runtime::new(RuntimeConfig::new(sim_factory())).unwrap();
     let world = WorldId::from_u64(0);
     runtime
-        .create_world(world, SimulationConfig::new())
+        .create_partition(world, PartitionConfig::new())
         .unwrap();
-    runtime.start_world(world).unwrap();
+    runtime.start_partition(world).unwrap();
 
     for entities in [10u64, 1_000, 10_000] {
         // Seed `entities` rows via a command-bearing frame (the world's
         // `spawn` system reads the frame's commands — one tick per row).
         for id in 0..entities {
             let mut frame = InputFrame::with_capacity(
-                TickId::from_u64(runtime.world_status(world).unwrap().next_tick.as_u64()),
+                TickId::from_u64(runtime.partition_status(world).unwrap().next_tick.as_u64()),
                 1,
             );
-            frame.push(nexum_simulation::InputCommand::simple(id, "spawn").unwrap());
+            frame.push(nexum_execution::InputCommand::simple(id, "spawn").unwrap());
             runtime.submit_input(world, frame).unwrap();
             runtime.step().unwrap();
         }
@@ -673,11 +673,11 @@ fn simulation() {
 
 /// A world whose `spawn` system inserts one row per frame command, and whose
 /// `scan-all` system reads every row each tick (the "active entities" pass).
-fn sim_factory() -> WorldFactory {
+fn sim_factory() -> PartitionFactory {
     Box::new(
-        |id: WorldId, mut store: nexum_table::TableStore, sim: SimulationConfig| {
+        |id: WorldId, mut store: nexum_table::TableStore, sim: PartitionConfig| {
             ensure_players(&mut store);
-            let mut world = World::new(id, store, sim)?;
+            let mut world = Partition::new(id, store, sim)?;
             world
                 .add_system(
                     SystemDefinition::new(SystemId::from_u64(0), "spawn", 0, |ctx, frame| {
@@ -711,9 +711,11 @@ fn runtime_scheduler() {
         let mut runtime = Runtime::new(RuntimeConfig::new(noop_factory())).unwrap();
         for id in 0..worlds {
             runtime
-                .create_world(WorldId::from_u64(id as u64), SimulationConfig::new())
+                .create_partition(WorldId::from_u64(id as u64), PartitionConfig::new())
                 .unwrap();
-            runtime.start_world(WorldId::from_u64(id as u64)).unwrap();
+            runtime
+                .start_partition(WorldId::from_u64(id as u64))
+                .unwrap();
         }
         let iterations = 100;
         let start = Instant::now();
@@ -731,10 +733,10 @@ fn runtime_scheduler() {
     println!();
 }
 
-fn noop_factory() -> WorldFactory {
+fn noop_factory() -> PartitionFactory {
     Box::new(
-        |id: WorldId, store: nexum_table::TableStore, sim: SimulationConfig| {
-            World::new(id, store, sim)
+        |id: WorldId, store: nexum_table::TableStore, sim: PartitionConfig| {
+            Partition::new(id, store, sim)
         },
     )
 }

@@ -11,9 +11,9 @@ use std::path::PathBuf;
 
 use nexum_core::row;
 use nexum_core::{ColumnType, ReducerId, SystemId, TickId, Value, WorldId};
+use nexum_execution::{Partition, PartitionConfig, SystemDefinition};
 use nexum_reducer::{ReducerArgs, ReducerDefinition};
-use nexum_runtime::{PersistencePolicy, Runtime, RuntimeConfig, WorldFactory};
-use nexum_simulation::{SimulationConfig, SystemDefinition, World};
+use nexum_runtime::{PartitionFactory, PersistencePolicy, Runtime, RuntimeConfig};
 use nexum_subscription::{Query, SubscriptionUpdate};
 use nexum_table::TableStore;
 use nexum_wasm::{WasmLimits, WasmModuleRegistry};
@@ -90,14 +90,14 @@ fn players_table(store: &mut TableStore) {
 /// A factory with a native reducer, a WASM reducer, and three systems
 /// (writer, native invoker, WASM invoker at tick 0). Rows per tick: writer
 /// (id = tick), native (id = 200 + tick); plus the fixed WASM row at tick 0.
-fn full_factory() -> WorldFactory {
+fn full_factory() -> PartitionFactory {
     let module = wasm_module();
     Box::new(
-        move |id: WorldId, mut store: TableStore, sim: SimulationConfig| {
+        move |id: WorldId, mut store: TableStore, sim: PartitionConfig| {
             if store.table("players").is_none() {
                 players_table(&mut store);
             }
-            let mut world = World::new(id, store, sim)?;
+            let mut world = Partition::new(id, store, sim)?;
             world
                 .native_mut()
                 .register(
@@ -184,9 +184,9 @@ fn crash_then_recover_reconstructs_identical_state_and_continues() {
         )
         .unwrap();
         runtime
-            .create_world(world, SimulationConfig::new())
+            .create_partition(world, PartitionConfig::new())
             .unwrap();
-        runtime.start_world(world).unwrap();
+        runtime.start_partition(world).unwrap();
         for _ in 0..3 {
             runtime.step().unwrap();
         }
@@ -200,11 +200,11 @@ fn crash_then_recover_reconstructs_identical_state_and_continues() {
     )
     .unwrap();
     let report = runtime
-        .recover_world(world, SimulationConfig::new(), Some(TickId::from_u64(3)))
+        .recover_partition(world, PartitionConfig::new(), Some(TickId::from_u64(3)))
         .unwrap();
     assert_eq!(report.replayed_txs, 3);
     assert!(report.snapshot.is_none(), "WAL-only recovery");
-    runtime.start_world(world).unwrap();
+    runtime.start_partition(world).unwrap();
 
     // The recovered authoritative state is exactly 3 ticks of rows:
     // 3 writer + 3 native reducer + 1 WASM row.
@@ -236,9 +236,9 @@ fn snapshot_recovery_uses_the_snapshot_and_resumes() {
         )
         .unwrap();
         runtime
-            .create_world(world, SimulationConfig::new())
+            .create_partition(world, PartitionConfig::new())
             .unwrap();
-        runtime.start_world(world).unwrap();
+        runtime.start_partition(world).unwrap();
         for _ in 0..4 {
             runtime.step().unwrap();
         }
@@ -250,11 +250,11 @@ fn snapshot_recovery_uses_the_snapshot_and_resumes() {
     )
     .unwrap();
     let report = runtime
-        .recover_world(world, SimulationConfig::new(), Some(TickId::from_u64(4)))
+        .recover_partition(world, PartitionConfig::new(), Some(TickId::from_u64(4)))
         .unwrap();
     assert!(report.snapshot.is_some(), "snapshot-based recovery");
     assert_eq!(report.replayed_txs, 0, "the snapshot covers all 4 ticks");
-    runtime.start_world(world).unwrap();
+    runtime.start_partition(world).unwrap();
 
     // 4 writer + 4 native + 1 WASM = 9 rows.
     snapshot_row_count(&mut runtime, world, 9);
@@ -270,9 +270,9 @@ fn a_failed_worker_s_world_can_be_recovered_onto_another_worker() {
     let mut runtime = Runtime::new(config).unwrap();
     let world = WorldId::from_u64(0);
     runtime
-        .create_world(world, SimulationConfig::new())
+        .create_partition(world, PartitionConfig::new())
         .unwrap();
-    runtime.start_world(world).unwrap();
+    runtime.start_partition(world).unwrap();
     runtime.step().unwrap();
     runtime.step().unwrap();
     assert_eq!(runtime.metrics().wal_appends, 2);
@@ -283,15 +283,15 @@ fn a_failed_worker_s_world_can_be_recovered_onto_another_worker() {
         .fail_worker(nexum_core::WorkerId::from_u64(0))
         .unwrap();
     assert_eq!(
-        runtime.world_status(world).unwrap().state,
-        nexum_runtime::WorldLifecycle::Failed
+        runtime.partition_status(world).unwrap().state,
+        nexum_runtime::PartitionLifecycle::Failed
     );
 
     // Destroy the in-memory entry, then recover from the WAL onto the next
     // worker (round-robin counter has advanced past worker 0).
-    runtime.destroy_world(world).unwrap();
+    runtime.destroy_partition(world).unwrap();
     let report = runtime
-        .recover_world(world, SimulationConfig::new(), Some(TickId::from_u64(2)))
+        .recover_partition(world, PartitionConfig::new(), Some(TickId::from_u64(2)))
         .unwrap();
     assert_eq!(report.replayed_txs, 2);
     assert_ne!(
@@ -300,7 +300,7 @@ fn a_failed_worker_s_world_can_be_recovered_onto_another_worker() {
         "recovered onto a different worker"
     );
 
-    runtime.start_world(world).unwrap();
+    runtime.start_partition(world).unwrap();
     let result = runtime.tick_once(world).unwrap();
     assert_eq!(result.tick(), TickId::from_u64(2));
     runtime.shutdown().unwrap();

@@ -1,29 +1,19 @@
-//! Nexum macros: derive `NexumTable` on structs to generate schema + CRUD.
-//!
-//! ```rust,ignore
-//! #[derive(nexum_macros::NexumTable)]
-//! struct Player {
-//!     id: u64,     // first field = primary key
-//!     x: i64,
-//!     hp: i64,
-//! }
-//!
-//! // Auto-generated:
-//! // Player::get(ctx, id) -> Result<Option<Player>>
-//! // player.save(ctx) -> Result<()>
-//! // player.create(ctx) -> Result<()>
-//! // Player::delete(ctx, id) -> Result<()>
-//! // Player::all(ctx) -> Vec<Player>
-//! // Player::schema() -> TableSchema
-//! ```
+//! Nexum macros: derive `NexumTable` and attribute `#[table]`, `#[reducer]`,
+//! `#[subscription]` for declarative game authoring.
 
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{DeriveInput, parse_macro_input};
+use syn::{
+    Attribute, Data, DeriveInput, Fields, FieldsNamed, Ident, ItemFn, LitInt, LitStr, Meta,
+    MetaList, MetaNameValue, Type,
+    parse::{Parser, Result as SynResult},
+    parse_macro_input,
+    spanned::Spanned,
+};
 
 /// Maps Rust primitive types to Nexum ColumnType variant names.
-fn col_type(ty: &syn::Type) -> Option<&'static str> {
-    let syn::Type::Path(tp) = ty else { return None };
+fn col_type(ty: &Type) -> Option<&'static str> {
+    let Type::Path(tp) = ty else { return None };
     let name: String = tp
         .path
         .segments
@@ -44,6 +34,7 @@ fn col_type(ty: &syn::Type) -> Option<&'static str> {
         "f32" => "F32",
         "f64" => "F64",
         "String" | "str" => "String",
+        "Bytes" | "Vec<u8>" => "Bytes",
         _ => return None,
     })
 }
@@ -59,156 +50,246 @@ fn snake_case(s: &str) -> String {
     out
 }
 
+fn has_attr(attrs: &[Attribute], name: &str) -> bool {
+    attrs.iter().any(|a| a.path().is_ident(name))
+}
+
+fn get_attr_lit_str(attrs: &[Attribute], name: &str) -> Option<String> {
+    attrs.iter().find_map(|a| {
+        if a.path().is_ident(name) {
+            let mut result = None;
+            let _ = a.parse_nested_meta(|meta| {
+                if meta.path.is_ident("name")
+                    && let Ok(v) = meta.value()
+                    && let Ok(s) = v.parse::<LitStr>()
+                {
+                    result = Some(s.value());
+                }
+                Ok(())
+            });
+            result
+        } else {
+            None
+        }
+    })
+}
+
+/// Field metadata for a supported column.
+struct FieldMeta {
+    ident: Ident,
+    ty: Type,
+    col_type: &'static str,
+    is_pk: bool,
+    index_name: Option<String>,
+    index_unique: bool,
+}
+
+/// Extract field metadata, validating all fields have supported types.
+fn extract_fields(named: &FieldsNamed) -> SynResult<Vec<FieldMeta>> {
+    let mut fields = Vec::new();
+    for f in &named.named {
+        let ident = f
+            .ident
+            .as_ref()
+            .ok_or_else(|| syn::Error::new(f.span(), "field must have a name"))?
+            .clone();
+        let ct = col_type(&f.ty).ok_or_else(|| {
+            syn::Error::new(
+                f.ty.span(),
+                format!("unsupported column type: {}", quote::quote!(#f.ty)),
+            )
+        })?;
+        let is_pk = has_attr(&f.attrs, "primary_key");
+        let index_name = get_attr_lit_str(&f.attrs, "index")
+            .or_else(|| get_attr_lit_str(&f.attrs, "unique_index"));
+        let index_unique = has_attr(&f.attrs, "unique_index");
+        fields.push(FieldMeta {
+            ident,
+            ty: f.ty.clone(),
+            col_type: ct,
+            is_pk,
+            index_name,
+            index_unique,
+        });
+    }
+    Ok(fields)
+}
+
 /// Derive `NexumTable` on a struct to generate schema + full typed CRUD.
 ///
-/// The first field is treated as the primary key. Field names become column
-/// names; Rust types map to ColumnType variants automatically.
-#[proc_macro_derive(NexumTable, attributes(primary_key))]
+/// ```rust,ignore
+/// #[derive(nexum_macros::NexumTable)]
+/// struct Player {
+///     #[primary_key]
+///     id: u64,
+///     x: i64,
+///     #[index]
+///     y: i64,
+/// }
+/// ```
+///
+/// The first field with `#[primary_key]` (or first field if none) becomes the PK.
+/// Multiple `#[primary_key]` fields create a composite PK.
+/// Fields with `#[index]` or `#[unique_index]` get secondary indexes.
+#[proc_macro_derive(NexumTable, attributes(primary_key, index, unique_index, table_name))]
 pub fn derive_nexum_table(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let struct_name = &input.ident;
-    let table_name = snake_case(&struct_name.to_string());
+    // Allow #[table_name = "override"] on the struct to override the default
+    // snake_case name.
+    let table_name = input
+        .attrs
+        .iter()
+        .find(|a| a.path().is_ident("table_name"))
+        .and_then(|a| {
+            let syn::Meta::NameValue(nv) = &a.meta else {
+                return None;
+            };
+            let syn::Expr::Lit(syn::ExprLit {
+                lit: syn::Lit::Str(s),
+                ..
+            }) = &nv.value
+            else {
+                return None;
+            };
+            Some(s.value())
+        })
+        .unwrap_or_else(|| snake_case(&struct_name.to_string()));
 
-    let syn::Data::Struct(data_struct) = &input.data else {
+    let Data::Struct(data_struct) = &input.data else {
         return quote! {
             compile_error!("NexumTable can only be applied to structs");
         }
         .into();
     };
-    let syn::Fields::Named(fields_named) = &data_struct.fields else {
+    let Fields::Named(fields_named) = &data_struct.fields else {
         return quote! {
             compile_error!("NexumTable requires named fields");
         }
         .into();
     };
 
-    let named = &fields_named.named;
+    let fields = match extract_fields(fields_named) {
+        Ok(f) => f,
+        Err(e) => return e.to_compile_error().into(),
+    };
 
-    // ── collect field metadata ──
-    let mut pk_field: Option<syn::Ident> = None;
-    let mut pk_type: Option<&syn::Type> = None;
-    let mut column_defs: Vec<_> = Vec::new();
-
-    for (col_idx, field) in named.iter().enumerate() {
-        let fname = field.ident.as_ref().unwrap();
-        let Some(ct) = col_type(&field.ty) else {
-            continue;
-        };
-
-        if col_idx == 0 {
-            pk_field = Some(fname.clone());
-            pk_type = Some(&field.ty);
+    if fields.is_empty() {
+        return quote! {
+            compile_error!("NexumTable requires at least one field");
         }
-
-        let ct_ident = syn::Ident::new(ct, proc_macro2::Span::call_site());
-        column_defs.push(quote! {
-            .column(stringify!(#fname), ::nexum_core::ColumnType::#ct_ident)
-        });
+        .into();
     }
 
-    let pk_expr = match &pk_field {
-        Some(pk) => {
-            let name_str = snake_case(&pk.to_string());
-            quote! { .primary_key(&[#name_str]) }
-        }
-        None => quote! {},
+    // Primary key fields (composite if multiple)
+    let pk_fields: Vec<_> = fields.iter().filter(|f| f.is_pk).collect();
+    let pk_fields = if pk_fields.is_empty() {
+        vec![&fields[0]]
+    } else {
+        pk_fields
     };
 
-    let Some(pk_ident) = &pk_field else {
-        return quote! { compile_error!("NexumTable requires at least one field"); }.into();
-    };
-    let Some(pk_ty) = pk_type else {
-        return quote! { compile_error!("cannot resolve primary key type"); }.into();
-    };
-
-    // PK lookup expressions
-    let pk_fn_param = quote! { #pk_ident: #pk_ty };
-    let pk_lookup = match pk_ty {
-        syn::Type::Path(tp)
-            if tp
-                .path
-                .segments
-                .last()
-                .map(|s| s.ident.to_string())
-                .as_deref()
-                == Some("i64") =>
-        {
-            quote! { &[::nexum_core::Value::I64(#pk_ident as i64)] }
-        }
-        syn::Type::Path(tp)
-            if tp
-                .path
-                .segments
-                .last()
-                .map(|s| s.ident.to_string())
-                .as_deref()
-                == Some("String") =>
-        {
-            quote! { &[::nexum_core::Value::String(#pk_ident.clone())] }
-        }
-        _ => quote! { &[::nexum_core::Value::U64(#pk_ident)] },
-    };
-    let pk_self_lookup = match pk_ty {
-        syn::Type::Path(tp)
-            if tp
-                .path
-                .segments
-                .last()
-                .map(|s| s.ident.to_string())
-                .as_deref()
-                == Some("i64") =>
-        {
-            quote! { &[::nexum_core::Value::I64(self.#pk_ident)] }
-        }
-        syn::Type::Path(tp)
-            if tp
-                .path
-                .segments
-                .last()
-                .map(|s| s.ident.to_string())
-                .as_deref()
-                == Some("String") =>
-        {
-            quote! { &[::nexum_core::Value::String(self.#pk_ident.clone())] }
-        }
-        _ => quote! { &[::nexum_core::Value::U64(self.#pk_ident)] },
-    };
-
-    // ── per-field from_row extraction ──
-    let from_row_fields: Vec<_> = named.iter().filter_map(|f| {
-        let ident = f.ident.as_ref()?;
-        let ct = col_type(&f.ty)?;
-        let idx = syn::LitInt::new(
-            &named.iter().position(|x| x == f).unwrap().to_string(),
-            proc_macro2::Span::call_site(),
-        );
-        Some(match ct {
-            "U64" => quote! { #ident: row.get(#idx).and_then(|v| v.as_u64()).unwrap_or(0) },
-            "I64" => quote! { #ident: row.get(#idx).and_then(|v| v.as_i64()).unwrap_or(0) },
-            "Bool" => quote! { #ident: matches!(row.get(#idx), Some(::nexum_core::Value::Bool(true))) },
-            "F64" => quote! { #ident: match row.get(#idx) { Some(::nexum_core::Value::F64(v)) => *v, _ => 0.0 } },
-            "String" => quote! { #ident: row.get(#idx).and_then(|v| v.as_str()).unwrap_or("").to_string() },
-            _ => return None,
+    // ── build column definitions ──
+    let column_defs: Vec<_> = fields
+        .iter()
+        .map(|fm| {
+            let fname = &fm.ident;
+            let ct_ident = Ident::new(fm.col_type, proc_macro2::Span::call_site());
+            quote! { .column(stringify!(#fname), ::nexum_core::ColumnType::#ct_ident) }
         })
-    }).collect::<Vec<_>>();
+        .collect();
+
+    // ── primary key ──
+    let pk_names: Vec<_> = pk_fields
+        .iter()
+        .map(|f| snake_case(&f.ident.to_string()))
+        .collect();
+    let pk_expr = quote! { .primary_key(&[#(#pk_names),*]) };
+
+    // ── indexes ──
+    let index_exprs: Vec<_> = fields
+        .iter()
+        .filter_map(|fm| {
+            let ident = &fm.ident;
+            fm.index_name.as_ref().map(|name| {
+                if fm.index_unique {
+                    quote! { .unique_index(#name, &[stringify!(#ident)]) }
+                } else {
+                    quote! { .index(#name, &[stringify!(#ident)]) }
+                }
+            })
+        })
+        .collect();
+
+    // ── per-field from_row extraction (using supported-field index) ──
+    let from_row_fields: Vec<_> = fields.iter().enumerate().map(|(idx, fm)| {
+        let ident = &fm.ident;
+        let idx_lit = LitInt::new(&idx.to_string(), proc_macro2::Span::call_site());
+        match fm.col_type {
+            "U64" => quote! { #ident: row.get(#idx_lit).and_then(|v| v.as_u64()).unwrap_or(0) },
+            "I64" => quote! { #ident: row.get(#idx_lit).and_then(|v| v.as_i64()).unwrap_or(0) },
+            "Bool" => quote! { #ident: matches!(row.get(#idx_lit), Some(::nexum_core::Value::Bool(true))) },
+            "F64" => quote! { #ident: match row.get(#idx_lit) { Some(::nexum_core::Value::F64(v)) => *v, _ => 0.0 } },
+            "String" => quote! { #ident: row.get(#idx_lit).and_then(|v| v.as_str()).unwrap_or("").to_string() },
+            "Bytes" => quote! { #ident: row.get(#idx_lit).and_then(|v| v.as_bytes().map(|b| b.to_vec())).unwrap_or_default() },
+            _ => quote! { #ident: Default::default() },
+        }
+    }).collect();
 
     // ── per-field to_row construction ──
-    let to_row_values: Vec<_> = named
+    let to_row_values: Vec<_> = fields
         .iter()
-        .filter_map(|f| {
-            let ident = f.ident.as_ref()?;
-            let ct = col_type(&f.ty)?;
-            let i = ident.clone();
-            match ct {
-                "U64" => Some(quote! { ::nexum_core::Value::U64(self.#i) }),
-                "I64" => Some(quote! { ::nexum_core::Value::I64(self.#i) }),
-                "Bool" => Some(quote! { ::nexum_core::Value::Bool(self.#i) }),
-                "F64" => Some(quote! { ::nexum_core::Value::F64(self.#i) }),
-                "String" => Some(quote! { ::nexum_core::Value::String(self.#i.clone()) }),
-                _ => None,
+        .map(|fm| {
+            let ident = &fm.ident;
+            match fm.col_type {
+                "U64" => quote! { ::nexum_core::Value::U64(self.#ident) },
+                "I64" => quote! { ::nexum_core::Value::I64(self.#ident) },
+                "Bool" => quote! { ::nexum_core::Value::Bool(self.#ident) },
+                "F64" => quote! { ::nexum_core::Value::F64(self.#ident) },
+                "String" => quote! { ::nexum_core::Value::String(self.#ident.clone()) },
+                "Bytes" => quote! { ::nexum_core::Value::Bytes(self.#ident.clone()) },
+                _ => quote! { ::nexum_core::Value::U64(0) },
             }
         })
         .collect();
+
+    // ── PK lookup expressions ──
+    let pk_fn_params: Vec<_> = pk_fields
+        .iter()
+        .map(|f| {
+            let ident = &f.ident;
+            let ty = &f.ty;
+            quote! { #ident: #ty }
+        })
+        .collect();
+
+    let pk_lookups: Vec<_> = pk_fields.iter().map(|f| {
+        let ident = &f.ident;
+        let ty = &f.ty;
+        let is_i64 = matches!(ty, Type::Path(tp) if tp.path.segments.last().map(|s| s.ident == "i64").unwrap_or(false));
+        let is_string = matches!(ty, Type::Path(tp) if tp.path.segments.last().map(|s| s.ident == "String").unwrap_or(false));
+        if is_i64 {
+            quote! { ::nexum_core::Value::I64(#ident as i64) }
+        } else if is_string {
+            quote! { ::nexum_core::Value::String(#ident.clone()) }
+        } else {
+            quote! { ::nexum_core::Value::U64(#ident) }
+        }
+    }).collect();
+
+    let pk_self_lookups: Vec<_> = pk_fields.iter().map(|f| {
+        let ident = &f.ident;
+        let ty = &f.ty;
+        let is_i64 = matches!(ty, Type::Path(tp) if tp.path.segments.last().map(|s| s.ident == "i64").unwrap_or(false));
+        let is_string = matches!(ty, Type::Path(tp) if tp.path.segments.last().map(|s| s.ident == "String").unwrap_or(false));
+        if is_i64 {
+            quote! { ::nexum_core::Value::I64(self.#ident) }
+        } else if is_string {
+            quote! { ::nexum_core::Value::String(self.#ident.clone()) }
+        } else {
+            quote! { ::nexum_core::Value::U64(self.#ident) }
+        }
+    }).collect();
 
     // ── generate impl ──
     let expanded = quote! {
@@ -221,6 +302,7 @@ pub fn derive_nexum_table(input: TokenStream) -> TokenStream {
                 ::nexum_core::TableSchema::builder(#table_name)
                     #(#column_defs)*
                     #pk_expr
+                    #(#index_exprs)*
                     .build()
                     .unwrap_or_else(|e| panic!("table build error: {e}"))
             }
@@ -239,13 +321,14 @@ pub fn derive_nexum_table(input: TokenStream) -> TokenStream {
                 ])
             }
 
-            /// Get one entity by primary key.
+            /// Get one entity by primary key (composite if multiple).
             pub fn get(
                 ctx: &mut ::nexum_reducer::ReducerContext,
-                #pk_fn_param,
+                #(#pk_fn_params),*
             ) -> ::nexum_core::Result<Option<Self>> {
+                let pk_lookup = &[#(#pk_lookups),*];
                 let owners = ctx.lookup_unique(
-                    Self::TABLE_NAME, "primary", #pk_lookup,
+                    Self::TABLE_NAME, "primary", pk_lookup,
                 )?;
                 match owners.first() {
                     Some(&rid) => Ok(ctx.get(Self::TABLE_NAME, rid)?.as_ref().map(Self::from_row)),
@@ -258,8 +341,9 @@ pub fn derive_nexum_table(input: TokenStream) -> TokenStream {
                 &self,
                 ctx: &mut ::nexum_reducer::ReducerContext,
             ) -> ::nexum_core::Result<()> {
+                let pk_self_lookup = &[#(#pk_self_lookups),*];
                 let owners = ctx.lookup_unique(
-                    Self::TABLE_NAME, "primary", #pk_self_lookup,
+                    Self::TABLE_NAME, "primary", pk_self_lookup,
                 )?;
                 let Some(&rid) = owners.first() else {
                     return Err(::nexum_core::Error::not_found("save: row not found"));
@@ -280,10 +364,11 @@ pub fn derive_nexum_table(input: TokenStream) -> TokenStream {
             /// Delete by primary key.
             pub fn delete(
                 ctx: &mut ::nexum_reducer::ReducerContext,
-                #pk_fn_param,
+                #(#pk_fn_params),*
             ) -> ::nexum_core::Result<()> {
+                let pk_lookup = &[#(#pk_lookups),*];
                 let owners = ctx.lookup_unique(
-                    Self::TABLE_NAME, "primary", #pk_lookup,
+                    Self::TABLE_NAME, "primary", pk_lookup,
                 )?;
                 if let Some(&rid) = owners.first() {
                     ctx.delete(Self::TABLE_NAME, rid)?;
@@ -306,15 +391,127 @@ pub fn derive_nexum_table(input: TokenStream) -> TokenStream {
     expanded.into()
 }
 
-// ─── #[reducer] marker ───────────────────────────────────────────────────
+// ─── #[table] attribute macro (ADR-027 style) ────────────────────────────
 
-/// Marks a function as a reducer callable by clients.
+/// Attribute macro for table definition (preferred API per ADR-027).
+/// ```rust,ignore
+/// #[nexum_macros::table(name = "players", primary_key = "id")]
+/// struct Player {
+///     #[nexum_macros::primary_key]
+///     id: u64,
+///     x: i64,
+///     #[nexum_macros::index(name = "pos")]
+///     y: i64,
+/// }
+/// ```
 #[proc_macro_attribute]
-pub fn reducer(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    item
+pub fn table(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    // Add the derive macro to the item
+    let mut item_str = item.to_string();
+    // Find the struct/enum and prepend the derive attribute
+    if let Some(pos) = item_str.find("struct ") {
+        item_str.insert_str(pos, "#[derive(nexum_macros::NexumTable)]\n");
+    } else if let Some(pos) = item_str.find("enum ") {
+        item_str.insert_str(pos, "#[derive(nexum_macros::NexumTable)]\n");
+    }
+    item_str.parse().unwrap()
 }
 
-// ─── #[system] marker ────────────────────────────────────────────────────
+// ─── #[reducer] attribute macro ────────────────────────────────────────
+
+/// Marks a function as a native reducer and generates a registration helper.
+///
+/// ```rust,ignore
+/// #[nexum_macros::reducer(id = 1, name = "move_player")]
+/// pub fn move_player(ctx: &mut nexum_reducer::ReducerContext, args: &nexum_reducer::ReducerArgs) -> nexum_core::Result<nexum_core::Value> {
+///     // ...
+/// }
+/// ```
+///
+/// Generates a `pub const MOVE_PLAYER_REDUCER: nexum_reducer::ReducerDefinition`
+/// that can be registered via `world.native_mut().register(MOVE_PLAYER_REDUCER)`.
+#[proc_macro_attribute]
+pub fn reducer(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(item as ItemFn);
+    let fn_name = &input.sig.ident;
+    let fn_vis = &input.vis;
+    let fn_sig = &input.sig;
+    let fn_block = &input.block;
+
+    // Parse attributes: id = <u64>, name = "string"
+    let args = parse_macro_input!(attr as MetaList);
+    let mut reducer_id: Option<u64> = None;
+    let mut reducer_name: Option<String> = None;
+
+    let tokens = args.tokens;
+    let parser = syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated;
+    let metas = parser.parse2(tokens).unwrap_or_default();
+
+    for meta in metas {
+        if let Meta::NameValue(MetaNameValue { path, value, .. }) = meta {
+            if path.is_ident("id") {
+                if let syn::Expr::Lit(syn::ExprLit {
+                    lit: syn::Lit::Int(lit),
+                    ..
+                }) = value
+                {
+                    reducer_id = lit.base10_parse().ok();
+                }
+            } else if path.is_ident("name")
+                && let syn::Expr::Lit(syn::ExprLit {
+                    lit: syn::Lit::Str(lit),
+                    ..
+                }) = value
+            {
+                reducer_name = Some(lit.value());
+            }
+        }
+    }
+
+    let reducer_id = reducer_id.unwrap_or_else(|| {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut hasher = DefaultHasher::new();
+        fn_name.to_string().hash(&mut hasher);
+        hasher.finish()
+    });
+
+    let reducer_name = reducer_name.unwrap_or_else(|| fn_name.to_string());
+
+    let const_name = Ident::new(
+        &format!("{}_REDUCER", fn_name.to_string().to_uppercase()),
+        fn_name.span(),
+    );
+
+    let expanded = quote! {
+        #fn_vis #fn_sig #fn_block
+
+        /// Auto-generated reducer definition for registration.
+        #fn_vis const #const_name: ::nexum_reducer::ReducerDefinition = {
+            ::nexum_reducer::ReducerDefinition::new(
+                ::nexum_core::ReducerId::from_u64(#reducer_id),
+                #reducer_name,
+                #fn_name,
+            ).expect("valid reducer definition")
+        };
+    };
+
+    expanded.into()
+}
+
+// ─── #[subscription] attribute macro ──────────────────────────────────
+
+/// Defines a subscription query for a table.
+/// ```rust,ignore
+/// #[nexum_macros::subscription(table = "players", predicate = "x > 0 AND y > 0")]
+/// struct PlayerNearOrigin;
+/// ```
+#[proc_macro_attribute]
+pub fn subscription(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    item // Placeholder; Query builder API is runtime, not macro-generated
+}
+
+// ─── #[system] marker (kept for compatibility) ────────────────────────
 
 /// Marks a function as a simulation system running every tick.
 #[proc_macro_attribute]

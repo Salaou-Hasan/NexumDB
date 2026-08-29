@@ -6,34 +6,32 @@
 //! On success, the reducer's writes are already in the parent — no absorb
 //! needed.
 //!
-//! Cost comparison (2000 calls per tick):
-//! - Current:  branch (115 ns) + invoke (24.8 µs) + absorb (100 µs) ≈ 125 µs/call
-//! - New:      snapshot (0.3 µs) + invoke (24.8 µs) + (no absorb) ≈ 25.1 µs/call
-//!
-//! This eliminates ~100 µs x 2000 = 200 ms of aggregate absorb CPU per tick.
+//! The snapshot records a **read-set watermark** (the entry count at snapshot
+//! time) instead of cloning the full read-set BTreeMap. On rollback, entries
+//! added after the watermark are discarded in O(delta) time. This eliminates
+//! the O(N²) quadratic blowup from cloning a growing read set on every call.
 
 use std::collections::BTreeMap;
 
 use nexum_core::TableId;
 
-use crate::read_set::ReadSet;
 use crate::write_set::WriteSet;
 
 /// A lightweight snapshot of transaction mutable state for rollback.
 ///
 /// Contains only the fields that a reducer can mutate:
 /// - `writes`: COW write set (Arc clone — O(1))
-/// - `reads`: read observations (BTreeMap clone — O(entries))
-/// - `provisional`: per-table provisional-id counters (small BTreeMap)
+/// - `read_watermark`: entry count at snapshot time (O(1) to record)
+/// - `provisional`: per-table provisional-id counters (small BTreeMap clone)
 pub struct TxSnapshot {
     pub(crate) writes: WriteSet,
-    pub(crate) reads: ReadSet,
+    pub(crate) read_watermark: usize,
     pub(crate) provisional: BTreeMap<TableId, u64>,
 }
 
 impl TxSnapshot {
-    /// Returns the number of read observations in the snapshot (for diagnostics).
-    pub fn read_count(&self) -> usize {
-        self.reads.len()
+    /// Returns the read-set watermark (entry count at snapshot time).
+    pub fn read_watermark(&self) -> usize {
+        self.read_watermark
     }
 }

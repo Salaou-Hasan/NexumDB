@@ -13,7 +13,7 @@ nexum-storage.workspace = true
 nexum-table.workspace = true
 nexum-reducer.workspace = true
 nexum-subscription.workspace = true
-nexum-simulation.workspace = true
+nexum-execution.workspace = true
 nexum-runtime.workspace = true
 tungstenite = { version = "0.24", features = ["handshake"] }
 
@@ -23,7 +23,7 @@ nexum-storage.workspace = true
 nexum-table.workspace = true
 nexum-wal.workspace = true
 nexum-subscription.workspace = true
-nexum-simulation.workspace = true
+nexum-execution.workspace = true
 nexum-runtime.workspace = true
 
 [lints]

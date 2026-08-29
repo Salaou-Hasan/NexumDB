@@ -11,11 +11,10 @@ nexum-core.workspace = true
 nexum-macros = { path = "../nexum-macros" }
 nexum-table.workspace = true
 nexum-reducer.workspace = true
-nexum-simulation.workspace = true
+nexum-execution.workspace = true
 nexum-tx.workspace = true
 nexum-runtime.workspace = true
 nexum-network.workspace = true
-nexum-game-server.workspace = true
 nexum-sdk.workspace = true
 nexum-subscription.workspace = true
 nexum-wasm.workspace = true

@@ -276,7 +276,7 @@ fn connect_installs_the_transport_and_issues_the_handshake() {
 fn api_guards_reject_operations_before_connect() {
     let mut client = Client::new(SdkConfig::new()).unwrap();
     let err = client
-        .send_input(nexum_simulation::InputFrame::new(TickId::from_u64(0)))
+        .send_input(nexum_execution::InputFrame::new(TickId::from_u64(0)))
         .unwrap_err();
     assert!(matches!(err, SdkError::NotConnected));
     let err = client
@@ -299,7 +299,7 @@ fn api_guards_reject_operations_without_a_session() {
     client.state = ConnectionState::Connected;
     client.transport = Some(ClientTransport::new(dummy_connection()));
     let err = client
-        .send_input(nexum_simulation::InputFrame::new(TickId::from_u64(0)))
+        .send_input(nexum_execution::InputFrame::new(TickId::from_u64(0)))
         .unwrap_err();
     assert!(matches!(err, SdkError::AuthenticationRequired));
 }
@@ -311,7 +311,7 @@ fn api_guards_reject_operations_without_an_attachment() {
     client.session = Some(SessionInfo::new(Principal::new(1, "alice")));
     client.transport = Some(ClientTransport::new(dummy_connection()));
     let err = client
-        .send_input(nexum_simulation::InputFrame::new(TickId::from_u64(0)))
+        .send_input(nexum_execution::InputFrame::new(TickId::from_u64(0)))
         .unwrap_err();
     assert!(matches!(err, SdkError::NotAttached));
     let err = client
@@ -362,9 +362,9 @@ fn input_frames_beyond_the_command_bound_are_rejected() {
         .unwrap()
         .attach(WorldId::from_u64(0));
     client.transport = Some(ClientTransport::new(dummy_connection()));
-    let mut frame = nexum_simulation::InputFrame::new(TickId::from_u64(0));
-    frame.push(nexum_simulation::InputCommand::new(1, "a", None).unwrap());
-    frame.push(nexum_simulation::InputCommand::new(1, "b", None).unwrap());
+    let mut frame = nexum_execution::InputFrame::new(TickId::from_u64(0));
+    frame.push(nexum_execution::InputCommand::new(1, "a", None).unwrap());
+    frame.push(nexum_execution::InputCommand::new(1, "b", None).unwrap());
     let err = client.send_input(frame).unwrap_err();
     assert!(matches!(err, SdkError::InvalidArgument(_)));
 }

@@ -1,0 +1,13 @@
+[package]
+name = "nexum-manifest"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Nexum module manifest (nexum.toml) parsing"
+
+[dependencies]
+nexum-core = { path = "../nexum-core" }
+toml = { version = "0.8", features = ["parse"] }
+serde = { version = "1.0", features = ["derive"] }
+thiserror = "1.0"
